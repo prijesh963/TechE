@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — Plan Lifecycle (revisions and approval)
+## Unreleased — Plan Lifecycle (revisions, approval, review disposition)
 
-Implements sections 1 and 2 of `docs/PLAN_LIFECYCLE_DESIGN.md`.
+Implements sections 1, 2, and 3 of `docs/PLAN_LIFECYCLE_DESIGN.md`.
 
 ### Added
 
@@ -11,6 +11,10 @@ Implements sections 1 and 2 of `docs/PLAN_LIFECYCLE_DESIGN.md`.
 - **Plan approval.** New `approve_plan` MCP tool (`FeaturePlanningService.approvePlan`) stamps a `PlanApproval` onto one specific revision, sets `status: "approved"`, freezes an immutable copy under `.copilot-architect/plans/approved/`, and promotes that exact revision to `latest-plan.*`. Approval is always per-revision — there is no "approve whatever is newest".
 - **New CLI subcommands**: `plan approve --revision <n> --by <name> [--note <text>]`, `plan revisions`, `plan show [--revision <n>]`.
 - FeatureArchitect and FeatureImplementer agent instructions updated: FeatureArchitect now calls `approve_plan` before handing off; FeatureImplementer refuses to implement a plan that is not `status: "approved"`.
+- **Review finding disposition.** `ReviewFinding` now carries a stable `id` (hash of severity + title + filePath, computed in `buildFindings`), a `status` (`open`/`accepted`/`declined`/`resolved`), and an optional `disposition`. New `resolve_review_finding` MCP tool (`ReviewService.resolveFinding`) records a durable accept/decline decision — keyed by finding id — to `.copilot-architect/reviews/dispositions.json`, requiring a non-empty `reason` for either decision.
+- `ReviewService.review` re-hydrates freshly-built findings from `dispositions.json` by id, so a declined finding never reappears; the markdown report renders a separate **Declined (with reason)** section, and `reviewerPrompt`'s finding count and instructions exclude declined findings.
+- **New CLI subcommand**: `review resolve --finding-id <id> --decision accept|decline --reason <text> --by <name> [--plan-revision <n>]`.
+- CodeReviewer agent gains `resolve_review_finding` and `revise_feature_plan` tools, a third handoff ("Revise Plan" → FeatureArchitect), and a triage step: accept a finding (fold into a plan revision, which reopens the approval gate) or decline it with a reason.
 
 ### Changed (breaking)
 
@@ -18,7 +22,7 @@ Implements sections 1 and 2 of `docs/PLAN_LIFECYCLE_DESIGN.md`.
 
 ### Tests
 
-- Added revision and approval coverage across `tests/planner.test.ts`, `tests/mcp-server.test.ts`, `tests/handoff.test.ts`, `tests/cli-completion.test.ts`, and `tests/sample-matrix.test.ts`.
+- Added revision, approval, and review-disposition coverage across `tests/planner.test.ts`, `tests/mcp-server.test.ts`, `tests/handoff.test.ts`, `tests/cli-completion.test.ts`, `tests/sample-matrix.test.ts`, and `tests/reviewer.test.ts`.
 
 ---
 

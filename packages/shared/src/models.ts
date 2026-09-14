@@ -352,11 +352,24 @@ export interface ReviewReport extends GeneratedArtifact {
 }
 
 export interface ReviewFinding {
+  /** Stable across runs: a hash of severity + title + filePath, excluding line/details. */
+  id: string;
   severity: Severity;
   title: string;
   filePath?: string;
   line?: number;
   details: string;
+  status: "open" | "accepted" | "declined" | "resolved";
+  disposition?: FindingDisposition;
+}
+
+export interface FindingDisposition {
+  decidedAt: string;
+  decidedBy: string;
+  /** Required for both accept and decline — this is the audit trail. */
+  reason: string;
+  /** Set when accepted and folded into a new plan revision. */
+  planRevision?: number;
 }
 
 export interface SafetyPolicy extends GeneratedArtifact {

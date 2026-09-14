@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { promisify } from "node:util";
 import {
   CURRENT_SCHEMA_VERSION,
   type FeaturePlan,
+  type FindingDisposition,
   type ReviewFinding,
   type ReviewReport,
   type RiskItem,
@@ -21,6 +23,33 @@ export interface ReviewServiceOptions {
   startPath?: string;
   plan?: string;
   validation?: string;
+}
+
+export interface ResolveReviewFindingOptions {
+  startPath?: string;
+  findingId: string;
+  decision: "accept" | "decline";
+  /** Required for both decisions — this is the audit trail. */
+  reason: string;
+  decidedBy: string;
+  /** Set when an accepted finding was folded into a new plan revision. */
+  planRevision?: number;
+}
+
+export interface ResolveReviewFindingResult {
+  repoRoot: string;
+  findingId: string;
+  status: "accepted" | "declined";
+  disposition: FindingDisposition;
+  dispositionsPath: string;
+}
+
+interface DispositionsFile {
+  schemaVersion: string;
+  entries: Record<
+    string,
+    { status: "accepted" | "declined"; disposition: FindingDisposition }
+  >;
 }
 
 export interface ReviewServiceResult {
@@ -84,7 +113,7 @@ export class ReviewService {
     const validationFailures = validationResults.filter(
       (result) => result.status !== "passed" && result.status !== "skipped"
     );
-    const findings = buildFindings({
+    const rawFindings = buildFindings({
       unexpectedFiles,
       missingTests,
       configChanges,
@@ -96,6 +125,9 @@ export class ReviewService {
       validationFailures,
       validationReport: loadedValidation.report
     });
+    const dispositions = await loadDispositions(repoRoot);
+    const findings = applyDispositions(rawFindings, dispositions);
+    const activeFindings = findings.filter((finding) => finding.status !== "declined");
     const risks = inferRisks({
       unexpectedFiles,
       missingTests,
@@ -134,7 +166,7 @@ export class ReviewService {
         expectedFiles,
         unexpectedFiles,
         missingTests,
-        findings
+        findings: activeFindings
       }),
       changedFiles,
       expectedFiles,
@@ -167,6 +199,53 @@ export class ReviewService {
       latestJsonPath,
       latestMarkdownPath
     };
+  }
+
+  /**
+   * Records a durable accept/decline decision on one finding, keyed by its
+   * stable id. `dispositions.json` is the durable record; individual review
+   * reports stay disposable snapshots re-hydrated from it on the next
+   * `review` run. See docs/PLAN_LIFECYCLE_DESIGN.md section 3.
+   */
+  async resolveFinding(
+    options: ResolveReviewFindingOptions
+  ): Promise<ResolveReviewFindingResult> {
+    const findingId = options.findingId.trim();
+    const reason = options.reason.trim();
+    const decidedBy = options.decidedBy.trim();
+
+    if (!findingId) {
+      throw new Error("findingId is required to resolve a review finding");
+    }
+
+    if (!reason) {
+      throw new Error(
+        `reason is required to ${options.decision} a review finding — it is the audit trail.`
+      );
+    }
+
+    if (!decidedBy) {
+      throw new Error("decidedBy is required to resolve a review finding");
+    }
+
+    const repoRoot = path.resolve(options.startPath ?? process.cwd());
+    const dispositionsPath = getDispositionsPath(repoRoot);
+    const dispositions = await loadDispositions(repoRoot);
+    const status: "accepted" | "declined" =
+      options.decision === "accept" ? "accepted" : "declined";
+    const disposition: FindingDisposition = {
+      decidedAt: new Date().toISOString(),
+      decidedBy,
+      reason,
+      planRevision: options.planRevision
+    };
+
+    dispositions.entries[findingId] = { status, disposition };
+
+    await mkdir(path.dirname(dispositionsPath), { recursive: true });
+    await writeJsonFile(dispositionsPath, dispositions);
+
+    return { repoRoot, findingId, status, disposition, dispositionsPath };
   }
 }
 
@@ -461,7 +540,8 @@ function buildReviewerPrompt(context: {
     `Findings to inspect: ${context.findings.length}`,
     "",
     "Prioritize correctness, safety, missing tests, behavioral regressions, and any changes outside the approved plan.",
-    "Call out validation failures and decide whether they block approval."
+    "Call out validation failures and decide whether they block approval.",
+    "Declined findings are already excluded above — do not re-raise them. For each open finding, either accept it (fold into a plan revision via revise_feature_plan) or decline it with a reason via resolve_review_finding."
   ].join("\n");
 }
 
@@ -504,11 +584,16 @@ function renderReviewMarkdown(report: ReviewReportArtifact): string {
     "## Findings",
     "",
     report.findings
-      .map(
-        (finding) =>
-          `- ${finding.severity}: ${finding.title}${finding.filePath ? ` (${finding.filePath})` : ""} - ${finding.details}`
-      )
+      .filter((finding) => finding.status !== "declined")
+      .map((finding) => renderFindingLine(finding))
       .join("\n") || "- No findings.",
+    "",
+    "## Declined (with reason)",
+    "",
+    report.findings
+      .filter((finding) => finding.status === "declined")
+      .map((finding) => renderFindingLine(finding))
+      .join("\n") || "- No declined findings.",
     "",
     "## Missing Tests",
     "",
@@ -545,6 +630,8 @@ function buildSummary(
   return `${base} Unexpected files: ${unexpectedFiles.length}. Missing tests: ${missingTests.length}.${validationSummary}`;
 }
 
+type RawFinding = Omit<ReviewFinding, "id" | "status" | "disposition">;
+
 function buildFindings(context: {
   unexpectedFiles: string[];
   missingTests: string[];
@@ -557,7 +644,7 @@ function buildFindings(context: {
   validationFailures: ValidationResult[];
   validationReport?: ValidationReportLike;
 }): ReviewFinding[] {
-  const findings: ReviewFinding[] = [];
+  const findings: RawFinding[] = [];
 
   findings.push(
     ...context.unexpectedFiles.map((filePath) => ({
@@ -656,7 +743,53 @@ function buildFindings(context: {
     }))
   );
 
-  return findings;
+  return findings.map((finding) => ({
+    ...finding,
+    id: computeFindingId(finding),
+    status: "open" as const
+  }));
+}
+
+/**
+ * A stable id across runs, deliberately excluding `line`/`details` so a
+ * finding survives unrelated edits that shift line numbers. `title` doubles
+ * as the finding's rule/category — each branch above uses a fixed title.
+ */
+function computeFindingId(finding: RawFinding): string {
+  const key = `${finding.severity}|${finding.title}|${finding.filePath ?? ""}`;
+  return `finding_${createHash("sha256").update(key).digest("hex").slice(0, 16)}`;
+}
+
+function getDispositionsPath(repoRoot: string): string {
+  return path.join(getArtifactDirectoryPath(repoRoot, "reviews"), "dispositions.json");
+}
+
+async function loadDispositions(repoRoot: string): Promise<DispositionsFile> {
+  try {
+    return await readJsonFile<DispositionsFile>(getDispositionsPath(repoRoot));
+  } catch {
+    return { schemaVersion: CURRENT_SCHEMA_VERSION, entries: {} };
+  }
+}
+
+/**
+ * Re-hydrates freshly-built findings with any durable disposition on record,
+ * so a declined finding stays declined and an accepted one keeps its
+ * plan-revision link, without ever being rebuilt from scratch.
+ */
+function applyDispositions(
+  findings: ReviewFinding[],
+  dispositions: DispositionsFile
+): ReviewFinding[] {
+  return findings.map((finding) => {
+    const entry = dispositions.entries[finding.id];
+
+    if (!entry) {
+      return finding;
+    }
+
+    return { ...finding, status: entry.status, disposition: entry.disposition };
+  });
 }
 
 function getExpectedFiles(plan: FeaturePlan | undefined, repoRoot: string): string[] {
@@ -815,6 +948,14 @@ function normalizeRelativePath(filePath: string, repoRoot?: string): string {
 
 function renderList(values: string[]): string {
   return values.length > 0 ? values.map((value) => `- ${value}`).join("\n") : "- None.";
+}
+
+function renderFindingLine(finding: ReviewFinding): string {
+  const location = finding.filePath ? ` (${finding.filePath})` : "";
+  const disposition = finding.disposition
+    ? ` [${finding.status} by ${finding.disposition.decidedBy}: ${finding.disposition.reason}]`
+    : "";
+  return `- \`${finding.id}\` ${finding.severity}: ${finding.title}${location} - ${finding.details}${disposition}`;
 }
 
 function uniqueLines(value: string): string[] {

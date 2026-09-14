@@ -206,6 +206,236 @@ describe("ReviewService", () => {
       ])
     );
   });
+
+  it("assigns stable open ids to findings so they can be resolved later", async () => {
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "review-ids" }),
+      "src/expected.ts": "export const expected = true;\n"
+    });
+    await initializeGitRepo(repoRoot);
+    await writeApprovedPlan(repoRoot, ["src/expected.ts"]);
+    await writeFile(
+      path.join(repoRoot, "src/unexpected.ts"),
+      "export const unexpected = true;\n",
+      "utf8"
+    );
+
+    const first = await new ReviewService().review({
+      startPath: repoRoot,
+      plan: "latest"
+    });
+    const second = await new ReviewService().review({
+      startPath: repoRoot,
+      plan: "latest"
+    });
+    const firstFinding = first.report.findings.find(
+      (finding) => finding.title === "Unexpected file changed"
+    );
+    const secondFinding = second.report.findings.find(
+      (finding) => finding.title === "Unexpected file changed"
+    );
+
+    expect(firstFinding?.id).toBeTruthy();
+    expect(firstFinding?.status).toBe("open");
+    // Same id across independent runs — that's what makes a disposition durable.
+    expect(secondFinding?.id).toBe(firstFinding?.id);
+  });
+
+  it("keeps a declined finding declined on the next review run and excludes it from the active list", async () => {
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "review-decline" }),
+      "src/expected.ts": "export const expected = true;\n"
+    });
+    await initializeGitRepo(repoRoot);
+    await writeApprovedPlan(repoRoot, ["src/expected.ts"]);
+    await writeFile(
+      path.join(repoRoot, "src/unexpected.ts"),
+      "export const unexpected = true;\n",
+      "utf8"
+    );
+
+    const service = new ReviewService();
+    const first = await service.review({ startPath: repoRoot, plan: "latest" });
+    const finding = first.report.findings.find(
+      (item) => item.title === "Unexpected file changed"
+    );
+    expect(finding).toBeDefined();
+
+    const resolution = await service.resolveFinding({
+      startPath: repoRoot,
+      findingId: finding!.id,
+      decision: "decline",
+      reason: "This file is intentionally out of scope for this change.",
+      decidedBy: "reviewer@example.test"
+    });
+
+    expect(resolution.status).toBe("declined");
+    expect(existsSync(resolution.dispositionsPath)).toBe(true);
+
+    const second = await service.review({ startPath: repoRoot, plan: "latest" });
+    const declinedFinding = second.report.findings.find(
+      (item) => item.id === finding!.id
+    );
+
+    expect(declinedFinding?.status).toBe("declined");
+    expect(declinedFinding?.disposition?.reason).toContain(
+      "intentionally out of scope"
+    );
+    // reviewerPrompt's active-findings count no longer includes the declined one.
+    expect(second.report.reviewerPrompt).not.toBeUndefined();
+
+    const markdown = await readFile(second.latestMarkdownPath, "utf8");
+    const findingsSection = markdown.split("## Declined (with reason)")[0];
+    const declinedSection = markdown.split("## Declined (with reason)")[1];
+
+    expect(findingsSection).not.toContain("Unexpected file changed");
+    expect(declinedSection).toContain("Unexpected file changed");
+    expect(declinedSection).toContain("intentionally out of scope");
+  });
+
+  it("records an accepted finding with its plan revision link", async () => {
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "review-accept" }),
+      "src/expected.ts": "export const expected = true;\n"
+    });
+    await initializeGitRepo(repoRoot);
+    await writeApprovedPlan(repoRoot, ["src/expected.ts"]);
+    await writeFile(
+      path.join(repoRoot, "src/unexpected.ts"),
+      "export const unexpected = true;\n",
+      "utf8"
+    );
+
+    const service = new ReviewService();
+    const first = await service.review({ startPath: repoRoot, plan: "latest" });
+    const finding = first.report.findings.find(
+      (item) => item.title === "Unexpected file changed"
+    );
+
+    const resolution = await service.resolveFinding({
+      startPath: repoRoot,
+      findingId: finding!.id,
+      decision: "accept",
+      reason: "Folded into the plan as an additional file.",
+      decidedBy: "reviewer@example.test",
+      planRevision: 2
+    });
+
+    expect(resolution.status).toBe("accepted");
+    expect(resolution.disposition.planRevision).toBe(2);
+
+    const second = await service.review({ startPath: repoRoot, plan: "latest" });
+    const acceptedFinding = second.report.findings.find(
+      (item) => item.id === finding!.id
+    );
+
+    expect(acceptedFinding?.status).toBe("accepted");
+    expect(acceptedFinding?.disposition?.planRevision).toBe(2);
+  });
+
+  it("rejects resolving a finding without a reason", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "review-missing-reason" })
+    });
+
+    await expect(
+      new ReviewService().resolveFinding({
+        startPath: repoRoot,
+        findingId: "finding_doesnotmatter",
+        decision: "decline",
+        reason: "",
+        decidedBy: "reviewer"
+      })
+    ).rejects.toThrow(/reason is required/);
+  });
+});
+
+describe("review resolve CLI", () => {
+  it("resolves a finding and persists it across the next review run", async () => {
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "review-resolve-cli" }),
+      "src/expected.ts": "export const expected = true;\n"
+    });
+    await initializeGitRepo(repoRoot);
+    await writeApprovedPlan(repoRoot, ["src/expected.ts"]);
+    await writeFile(
+      path.join(repoRoot, "src/unexpected.ts"),
+      "export const unexpected = true;\n",
+      "utf8"
+    );
+
+    const reviewCapture = createCapture();
+    const reviewResult = await runCli(
+      ["review", "--path", repoRoot, "--plan", "latest", "--json"],
+      reviewCapture.io
+    );
+    const reviewJson = JSON.parse(reviewCapture.stdout.join("\n"));
+    const findingId = reviewJson.findings.find(
+      (finding: { title: string }) => finding.title === "Unexpected file changed"
+    ).id;
+
+    expect(reviewResult.exitCode).toBe(0);
+
+    const resolveCapture = createCapture();
+    const resolveResult = await runCli(
+      [
+        "review",
+        "resolve",
+        "--path",
+        repoRoot,
+        "--finding-id",
+        findingId,
+        "--decision",
+        "decline",
+        "--reason",
+        "Out of scope.",
+        "--by",
+        "reviewer",
+        "--json"
+      ],
+      resolveCapture.io
+    );
+    const resolveJson = JSON.parse(resolveCapture.stdout.join("\n"));
+
+    expect(resolveResult.exitCode).toBe(0);
+    expect(resolveJson.status).toBe("declined");
+
+    const missingReasonCapture = createCapture();
+    const missingReasonResult = await runCli(
+      [
+        "review",
+        "resolve",
+        "--path",
+        repoRoot,
+        "--finding-id",
+        findingId,
+        "--decision",
+        "accept",
+        "--by",
+        "reviewer"
+      ],
+      missingReasonCapture.io
+    );
+
+    expect(missingReasonResult.exitCode).toBe(1);
+    expect(missingReasonCapture.stderr.join("\n")).toContain("--reason");
+  });
 });
 
 describe("review CLI", () => {

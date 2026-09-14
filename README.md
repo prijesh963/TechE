@@ -86,6 +86,7 @@ Run any command with `npm run cli -- <command> [flags]` or `copilot-architect <c
 | `commands validate` | Validate `.copilot-architect/commands.json` |
 | `validate` | Run safe build/test/lint/format commands |
 | `review` | Generate a review report from git diff + validation evidence |
+| `review resolve` | Accept or decline a review finding by id (`--finding-id --decision --reason --by`) |
 | `handoff` | Generate an implementation handoff prompt (requires `--approve` and an approved plan) |
 | `agents install` | Install custom Copilot agent templates under `.github/agents/` |
 | `agents list` | List available agent templates |
@@ -392,6 +393,7 @@ Start: `npm run cli -- mcp [--path <repo>]`
 | `get_latest_plan` | Return the latest plan artifact |
 | `get_latest_validation` | Return the latest validation report |
 | `get_latest_review` | Return the latest review report |
+| `resolve_review_finding` | Accept or decline one review finding by stable id (`reason` required for both) |
 | `agent_status` | Return installed agent status |
 
 ---
@@ -433,7 +435,8 @@ All runtime artifacts live under `.copilot-architect/` inside the repo root:
 ├── reviews/
 │   ├── <timestamp>-review.json
 │   ├── <timestamp>-review.md
-│   └── latest-review.*
+│   ├── latest-review.*
+│   └── dispositions.json     ← durable accept/decline record, keyed by finding id
 ├── audit/
 │   └── audit.jsonl           ← append-only audit log
 └── diagnostics/

@@ -7,6 +7,7 @@ import {
   FeaturePlanningService,
   WorkspacePlanningService
 } from "@copilot-architect/planner";
+import { ReviewService } from "@copilot-architect/reviewer";
 import {
   type DetectedCommand,
   type RepoCommandSet,
@@ -353,6 +354,26 @@ export function createCopilotArchitectTools(
         )
     ),
     tool(
+      "resolve_review_finding",
+      "Record a durable accept/decline decision on one review finding by its " +
+        "stable id. A declined finding never reappears on the next review; an " +
+        "accepted one should be folded into a plan revision separately via " +
+        "revise_feature_plan. reason is required for both decisions — it is " +
+        "the audit trail.",
+      resolveReviewFindingSchema,
+      false,
+      async (args) =>
+        new ReviewService().resolveFinding({
+          startPath: resolveStartPath(args, options),
+          findingId: stringArg(args, "findingId"),
+          decision: args.decision === "accept" ? "accept" : "decline",
+          reason: stringArg(args, "reason"),
+          decidedBy: stringArg(args, "decidedBy"),
+          planRevision:
+            typeof args.planRevision === "number" ? args.planRevision : undefined
+        })
+    ),
+    tool(
       "agent_status",
       "Report Copilot Architect custom agent and MCP readiness.",
       commonSchema,
@@ -587,4 +608,13 @@ const approvePlanSchema = {
   revision: z.number(),
   approvedBy: z.string(),
   note: z.string().optional()
+};
+
+const resolveReviewFindingSchema = {
+  ...commonSchema,
+  findingId: z.string(),
+  decision: z.enum(["accept", "decline"]),
+  reason: z.string(),
+  decidedBy: z.string(),
+  planRevision: z.number().optional()
 };

@@ -82,9 +82,9 @@ npm run cli -- agents validate
 
 ---
 
-## Version 0.1.1 → Plan Lifecycle Notes (Plan Revisions and Approval)
+## Version 0.1.1 → Plan Lifecycle Notes (Plan Revisions, Approval, and Review Disposition)
 
-See `docs/PLAN_LIFECYCLE_DESIGN.md` for the full design. Sections 1 and 2 are implemented:
+See `docs/PLAN_LIFECYCLE_DESIGN.md` for the full design. Sections 1, 2, and 3 are implemented:
 
 ### What Changed
 
@@ -97,10 +97,16 @@ See `docs/PLAN_LIFECYCLE_DESIGN.md` for the full design. Sections 1 and 2 are im
 - **New CLI subcommands**: `plan approve --revision <n> --by <name> [--note <text>]`, `plan revisions`, `plan show [--revision <n>]`.
 - **New MCP tools**: `revise_feature_plan`, `approve_plan`.
 - FeatureArchitect and FeatureImplementer agent instructions were updated to call `approve_plan` before handoff, and to refuse an unapproved plan respectively. Re-run `npm run cli -- agents update` to pick up the new instructions.
+- **Review findings can now be declined without reappearing.** `ReviewFinding` gains a stable `id`, a `status`, and an optional `disposition`. The new `resolve_review_finding` MCP tool (or `review resolve --finding-id <id> --decision accept|decline --reason <text> --by <name>` on the CLI) records the decision to `.copilot-architect/reviews/dispositions.json`, keyed by finding id — `reason` is required for both `accept` and `decline`. The next `review` run re-hydrates findings from this file: a declined finding moves to the markdown report's **Declined (with reason)** section and is dropped from `reviewerPrompt`'s active count; an accepted one keeps its `planRevision` link once you fold it into a plan revision.
+- **CodeReviewer can now reopen the plan.** It gains `resolve_review_finding` and `revise_feature_plan` tools and a third handoff, "Revise Plan" → FeatureArchitect. Accepting a finding into a plan revision resets that plan to `status: "draft"` (see `revisePlan` behavior above), so it must go through `approve_plan` again before another handoff.
 
 ### Migrating existing plans
 
 Plans written before this change have no `revision` (treat as `1`), no `revisions` (treat as `[]`), and no `approval`. They read fine as-is, but since they carry `status: "draft"`, run `plan approve --revision 1 --by <name>` (or the `approve_plan` MCP tool) before generating a handoff against them — this is a one-time step per in-flight plan.
+
+### Migrating existing review findings
+
+Findings in review reports written before this change have no `id`. They are simply re-keyed the next time `review` runs — no data is lost, but any decision you previously recorded only in chat (never persisted) does not apply retroactively; decline or accept it again with `resolve_review_finding` once the new ids exist.
 
 ---
 

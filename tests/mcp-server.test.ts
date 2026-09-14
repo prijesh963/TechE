@@ -249,6 +249,55 @@ describe("Copilot Architect MCP server", () => {
     expect(result.isError).toBe(true);
   });
 
+  it("resolves a review finding through resolve_review_finding", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } })
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const declined = await callJsonTool(client, "resolve_review_finding", {
+      path: repoRoot,
+      findingId: "finding_abc123",
+      decision: "decline",
+      reason: "Intentionally out of scope for this change.",
+      decidedBy: "reviewer@example.test"
+    });
+    const accepted = await callJsonTool(client, "resolve_review_finding", {
+      path: repoRoot,
+      findingId: "finding_def456",
+      decision: "accept",
+      reason: "Folded into the plan.",
+      decidedBy: "reviewer@example.test",
+      planRevision: 2
+    });
+
+    expect(declined.ok).toBe(true);
+    expect(declined.data.status).toBe("declined");
+    expect(accepted.ok).toBe(true);
+    expect(accepted.data.status).toBe("accepted");
+    expect(accepted.data.disposition.planRevision).toBe(2);
+  });
+
+  it("requires a non-empty reason to resolve a review finding", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } })
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await client.callTool({
+      name: "resolve_review_finding",
+      arguments: {
+        path: repoRoot,
+        findingId: "finding_abc123",
+        decision: "decline",
+        reason: "",
+        decidedBy: "reviewer"
+      }
+    });
+
+    expect(result.isError).toBe(true);
+  });
+
   it("writes a Copilot Chat MCP configuration for VS Code", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ name: "mcp-config" })

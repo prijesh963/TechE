@@ -46,7 +46,11 @@ import {
   startMcpServer,
   type CopilotChatMcpConfigResult
 } from "@copilot-architect/mcp-server";
-import { ReviewService, type ReviewServiceResult } from "@copilot-architect/reviewer";
+import {
+  ReviewService,
+  type ResolveReviewFindingResult,
+  type ReviewServiceResult
+} from "@copilot-architect/reviewer";
 import {
   ArtifactCleanupService,
   AuditLogService,
@@ -676,6 +680,22 @@ export async function runCli(
   if (rawCommand === "review") {
     try {
       const options = parseReviewArgs(commandArgs);
+
+      if (options.subcommand === "resolve") {
+        const result = await new ReviewService().resolveFinding({
+          startPath: options.startPath,
+          findingId: options.findingId as string,
+          decision: options.decision as "accept" | "decline",
+          reason: options.reason as string,
+          decidedBy: options.decidedBy as string,
+          planRevision: options.planRevision
+        });
+        stdout(
+          options.json ? JSON.stringify(result, null, 2) : getReviewResolveText(result)
+        );
+        return { exitCode: 0 };
+      }
+
       const result = await new ReviewService().review(options);
       stdout(
         options.json ? JSON.stringify(result.report, null, 2) : getReviewText(result)
@@ -1801,9 +1821,15 @@ function getValidateSummaryText(result: ValidationRunResult): string {
 }
 
 interface ReviewCliOptions {
+  subcommand: "generate" | "resolve";
   startPath?: string;
   plan?: string;
   validation?: string;
+  findingId?: string;
+  decision?: "accept" | "decline";
+  reason?: string;
+  decidedBy?: string;
+  planRevision?: number;
   json: boolean;
 }
 
@@ -1876,10 +1902,13 @@ interface CliCommandExecutionResult {
 }
 
 function parseReviewArgs(args: string[]): ReviewCliOptions {
-  const options: ReviewCliOptions = { json: false };
+  const subcommand: ReviewCliOptions["subcommand"] =
+    args[0] === "resolve" ? "resolve" : "generate";
+  const rest = subcommand === "resolve" ? args.slice(1) : args;
+  const options: ReviewCliOptions = { subcommand, json: false };
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
 
     if (arg === "--json") {
       options.json = true;
@@ -1887,24 +1916,84 @@ function parseReviewArgs(args: string[]): ReviewCliOptions {
     }
 
     if (arg === "--path") {
-      options.startPath = requiredValue(args, index, "--path");
+      options.startPath = requiredValue(rest, index, "--path");
       index += 1;
       continue;
     }
 
     if (arg === "--plan") {
-      options.plan = requiredValue(args, index, "--plan");
+      options.plan = requiredValue(rest, index, "--plan");
       index += 1;
       continue;
     }
 
     if (arg === "--validation") {
-      options.validation = requiredValue(args, index, "--validation");
+      options.validation = requiredValue(rest, index, "--validation");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--finding-id") {
+      options.findingId = requiredValue(rest, index, "--finding-id");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--decision") {
+      const value = requiredValue(rest, index, "--decision");
+
+      if (value !== "accept" && value !== "decline") {
+        throw new Error("--decision must be 'accept' or 'decline'");
+      }
+
+      options.decision = value;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--reason") {
+      options.reason = requiredValue(rest, index, "--reason");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--by") {
+      options.decidedBy = requiredValue(rest, index, "--by");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--plan-revision") {
+      const value = Number(requiredValue(rest, index, "--plan-revision"));
+
+      if (!Number.isFinite(value)) {
+        throw new Error("Invalid value for --plan-revision");
+      }
+
+      options.planRevision = value;
       index += 1;
       continue;
     }
 
     throw new Error(`Unknown review argument: ${arg}`);
+  }
+
+  if (subcommand === "resolve") {
+    if (!options.findingId) {
+      throw new Error("review resolve requires --finding-id <id>");
+    }
+
+    if (!options.decision) {
+      throw new Error("review resolve requires --decision accept|decline");
+    }
+
+    if (!options.reason) {
+      throw new Error("review resolve requires --reason <text>");
+    }
+
+    if (!options.decidedBy) {
+      throw new Error("review resolve requires --by <name>");
+    }
   }
 
   return options;
@@ -2455,6 +2544,21 @@ function getReviewText(result: ReviewServiceResult): string {
     `Review Markdown: ${result.markdownPath}`,
     `Latest JSON: ${result.latestJsonPath}`,
     `Latest Markdown: ${result.latestMarkdownPath}`
+  ].join("\n");
+}
+
+function getReviewResolveText(result: ResolveReviewFindingResult): string {
+  return [
+    `${PROJECT_NAME}: review resolve`,
+    "",
+    `Finding: ${result.findingId}`,
+    `Status: ${result.status}`,
+    `Decided by: ${result.disposition.decidedBy}`,
+    `Reason: ${result.disposition.reason}`,
+    ...(result.disposition.planRevision !== undefined
+      ? [`Plan revision: ${result.disposition.planRevision}`]
+      : []),
+    `Dispositions file: ${result.dispositionsPath}`
   ].join("\n");
 }
 
