@@ -1,6 +1,7 @@
 export * from "./angular-adapter.js";
 export * from "./default-registry.js";
 export * from "./generic-text-adapter.js";
+export * from "./integration-detector.js";
 export * from "./java-adapter.js";
 export * from "./javascript-typescript-adapter.js";
 export * from "./python-adapter.js";

@@ -136,9 +136,65 @@ These languages receive generic fallback support through indexing, search, confi
 
 ---
 
+## Integrations — A Separate Axis From Language
+
+Language/framework detection answers "what is this repo written in". Integration
+detection answers "what does it talk to", and runs as one pass over all files
+rather than per adapter — the same broker shows up in a Maven pom, an npm
+`package.json`, a `requirements.txt` or a Spring `application.properties`.
+
+| Category           | Detected                                                                |
+| ------------------ | ----------------------------------------------------------------------- |
+| **Datastore**      | Oracle, MongoDB, PostgreSQL, MySQL, SQL Server, Redis                   |
+| **Messaging**      | Kafka, IBM MQ, JMS, ActiveMQ, RabbitMQ                                  |
+| **Micro-frontend** | Module Federation, single-spa, Web Components                           |
+| **Microservice**   | Spring Cloud, Service Discovery (Eureka/Consul), API Gateway, OpenFeign |
+
+Because these compose, **arbitrary combinations need no special case**: a
+"Java + Oracle + Kafka + IBM MQ" service is the Java adapter plus three
+independent integration detections, and the plan's `Integrations` section gets
+guidance for each. Adding a new integration to the table below benefits every
+combination it can appear in.
+
+Confidence is evidence-based: a declared dependency, driver class or connection
+URL yields `high`; a bare keyword mention yields `medium`. Documentation files
+are excluded — a README mentioning Kafka is not evidence the service uses it.
+
+Detected integrations appear in `repo-map.json` under `integrations`, and the
+Feature Planner, FeatureImplementer and CodeReviewer agents are instructed to
+treat message payloads, REST contracts, persisted schemas and micro-frontend
+exposed modules as published contracts when a change touches them.
+
+### Validated against
+
+Detection was checked against real public repositories rather than only
+fixtures: `spring-projects/spring-petclinic` (MySQL, PostgreSQL),
+`piomin/sample-spring-microservices` (Spring Cloud, Eureka, Gateway, Feign),
+`piomin/sample-spring-kafka-microservices` (Kafka),
+`ibm-messaging/mq-dev-patterns` (IBM MQ, JMS),
+`oracle-samples/oracle-db-examples` (Oracle),
+`spring-guides/gs-accessing-data-mongodb` (MongoDB),
+`module-federation/module-federation-examples` (Module Federation), and
+`tiangolo/full-stack-fastapi-template` (FastAPI + React + PostgreSQL).
+
+---
+
 ## Adding Support for a New Stack
 
 1. Implement a class that satisfies the adapter interfaces in `packages/adapters/src/types.ts`.
 2. Register it in `packages/adapters/src/default-registry.ts`.
 3. Add sample files to `samples/` and tests to `tests/`.
 4. Custom commands for specific per-repo needs can always be added without writing an adapter via `.copilot-architect/commands.json`.
+
+To add a new **integration** instead, add one entry to `INTEGRATION_SIGNALS` in
+`packages/adapters/src/integration-detector.ts` (and optionally a guidance line
+to `INTEGRATION_GUIDANCE` in the planner) — no adapter changes required.
+
+## Known Limit — Symbol Graph Is TypeScript/JavaScript Only
+
+The symbol/dependency graph (`npm run cli -- graph`), which powers graph-based
+search ranking and the "why relevant" citations in plans, parses `.ts`, `.tsx`,
+`.js` and `.jsx` only. On a Java, Python or other repo, planning and search
+still work — they fall back to keyword, path and git-recency signals — but there
+are no `imports`/`calls`/`extends` edges, so citations cite matches rather than
+call relationships.

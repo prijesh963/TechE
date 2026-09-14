@@ -181,6 +181,13 @@ export interface StackSpecificPlan {
   angular: string[];
   python: string[];
   java: string[];
+  /**
+   * Guidance derived from detected integrations (datastores, brokers,
+   * micro-frontend and microservice platforms). Composed per detection rather
+   * than per stack combination, so "Java + Oracle + Kafka" produces Java,
+   * Oracle and Kafka guidance without a combination-specific branch.
+   */
+  integrations: string[];
   generic: string[];
 }
 

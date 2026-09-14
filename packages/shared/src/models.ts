@@ -69,6 +69,8 @@ export interface RepoMap extends GeneratedArtifact {
   featurePatterns: FeaturePattern[];
   documentationFiles: string[];
   architecturalPatterns: string[];
+  /** Datastores, message brokers, micro-frontend and microservice platforms. */
+  integrations: IntegrationInfo[];
   diagnostics: DiagnosticMessage[];
 }
 
@@ -98,6 +100,27 @@ export interface FrameworkInfo {
   version?: string;
   ecosystem: string;
   confidence: ConfidenceLevel;
+  evidence: string[];
+}
+
+/**
+ * External systems and architectural styles a repo integrates with, detected
+ * independently of its language and framework. Kept as a separate axis on
+ * purpose: "Java + Oracle + Kafka" is not a special case to hard-code, it is
+ * the Java adapter plus two integrations, so arbitrary combinations compose
+ * without adding a detector per combination.
+ */
+export type IntegrationCategory =
+  "datastore" | "messaging" | "micro-frontend" | "microservice";
+
+export interface IntegrationInfo {
+  /** e.g. "Oracle", "MongoDB", "Kafka", "IBM MQ", "Module Federation". */
+  name: string;
+  category: IntegrationCategory;
+  /** Which stack the evidence came from: "java", "node", "python", or "any". */
+  ecosystem: string;
+  confidence: ConfidenceLevel;
+  /** File paths the signal was found in, most specific first. */
   evidence: string[];
 }
 

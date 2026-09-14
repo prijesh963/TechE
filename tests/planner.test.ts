@@ -134,6 +134,51 @@ describe("FeaturePlanningService", () => {
     );
   });
 
+  it("composes integration guidance for an arbitrary stack combination", async () => {
+    const repoRoot = await createRepo({
+      "pom.xml":
+        "<project><dependencies>" +
+        "<dependency><artifactId>ojdbc11</artifactId></dependency>" +
+        "<dependency><artifactId>spring-kafka</artifactId></dependency>" +
+        "<dependency><groupId>com.ibm.mq</groupId><artifactId>mq-jms-spring-boot-starter</artifactId></dependency>" +
+        "</dependencies></project>",
+      "src/main/java/com/acme/OrderService.java":
+        "package com.acme;\npublic class OrderService { public void publish() {} }\n"
+    });
+
+    const { plan } = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      strictRoot: true,
+      request: "Publish order status downstream"
+    });
+    const guidance = plan.stackSpecificPlan.integrations.join("\n");
+
+    // Each detected integration contributes independently — there is no
+    // "java + oracle + kafka + mq" branch to add.
+    expect(guidance).toContain("Oracle");
+    expect(guidance).toContain("Kafka");
+    expect(guidance).toContain("IBM MQ");
+    // Category baselines cover anything without a name-specific entry.
+    expect(guidance).toContain("Datastore change");
+    expect(guidance).toContain("Messaging change");
+    expect(guidance).toContain("Detected integrations to account for");
+  });
+
+  it("leaves integration guidance empty when the repo has none", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/index.ts": "export const add = (a: number, b: number) => a + b;"
+    });
+
+    const { plan } = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      strictRoot: true,
+      request: "Add a subtract helper"
+    });
+
+    expect(plan.stackSpecificPlan.integrations).toEqual([]);
+  });
+
   it("revises a draft plan in place without losing prior revisions", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({

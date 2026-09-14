@@ -221,6 +221,9 @@ function renderStackSpecificPlan(plan: FeaturePlanArtifact): string {
     "### Java",
     renderBullets(plan.stackSpecificPlan.java),
     "",
+    "### Integrations",
+    renderBullets(plan.stackSpecificPlan.integrations),
+    "",
     "### Generic",
     renderBullets(plan.stackSpecificPlan.generic)
   ].join("\n");

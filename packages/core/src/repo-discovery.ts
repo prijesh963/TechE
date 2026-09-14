@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   type AdapterDetectionResult,
   createDefaultAdapterRegistry,
+  detectIntegrations,
   type AdapterContextInput,
   type AdapterFile
 } from "@copilot-architect/adapters";
@@ -175,6 +176,7 @@ function createRepoMap(
     ],
     documentationFiles,
     architecturalPatterns: uniqueSorted(architecturalPatterns),
+    integrations: detectIntegrations(files),
     diagnostics: createDiagnostics(repoRoot, detection.diagnostics, projectRoots)
   };
 }
@@ -414,6 +416,9 @@ const textExtensions = new Set([
   ".gradle",
   ".kts",
   ".xml",
+  // Spring Boot keeps datasource URLs and broker config here, so it is a
+  // primary source of integration evidence.
+  ".properties",
   ".md",
   ".rst",
   ".txt",

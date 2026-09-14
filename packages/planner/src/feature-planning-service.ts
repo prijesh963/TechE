@@ -15,6 +15,7 @@ import {
   type AdvancedRiskScore,
   type DetectedCommand,
   type FeaturePlan,
+  type IntegrationInfo,
   type PlanQualityCheck,
   type PlanQualityScore,
   type PlanStep,
@@ -676,12 +677,82 @@ function createStackSpecificPlan(repo: RepoMap): StackSpecificPlan {
           "Add JUnit coverage for service behavior and API boundaries."
         ]
       : [],
+    integrations: createIntegrationGuidance(repo.integrations ?? []),
     generic: [
       "Follow nearby naming, folder, and test conventions.",
       "Prefer extending existing modules over creating new architecture.",
       "Keep implementation handoff blocked until this plan is approved."
     ]
   };
+}
+
+/**
+ * Guidance specific to each detected integration, plus a per-category
+ * baseline. Composing per detection rather than per stack combination is what
+ * lets an arbitrary mix ("Java + Oracle + Kafka + micro-frontend") produce
+ * guidance for all four without a branch per combination — and it means a
+ * newly detected integration still gets category-shaped advice for free.
+ */
+const INTEGRATION_GUIDANCE: Record<string, string> = {
+  Oracle:
+    "Oracle: confirm how schema changes are applied (Flyway/Liquibase vs manual DDL), check sequence/trigger usage, and review transaction boundaries before changing persistence code.",
+  MongoDB:
+    "MongoDB: adding document fields is backward compatible but removing or renaming them is not — check existing documents, index coverage for new query shapes, and prefer repository methods over ad-hoc queries.",
+  Kafka:
+    "Kafka: a payload change is a contract change. Update producers AND consumers, check serializer/schema compatibility, and consider replay of already-published messages by existing consumer groups.",
+  "IBM MQ":
+    "IBM MQ: verify queue/channel configuration, message format and acknowledgement mode, and whether producer and consumer must be deployed together.",
+  JMS: "JMS: check the message format, acknowledgement mode, and dead-letter/retry behavior; a listener signature change affects every producer on that destination.",
+  "Module Federation":
+    "Module Federation: exposed modules and shared dependencies bind at RUNTIME, not build time. A change to an exposed contract or a shared dependency version affects every remote — check host and remote alignment together.",
+  "single-spa":
+    "single-spa: registered applications are mounted at runtime; check the registration config and cross-app shared state before changing an app's public surface.",
+  OpenFeign:
+    "OpenFeign: a REST contract change breaks the Feign client interface in calling services — update both sides and their tests together."
+};
+
+const CATEGORY_GUIDANCE: Record<string, string> = {
+  datastore:
+    "Datastore change: plan the migration path and rollback, and confirm whether existing rows/documents need backfilling.",
+  messaging:
+    "Messaging change: treat the message shape as a published contract — identify every producer and consumer before changing it.",
+  "micro-frontend":
+    "Micro-frontend: changes cross application boundaries at runtime; confirm which host or remote owns the change and how versions are aligned.",
+  microservice:
+    "Microservice platform: an API change ripples to callers, gateway routes and service registration — enumerate the calling services before changing a contract."
+};
+
+function createIntegrationGuidance(integrations: IntegrationInfo[]): string[] {
+  if (integrations.length === 0) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  const categoriesSeen = new Set<string>();
+
+  for (const integration of integrations) {
+    const specific = INTEGRATION_GUIDANCE[integration.name];
+    if (specific) {
+      lines.push(specific);
+    }
+    categoriesSeen.add(integration.category);
+  }
+
+  // One baseline line per category covers integrations with no specific entry,
+  // so a newly added detection is never silently guidance-free.
+  for (const category of [...categoriesSeen].sort()) {
+    const baseline = CATEGORY_GUIDANCE[category];
+    if (baseline) {
+      lines.push(baseline);
+    }
+  }
+
+  const detected = integrations
+    .map((integration) => `${integration.name} (${integration.confidence} confidence)`)
+    .join(", ");
+  lines.push(`Detected integrations to account for: ${detected}.`);
+
+  return lines;
 }
 
 function createFrontendImpact(repo: RepoMap, request: string): string[] {
