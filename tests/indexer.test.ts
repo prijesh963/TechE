@@ -1,13 +1,18 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
+import { SymbolGraphService } from "../packages/graph/src/index.js";
 import { IndexingService, type LocalIndex } from "../packages/indexer/src/index.js";
 import { runCli } from "../packages/cli/src/index.js";
 import { getArtifactDirectoryPath } from "../packages/shared/src/index.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("IndexingService", () => {
   it("creates JSON index artifacts with required file metadata", async () => {
@@ -173,6 +178,113 @@ describe("IndexingService", () => {
       existsSync(path.join(getArtifactDirectoryPath(repoRoot, "index"), "index.json"))
     ).toBe(true);
   });
+
+  it("surfaces a graph-connected file with zero keyword overlap", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "import { RetryUtility } from './retry-utility.js';",
+        "",
+        "export function processPayment() {",
+        "  return RetryUtility.run(() => true);",
+        "}"
+      ].join("\n"),
+      "src/retry-utility.ts": [
+        "export class RetryUtility {",
+        "  static run(fn: () => boolean) {",
+        "    return fn();",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/unrelated.ts":
+        "export function unrelated() { return 'nothing to do with payments'; }"
+    });
+    await new SymbolGraphService().build({ startPath: repoRoot, strictRoot: true });
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+
+    const response = await service.search({
+      startPath: repoRoot,
+      query: "process payment"
+    });
+    const relativePaths = response.results.map((result) => result.relativePath);
+    const retryUtility = response.results.find(
+      (result) => result.relativePath === "src/retry-utility.ts"
+    );
+
+    // unrelated.ts shares no vocabulary with the query and has no graph
+    // connection to it, so it correctly never enters the results at all —
+    // the graph signal is what earns retry-utility.ts its spot despite
+    // matching no keywords either.
+    expect(relativePaths).not.toContain("src/unrelated.ts");
+    expect(retryUtility?.matchedFields).toEqual([]);
+    expect(retryUtility?.signals).toContain("graph");
+  });
+
+  it("does not add a graph signal when no graph has been built", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "import { RetryUtility } from './retry-utility.js';",
+        "export function processPayment() { return RetryUtility.run(() => true); }"
+      ].join("\n"),
+      "src/retry-utility.ts":
+        "export class RetryUtility { static run(fn: () => boolean) { return fn(); } }"
+    });
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+
+    const response = await service.search({
+      startPath: repoRoot,
+      query: "process payment"
+    });
+
+    expect(response.results.every((result) => !result.signals.includes("graph"))).toBe(
+      true
+    );
+  });
+
+  it("precomputes git activity at index time and surfaces a recency signal", async () => {
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "src/hot.ts": "export const hot = 1;",
+      "src/cold.ts": "export const cold = 1;"
+    });
+    await initializeGitRepo(repoRoot);
+    await writeFile(path.join(repoRoot, "src/hot.ts"), "export const hot = 2;", "utf8");
+    await commitAll(repoRoot, "touch hot");
+
+    const service = new IndexingService();
+    const indexResult = await service.index({ startPath: repoRoot });
+    const response = await service.search({ startPath: repoRoot, query: "export" });
+    const hot = response.results.find((result) => result.relativePath === "src/hot.ts");
+
+    expect(
+      indexResult.index.gitActivity?.find(
+        (activity) => activity.filePath === "src/hot.ts"
+      )?.commitCount
+    ).toBe(2);
+    expect(hot?.signals).toContain("recency");
+  });
+
+  it("reports lexical and structural signals for an ordinary keyword match", async () => {
+    const repoRoot = await createRepo({
+      "src/invoiceApproval.ts":
+        "export function approveInvoice() { return 'invoice approval'; }"
+    });
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+
+    const response = await service.search({
+      startPath: repoRoot,
+      query: "invoice approval"
+    });
+
+    expect(response.results[0]?.signals).toEqual(
+      expect.arrayContaining(["lexical", "structural"])
+    );
+  });
 });
 
 function requireDocument(index: LocalIndex, relativePath: string) {
@@ -197,4 +309,35 @@ async function createRepo(files: Record<string, string>): Promise<string> {
   }
 
   return repoRoot;
+}
+
+async function initializeGitRepo(repoRoot: string): Promise<void> {
+  await execFileAsync("git", ["init"], { cwd: repoRoot });
+  await commitAll(repoRoot, "initial");
+}
+
+async function commitAll(repoRoot: string, message: string): Promise<void> {
+  await execFileAsync("git", ["add", "."], { cwd: repoRoot });
+  await execFileAsync(
+    "git",
+    [
+      "-c",
+      "user.name=Copilot Architect",
+      "-c",
+      "user.email=copilot-architect@example.test",
+      "commit",
+      "-m",
+      message
+    ],
+    { cwd: repoRoot }
+  );
+}
+
+async function gitAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["--version"]);
+    return true;
+  } catch {
+    return false;
+  }
 }

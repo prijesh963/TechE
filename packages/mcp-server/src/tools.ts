@@ -156,7 +156,10 @@ export function createCopilotArchitectTools(
     ),
     tool(
       "search_repo",
-      "Search the current repo index.",
+      "Search the current repo index. Hybrid ranking: keyword match, path/symbol " +
+        "match, and — when get_symbol_graph has been run — files connected via " +
+        "the symbol graph even with no shared vocabulary. Each result's " +
+        "`signals` field says which of these found it.",
       searchSchema,
       true,
       async (args) =>

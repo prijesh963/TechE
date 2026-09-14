@@ -672,7 +672,9 @@ const GIT_ACTIVITY_MAX_FILES = 50;
  * `[]` on any failure: no `.git` directory, git unavailable, or an empty
  * history are all expected, not errors.
  */
-async function collectGitActivity(repoRoot: string): Promise<FileChangeActivity[]> {
+export async function collectGitActivity(
+  repoRoot: string
+): Promise<FileChangeActivity[]> {
   let stdout: string;
 
   try {

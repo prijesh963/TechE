@@ -334,3 +334,81 @@ category, its score range, and its shape are unchanged; only the
   already present in `advanced-analysis-service.ts` — no new dependency.
 - Verified against this repo's own git history (multi-hundred commits)
   in addition to fixture-repo tests with a handful of commits.
+
+## 2. Hybrid Retrieval (`packages/indexer`) — Implemented
+
+### Scope for this phase
+
+`packages/indexer` already had two fused signals — BM25 lexical scoring
+and a path/symbol "structural" score, combined via Reciprocal Rank Fusion
+(RRF) — well before this design doc existed. What it did not have is
+exactly the two signals #1 and #6 unlocked: a **graph** signal (files
+connected to a top match via the symbol/dependency graph, even with zero
+shared vocabulary) and a **recency** signal (frequently/recently changed
+files rank slightly higher). This phase adds both into the existing RRF
+fusion rather than replacing it.
+
+### Design decisions
+
+- **Graph: read-only, never builds one.** `search()` tries to read
+  `.copilot-architect/graph.json` (via the same `getArtifactFilePath`
+  helper `get_symbol_graph` writes through) and silently skips the graph
+  signal if it doesn't exist. Building a graph is a full AST parse of the
+  repo — running that inline on every `search_repo` call (which agents
+  call often, and `findSimilarFeatures`/planning call internally) would
+  make search noticeably slower. The signal is a free bonus once someone
+  has run `graph` / `get_symbol_graph` — degrades to exactly the
+  pre-existing 2-signal behavior otherwise.
+- **Recency: precomputed at index build time, not per search.** Unlike
+  the graph traversal (which is inherently query-dependent — "boost
+  neighbors of _this query's_ top matches" cannot be precomputed),
+  recency is the same for a given moment regardless of what's being
+  searched for. `collectGitActivity` runs once per `index()` call and is
+  cached on `LocalIndex.gitActivity`, mirroring how `searchStats` is
+  already precomputed once per index build and reused across searches —
+  not re-shelling out to git on every query.
+- **Graph traversal, not static centrality.** The signal seeds from the
+  top files the lexical/structural signals already found (top 8 from
+  each, deduped), then walks the symbol graph's edges outward: 1-hop
+  neighbors score higher than 2-hop, and seed files themselves are
+  excluded from the graph list (they already rank highly on lexical/
+  structural — the graph signal's value is surfacing files that don't).
+  Symbol-level edges collapse to file-level, undirected — for "is this
+  file related," direction doesn't matter.
+- **`SearchResult.signals` exposes which signal(s) fired.** A generalized
+  `fuseSignals` helper replaces the old two-list-only RRF loop with one
+  that runs over any number of named ranked lists and records, per
+  result, which signals contributed a non-zero rank. This is diagnostic
+  value now and becomes the direct input to item #4 ("why relevant"
+  citations) later — no rework needed when #4 lands.
+
+### Schema changes
+
+`LocalIndex` gains `gitActivity?: FileChangeActivity[]` (optional, same
+backward-compatibility pattern as `searchStats`). `SearchResult` gains
+`signals: SearchSignal[]` where
+`SearchSignal = "lexical" | "structural" | "graph" | "recency"`.
+
+### Compatibility
+
+- Additive only: existing 2-signal fusion behavior is reproduced exactly
+  when no graph exists and the repo has no git history — confirmed by the
+  full existing test suite passing unchanged.
+- `packages/indexer` gains a new dependency on `@copilot-architect/graph`
+  (type-only import of `SymbolGraph`) alongside its existing dependency
+  on `@copilot-architect/core` (already used for `WorkspaceService`; now
+  also for the exported `collectGitActivity`).
+
+### Implementation Notes
+
+- Verified end to end with a 3-file fixture (`payment-service.ts` calling
+  an imported `RetryUtility.run`, plus an unrelated file): searching
+  "process payment" surfaced `retry-utility.ts` with `matchedFields: []`
+  (zero keyword overlap) and `signals: ["graph", "recency"]` — the exact
+  differentiator this whole design doc set out to build. The unrelated
+  file, sharing no vocabulary and no graph edge with the query, correctly
+  never entered the results at all.
+- New coverage in `tests/indexer.test.ts`: graph signal surfacing a
+  zero-keyword-overlap file, no graph signal when no graph exists,
+  recency signal from precomputed `gitActivity`, and ordinary lexical/
+  structural signals still reported for a plain keyword match.

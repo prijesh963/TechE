@@ -4,13 +4,16 @@ import path from "node:path";
 
 import {
   WorkspaceService,
+  collectGitActivity,
   type WorkspaceRepoDescriptor
 } from "@copilot-architect/core";
+import type { SymbolGraph } from "@copilot-architect/graph";
 import {
   CURRENT_SCHEMA_VERSION,
   type CodeSymbol,
   type ScannedEntry,
   getArtifactDirectoryPath,
+  getArtifactFilePath,
   isBinaryPath,
   readJsonFile,
   scanRepository,
@@ -29,6 +32,7 @@ import type {
   SearchOptions,
   SearchResponse,
   SearchResult,
+  SearchSignal,
   SearchStats,
   SimilarFeatureOptions,
   TokenCounts,
@@ -65,6 +69,10 @@ export class IndexingService {
     const documents = await scanDocuments(repoRoot, existingIndex, {
       maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
     });
+    // One `git log` walk per index build, not per search — recency doesn't
+    // change per-query, so it's cached here like searchStats and reused
+    // by every search() call until the next index() run.
+    const gitActivity = await collectGitActivity(repoRoot);
     const index: LocalIndex = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
@@ -72,7 +80,8 @@ export class IndexingService {
       repoRoot,
       documents,
       stats: createStats(documents),
-      searchStats: computeSearchStats(documents)
+      searchStats: computeSearchStats(documents),
+      gitActivity
     };
     const mode = options.rebuild ? "rebuild" : existingIndex ? "incremental" : "full";
 
@@ -93,7 +102,12 @@ export class IndexingService {
     const startPath = path.resolve(options.startPath ?? process.cwd());
     const repoRoot = await resolveRepoRoot(startPath, options.strictRoot);
     const index = await this.readOrCreateIndex(repoRoot, options.strictRoot);
-    const results = searchIndex(index, options.query, options.limit ?? 20);
+    // Read-only: if a symbol graph has already been built (via `graph` /
+    // get_symbol_graph), search gets a free ranking boost. Never builds one
+    // itself — that's a full AST parse of the repo and too expensive to run
+    // on every search call.
+    const graph = await tryReadGraph(repoRoot);
+    const results = searchIndex(index, options.query, options.limit ?? 20, graph);
 
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -378,7 +392,10 @@ function computeSearchStats(documents: IndexedFile[]): SearchStats {
     const tokens = documentTokensFor(doc);
     const seen = new Set<string>();
     let docLength = 0;
-    for (const [fieldName, counts] of Object.entries(tokens) as [string, TokenCounts][]) {
+    for (const [fieldName, counts] of Object.entries(tokens) as [
+      string,
+      TokenCounts
+    ][]) {
       const fl = fieldLength(counts);
       fieldTotals[fieldName] = (fieldTotals[fieldName] ?? 0) + fl;
       docLength += fl;
@@ -478,7 +495,17 @@ function bestSymbolAnchor(
   };
 }
 
-function searchIndex(index: LocalIndex, query: string, limit: number): SearchResult[] {
+const GRAPH_SEED_COUNT = 8;
+
+type RankedItem = { relativePath: string; score: number };
+type RankedSignal = { name: SearchSignal; ranked: RankedItem[] };
+
+function searchIndex(
+  index: LocalIndex,
+  query: string,
+  limit: number,
+  graph?: SymbolGraph
+): SearchResult[] {
   const queryTerms = [...new Set(tokenize(query))];
   if (queryTerms.length === 0) return [];
 
@@ -497,41 +524,72 @@ function searchIndex(index: LocalIndex, query: string, limit: number): SearchRes
     const semantic = pathSymbolScore(fields, queryTerms);
     return { doc, lexical, semantic, matchedFields };
   });
+  const entriesByPath = new Map(
+    entries.map((entry) => [entry.doc.relativePath, entry])
+  );
 
-  const byLexical = [...entries].sort((a, b) => b.lexical - a.lexical);
-  const bySemantic = [...entries].sort((a, b) => b.semantic - a.semantic);
+  const byLexical: RankedItem[] = [...entries]
+    .sort((a, b) => b.lexical - a.lexical)
+    .map((entry) => ({ relativePath: entry.doc.relativePath, score: entry.lexical }));
+  const bySemantic: RankedItem[] = [...entries]
+    .sort((a, b) => b.semantic - a.semantic)
+    .map((entry) => ({ relativePath: entry.doc.relativePath, score: entry.semantic }));
 
-  const rrfMap = new Map<string, { entry: Entry; rrf: number }>();
+  const rankedSignals: RankedSignal[] = [
+    { name: "lexical", ranked: byLexical },
+    { name: "structural", ranked: bySemantic }
+  ];
 
-  for (let i = 0; i < byLexical.length; i++) {
-    const e = byLexical[i];
-    if (e.lexical === 0) break;
-    const key = e.doc.relativePath;
-    rrfMap.set(key, {
-      entry: e,
-      rrf: (rrfMap.get(key)?.rrf ?? 0) + 1 / (RRF_K + i + 1)
-    });
+  // Graph signal: surfaces files connected to a top keyword/structural
+  // match via the symbol/dependency graph, even when they share no
+  // vocabulary with the query at all — e.g. a retry utility called by the
+  // payment service the query actually named. Only added when a graph has
+  // already been built (see tryReadGraph) and the keyword/structural
+  // signals found at least one seed to traverse from.
+  if (graph) {
+    const seeds = pickSeedFiles([byLexical, bySemantic], GRAPH_SEED_COUNT);
+    if (seeds.length > 0) {
+      const adjacency = buildFileAdjacency(graph);
+      const graphRanked = graphProximityScores(
+        seeds,
+        adjacency,
+        new Set(entriesByPath.keys())
+      );
+      if (graphRanked.length > 0) {
+        rankedSignals.push({ name: "graph", ranked: graphRanked });
+      }
+    }
   }
 
-  for (let i = 0; i < bySemantic.length; i++) {
-    const e = bySemantic[i];
-    if (e.semantic === 0) break;
-    const key = e.doc.relativePath;
-    const existing = rrfMap.get(key);
-    rrfMap.set(key, {
-      entry: existing?.entry ?? e,
-      rrf: (existing?.rrf ?? 0) + 1 / (RRF_K + i + 1)
-    });
+  // Recency signal: frequently/recently changed files rank slightly higher,
+  // independent of the query — active-development areas are more often
+  // where a new change belongs. Precomputed at index time (see index()).
+  const gitActivity = index.gitActivity ?? [];
+  if (gitActivity.length > 0) {
+    const activityByPath = new Map(
+      gitActivity.map((activity) => [activity.filePath, activity])
+    );
+    const recencyRanked: RankedItem[] = entries
+      .map((entry) => ({
+        relativePath: entry.doc.relativePath,
+        score: activityByPath.get(entry.doc.relativePath)?.commitCount ?? 0
+      }))
+      .sort((a, b) => b.score - a.score);
+    rankedSignals.push({ name: "recency", ranked: recencyRanked });
   }
 
-  return [...rrfMap.values()]
-    .sort(
-      (a, b) =>
-        b.rrf - a.rrf ||
-        a.entry.doc.relativePath.localeCompare(b.entry.doc.relativePath)
-    )
+  const fused = fuseSignals(rankedSignals);
+
+  return [...fused.entries()]
+    .map(([relativePath, value]) => ({
+      relativePath,
+      ...value,
+      entry: entriesByPath.get(relativePath)
+    }))
+    .filter((item): item is typeof item & { entry: Entry } => Boolean(item.entry))
+    .sort((a, b) => b.rrf - a.rrf || a.relativePath.localeCompare(b.relativePath))
     .slice(0, limit)
-    .map(({ entry, rrf }) => ({
+    .map(({ entry, rrf, signals }) => ({
       filePath: entry.doc.filePath,
       relativePath: entry.doc.relativePath,
       score: Math.round(rrf * 1000 * 100) / 100,
@@ -543,8 +601,109 @@ function searchIndex(index: LocalIndex, query: string, limit: number): SearchRes
       isTestFile: entry.doc.isTestFile,
       isConfigFile: entry.doc.isConfigFile,
       isDocFile: entry.doc.isDocFile,
-      anchor: bestSymbolAnchor(entry.doc, queryTerms)
+      anchor: bestSymbolAnchor(entry.doc, queryTerms),
+      signals: [...signals].sort()
     }));
+}
+
+/** Reciprocal Rank Fusion over any number of ranked signal lists, tracking
+ *  which signals contributed to each result (for SearchResult.signals). */
+function fuseSignals(
+  signals: RankedSignal[]
+): Map<string, { rrf: number; signals: Set<SearchSignal> }> {
+  const rrfMap = new Map<string, { rrf: number; signals: Set<SearchSignal> }>();
+
+  for (const { name, ranked } of signals) {
+    for (let i = 0; i < ranked.length; i++) {
+      const item = ranked[i];
+      if (item.score <= 0) break;
+      const existing = rrfMap.get(item.relativePath);
+      const signalSet = existing?.signals ?? new Set<SearchSignal>();
+      signalSet.add(name);
+      rrfMap.set(item.relativePath, {
+        rrf: (existing?.rrf ?? 0) + 1 / (RRF_K + i + 1),
+        signals: signalSet
+      });
+    }
+  }
+
+  return rrfMap;
+}
+
+/** Top-N non-zero-scoring files from each ranked list, deduped — the
+ *  starting points graph traversal expands from. */
+function pickSeedFiles(rankedLists: RankedItem[][], perListCount: number): string[] {
+  const seeds = new Set<string>();
+
+  for (const ranked of rankedLists) {
+    let taken = 0;
+    for (const item of ranked) {
+      if (item.score <= 0 || taken >= perListCount) break;
+      seeds.add(item.relativePath);
+      taken += 1;
+    }
+  }
+
+  return [...seeds];
+}
+
+/** Undirected file-level adjacency collapsed from the graph's symbol-level
+ *  edges — "related to" is symmetric for retrieval purposes regardless of
+ *  which direction an import/call/heritage edge points. */
+function buildFileAdjacency(graph: SymbolGraph): Map<string, Set<string>> {
+  const adjacency = new Map<string, Set<string>>();
+
+  const link = (from: string, to: string): void => {
+    if (from === to) return;
+    if (!adjacency.has(from)) adjacency.set(from, new Set());
+    adjacency.get(from)?.add(to);
+  };
+
+  for (const edge of graph.edges) {
+    const from = fileOfNodeId(edge.from);
+    const to = fileOfNodeId(edge.to);
+    link(from, to);
+    link(to, from);
+  }
+
+  return adjacency;
+}
+
+function fileOfNodeId(nodeId: string): string {
+  const hashIndex = nodeId.indexOf("#");
+  return hashIndex === -1 ? nodeId : nodeId.slice(0, hashIndex);
+}
+
+/** 1-hop neighbors of a seed score higher than 2-hop neighbors; seeds
+ *  themselves are excluded — they already rank highly on lexical/structural
+ *  signal, so the graph signal's value is surfacing files that don't. */
+function graphProximityScores(
+  seeds: string[],
+  adjacency: Map<string, Set<string>>,
+  knownPaths: Set<string>
+): RankedItem[] {
+  const seedSet = new Set(seeds);
+  const scores = new Map<string, number>();
+
+  for (const seed of seeds) {
+    for (const neighbor of adjacency.get(seed) ?? []) {
+      if (seedSet.has(neighbor) || !knownPaths.has(neighbor)) continue;
+      scores.set(neighbor, Math.max(scores.get(neighbor) ?? 0, 2));
+    }
+  }
+
+  for (const oneHopFile of [...scores.keys()]) {
+    for (const neighbor of adjacency.get(oneHopFile) ?? []) {
+      if (seedSet.has(neighbor) || scores.has(neighbor) || !knownPaths.has(neighbor)) {
+        continue;
+      }
+      scores.set(neighbor, 1);
+    }
+  }
+
+  return [...scores.entries()]
+    .map(([relativePath, score]) => ({ relativePath, score }))
+    .sort((a, b) => b.score - a.score);
 }
 
 function extractSymbols(filePath: string, text: string): CodeSymbol[] {
@@ -676,6 +835,14 @@ async function resolveRepoRoot(
 async function tryReadIndex(indexPath: string): Promise<LocalIndex | undefined> {
   try {
     return await readJsonFile<LocalIndex>(indexPath);
+  } catch {
+    return undefined;
+  }
+}
+
+async function tryReadGraph(repoRoot: string): Promise<SymbolGraph | undefined> {
+  try {
+    return await readJsonFile<SymbolGraph>(getArtifactFilePath(repoRoot, "graph"));
   } catch {
     return undefined;
   }

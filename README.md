@@ -388,7 +388,7 @@ Start: `npm run cli -- mcp [--path <repo>]`
 | `detect_package_managers`   | Detected package managers                                                                                                           |
 | `detect_build_commands`     | Build commands                                                                                                                      |
 | `detect_test_commands`      | Test commands                                                                                                                       |
-| `search_repo`               | Keyword search the local index                                                                                                      |
+| `search_repo`               | Hybrid search the local index (keyword + path/symbol + graph-connected + recency; see `signals` per result)                         |
 | `search_across_repos`       | Search across all workspace repos                                                                                                   |
 | `find_similar_feature`      | Find files similar to a described feature                                                                                           |
 | `find_impacted_files`       | List files likely affected by a change                                                                                              |
