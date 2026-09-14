@@ -36,6 +36,7 @@ describe("Copilot Architect MCP server", () => {
     expect(names).toEqual(
       expect.arrayContaining([
         "repo_map",
+        "get_symbol_graph",
         "workspace_map",
         "search_repo",
         "search_across_repos",
@@ -83,6 +84,41 @@ describe("Copilot Architect MCP server", () => {
     ).toContain("src/invoices/invoice-service.ts");
     expect(plan.data.plan.task).toBe("Add invoice approval workflow");
     expect(validationCommands.data.commands.length).toBeGreaterThan(0);
+  });
+
+  it("builds the symbol/dependency graph through get_symbol_graph", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice-service.ts":
+        "export function approveInvoice() { return 'approved invoice'; }",
+      "src/server.ts": [
+        "import { approveInvoice } from './invoice-service.js';",
+        "",
+        "export function approve() {",
+        "  return approveInvoice();",
+        "}"
+      ].join("\n")
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const graph = await callJsonTool(client, "get_symbol_graph", { path: repoRoot });
+
+    expect(graph.ok).toBe(true);
+    expect(graph.data.nodes.map((node: { id: string }) => node.id)).toEqual(
+      expect.arrayContaining([
+        "src/server.ts#approve",
+        "src/invoice-service.ts#approveInvoice"
+      ])
+    );
+    expect(graph.data.edges).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "calls",
+          from: "src/server.ts#approve",
+          to: "src/invoice-service.ts#approveInvoice"
+        }
+      ])
+    );
   });
 
   it("handles missing latest artifacts gracefully", async () => {
@@ -134,6 +170,168 @@ describe("Copilot Architect MCP server", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("requires approved=true");
+  });
+
+  it("revises a saved draft plan through revise_feature_plan", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = 'draft';"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const created = await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow",
+      approved: true
+    });
+    const revised = await callJsonTool(client, "revise_feature_plan", {
+      path: repoRoot,
+      feedback: "Also cover the rejection path.",
+      sections: { openQuestions: ["What happens on rejection?"] }
+    });
+
+    expect(created.data.plan.revision).toBe(1);
+    expect(revised.ok).toBe(true);
+    expect(revised.data.plan.id).toBe(created.data.plan.id);
+    expect(revised.data.plan.revision).toBe(2);
+    expect(revised.data.plan.revisions).toHaveLength(2);
+    expect(revised.data.plan.openQuestions).toEqual(["What happens on rejection?"]);
+  });
+
+  it("blocks regenerating a feature plan over an existing draft", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = 'draft';"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow",
+      approved: true
+    });
+    const blocked = await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow, take two",
+      approved: true
+    });
+    const restarted = await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow, take two",
+      approved: true,
+      restart: true
+    });
+
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toContain("revise_feature_plan");
+    expect(restarted.ok).toBe(true);
+    expect(restarted.data.plan.revision).toBe(1);
+    expect(restarted.data.plan.task).toBe("Add invoice approval workflow, take two");
+  });
+
+  it("approves a specific revision through approve_plan and gates handoff on it", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = 'draft';"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const created = await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow",
+      approved: true
+    });
+    const unapproved = await callJsonTool(client, "get_latest_plan", {
+      path: repoRoot
+    });
+    const approved = await callJsonTool(client, "approve_plan", {
+      path: repoRoot,
+      planId: created.data.plan.id,
+      revision: 1,
+      approvedBy: "reviewer@example.test"
+    });
+    const latestAfterApproval = await callJsonTool(client, "get_latest_plan", {
+      path: repoRoot
+    });
+
+    expect(unapproved.data.status).toBe("draft");
+    expect(approved.ok).toBe(true);
+    expect(approved.data.plan.status).toBe("approved");
+    expect(approved.data.plan.approval).toMatchObject({
+      approvedBy: "reviewer@example.test",
+      revision: 1
+    });
+    expect(latestAfterApproval.data.status).toBe("approved");
+  });
+
+  it("requires a revision number to approve a plan", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = 'draft';"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow",
+      approved: true
+    });
+
+    const result = await client.callTool({
+      name: "approve_plan",
+      arguments: { path: repoRoot, approvedBy: "reviewer" }
+    });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("resolves a review finding through resolve_review_finding", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } })
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const declined = await callJsonTool(client, "resolve_review_finding", {
+      path: repoRoot,
+      findingId: "finding_abc123",
+      decision: "decline",
+      reason: "Intentionally out of scope for this change.",
+      decidedBy: "reviewer@example.test"
+    });
+    const accepted = await callJsonTool(client, "resolve_review_finding", {
+      path: repoRoot,
+      findingId: "finding_def456",
+      decision: "accept",
+      reason: "Folded into the plan.",
+      decidedBy: "reviewer@example.test",
+      planRevision: 2
+    });
+
+    expect(declined.ok).toBe(true);
+    expect(declined.data.status).toBe("declined");
+    expect(accepted.ok).toBe(true);
+    expect(accepted.data.status).toBe("accepted");
+    expect(accepted.data.disposition.planRevision).toBe(2);
+  });
+
+  it("requires a non-empty reason to resolve a review finding", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } })
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await client.callTool({
+      name: "resolve_review_finding",
+      arguments: {
+        path: repoRoot,
+        findingId: "finding_abc123",
+        decision: "decline",
+        reason: "",
+        decidedBy: "reviewer"
+      }
+    });
+
+    expect(result.isError).toBe(true);
   });
 
   it("writes a Copilot Chat MCP configuration for VS Code", async () => {

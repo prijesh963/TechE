@@ -17,6 +17,7 @@ import {
   type RepoReadinessReport,
   type WorkspaceServiceResult
 } from "@copilot-architect/core";
+import { SymbolGraphService, type SymbolGraphResult } from "@copilot-architect/graph";
 import {
   IndexingService,
   type IndexResult,
@@ -25,17 +26,28 @@ import {
   type WorkspaceSearchResponse
 } from "@copilot-architect/indexer";
 import {
+  QueryIntentService,
+  type QueryIntentResult,
+  type RelevantFileSummary
+} from "@copilot-architect/intent";
+import {
   InstructionService,
   type InstructionGenerationSummary,
   type InstructionPreviewResult,
   type InstructionValidationResult
 } from "@copilot-architect/instructions";
 import {
+  ContextMeasurementService,
+  type ContextMeasurement
+} from "@copilot-architect/measurement";
+import {
   FeaturePlanningService,
   HandoffService,
   WorkspacePlanningService,
+  type FeaturePlanArtifact,
   type FeaturePlanningResult,
   type HandoffGenerationResult,
+  type PlanRevisionSummary,
   type WorkspaceImpactResult,
   type WorkspacePlanningResult
 } from "@copilot-architect/planner";
@@ -44,7 +56,11 @@ import {
   startMcpServer,
   type CopilotChatMcpConfigResult
 } from "@copilot-architect/mcp-server";
-import { ReviewService, type ReviewServiceResult } from "@copilot-architect/reviewer";
+import {
+  ReviewService,
+  type ResolveReviewFindingResult,
+  type ReviewServiceResult
+} from "@copilot-architect/reviewer";
 import {
   ArtifactCleanupService,
   AuditLogService,
@@ -94,9 +110,13 @@ export interface CliResult {
 const commandDescriptions = {
   init: "Initialize local .copilot-architect artifacts.",
   analyze: "Analyze the current repo or workspace.",
+  graph: "Build the symbol/dependency graph.",
   index: "Build the local searchable index.",
   search: "Search the local repo index.",
+  intent: "Classify a query's intent and resolve likely relevant files.",
   plan: "Generate a feature implementation plan.",
+  measure:
+    "Measure how much a plan's file selection narrows context vs the whole repo.",
   commands: "Manage custom validation command configuration.",
   validate: "Run safe validation commands.",
   policy: "Inspect and validate the local safety policy.",
@@ -120,11 +140,16 @@ const commandUsage = {
   init: "npm run cli -- init [--path <repo>] [--overwrite] [--json]",
   analyze:
     "npm run cli -- analyze [path] [--path <repo>|--root <repo>] [--json] [--output <file>]",
+  graph: "npm run cli -- graph [path] [--path <repo>|--root <repo>] [--json]",
   index:
     "npm run cli -- index [path] [--path <repo>|--root <repo>] [--rebuild] [--json]",
   search:
     'npm run cli -- search "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
+  intent:
+    'npm run cli -- intent "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
   plan: 'npm run cli -- plan "feature request" [--path <repo>|--root <repo>] [--json]',
+  measure:
+    'npm run cli -- measure "feature request" [--path <repo>|--root <repo>] [--json]',
   commands: "npm run cli -- commands <list|validate> [--path <repo>] [--json]",
   validate:
     "npm run cli -- validate [--build|--test|--lint|--format|--validation] [--path <repo>|--root <repo>] [--json]",
@@ -559,6 +584,27 @@ export async function runCli(
     }
   }
 
+  if (rawCommand === "graph") {
+    try {
+      const options = parseGraphArgs(commandArgs);
+      const result = await new SymbolGraphService().build({
+        startPath: options.startPath,
+        strictRoot: options.strictRoot
+      });
+
+      stdout(
+        options.json
+          ? JSON.stringify(result.graph, null, 2)
+          : getGraphSummaryText(result)
+      );
+
+      return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
   if (rawCommand === "index") {
     try {
       const options = parseIndexArgs(commandArgs);
@@ -585,12 +631,84 @@ export async function runCli(
     }
   }
 
+  if (rawCommand === "intent") {
+    try {
+      const options = parseIntentArgs(commandArgs);
+      const result = await new QueryIntentService().analyze(options);
+      stdout(
+        options.json ? JSON.stringify(result, null, 2) : getIntentSummaryText(result)
+      );
+      return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
   if (rawCommand === "plan") {
     try {
       const options = parsePlanArgs(commandArgs);
-      const result = await new FeaturePlanningService().createPlan(options);
+      const service = new FeaturePlanningService();
+
+      if (options.subcommand === "approve") {
+        const result = await service.approvePlan({
+          startPath: options.startPath,
+          strictRoot: options.strictRoot,
+          planId: options.planId,
+          revision: options.revision as number,
+          approvedBy: options.approvedBy as string,
+          note: options.note
+        });
+        stdout(
+          options.json
+            ? JSON.stringify(result.plan, null, 2)
+            : getPlanApproveText(result.plan)
+        );
+        return { exitCode: 0 };
+      }
+
+      if (options.subcommand === "revisions") {
+        const revisions = await service.listRevisions({
+          startPath: options.startPath,
+          strictRoot: options.strictRoot,
+          planId: options.planId
+        });
+        stdout(
+          options.json
+            ? JSON.stringify(revisions, null, 2)
+            : getPlanRevisionsText(revisions)
+        );
+        return { exitCode: 0 };
+      }
+
+      if (options.subcommand === "show") {
+        const plan = await service.showRevision({
+          startPath: options.startPath,
+          strictRoot: options.strictRoot,
+          planId: options.planId,
+          revision: options.revision
+        });
+        stdout(options.json ? JSON.stringify(plan, null, 2) : getPlanShowText(plan));
+        return { exitCode: 0 };
+      }
+
+      const result = await service.createPlan(options);
       stdout(
         options.json ? JSON.stringify(result.plan, null, 2) : getPlanSummaryText(result)
+      );
+      return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
+  if (rawCommand === "measure") {
+    try {
+      const options = parseMeasureArgs(commandArgs);
+      const result = await new ContextMeasurementService().measure(options);
+      stdout(
+        options.json ? JSON.stringify(result, null, 2) : getMeasureSummaryText(result)
       );
       return { exitCode: 0 };
     } catch (error) {
@@ -630,6 +748,22 @@ export async function runCli(
   if (rawCommand === "review") {
     try {
       const options = parseReviewArgs(commandArgs);
+
+      if (options.subcommand === "resolve") {
+        const result = await new ReviewService().resolveFinding({
+          startPath: options.startPath,
+          findingId: options.findingId as string,
+          decision: options.decision as "accept" | "decline",
+          reason: options.reason as string,
+          decidedBy: options.decidedBy as string,
+          planRevision: options.planRevision
+        });
+        stdout(
+          options.json ? JSON.stringify(result, null, 2) : getReviewResolveText(result)
+        );
+        return { exitCode: 0 };
+      }
+
       const result = await new ReviewService().review(options);
       stdout(
         options.json ? JSON.stringify(result.report, null, 2) : getReviewText(result)
@@ -742,7 +876,9 @@ export async function runCli(
     try {
       const options = parseDemoArgs(commandArgs);
       const result = await runDemo({ startPath: options.startPath, stdout });
-      stdout(options.json ? JSON.stringify(result, null, 2) : getDemoSummaryText(result));
+      stdout(
+        options.json ? JSON.stringify(result, null, 2) : getDemoSummaryText(result)
+      );
       return { exitCode: result.success ? 0 : 1 };
     } catch (error) {
       stderr(error instanceof Error ? error.message : String(error));
@@ -758,6 +894,27 @@ interface AnalyzeCliOptions {
   startPath?: string;
   strictRoot?: boolean;
   outputPath?: string;
+  json: boolean;
+}
+
+interface GraphCliOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  json: boolean;
+}
+
+interface IntentCliOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  query: string;
+  json: boolean;
+  limit?: number;
+}
+
+interface MeasureCliOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  request: string;
   json: boolean;
 }
 
@@ -1132,6 +1289,64 @@ function parseAnalyzeArgs(args: string[]): AnalyzeCliOptions {
   return options;
 }
 
+function parseGraphArgs(args: string[]): GraphCliOptions {
+  const options: GraphCliOptions = {
+    json: false
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--path" || arg === "--root") {
+      const startPath = args[index + 1];
+
+      if (!startPath) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+
+      options.startPath = startPath;
+      options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (!arg.startsWith("-") && !options.startPath) {
+      options.startPath = arg;
+      continue;
+    }
+
+    throw new Error(`Unknown graph argument: ${arg}`);
+  }
+
+  return options;
+}
+
+function getGraphSummaryText(result: SymbolGraphResult): string {
+  const { graph } = result;
+  const kindCounts = new Map<string, number>();
+  for (const node of graph.nodes) {
+    kindCounts.set(node.kind, (kindCounts.get(node.kind) ?? 0) + 1);
+  }
+  const edgeCounts = new Map<string, number>();
+  for (const edge of graph.edges) {
+    edgeCounts.set(edge.kind, (edgeCounts.get(edge.kind) ?? 0) + 1);
+  }
+
+  return [
+    `${PROJECT_NAME}: graph`,
+    "",
+    `Nodes: ${graph.nodes.length} (${[...kindCounts.entries()].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"})`,
+    `Edges: ${graph.edges.length} (${[...edgeCounts.entries()].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"})`,
+    `Diagnostics: ${graph.diagnostics.length}`,
+    `Graph JSON: ${result.jsonPath}`
+  ].join("\n");
+}
+
 function getAnalyzeSummaryText(
   repoMapPath: string,
   summary: {
@@ -1416,6 +1631,106 @@ function parseSearchArgs(args: string[]): SearchCliOptions {
   return options;
 }
 
+function parseIntentArgs(args: string[]): IntentCliOptions {
+  const queryParts: string[] = [];
+  const options: IntentCliOptions = {
+    query: "",
+    json: false
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--limit") {
+      const limit = Number(args[index + 1]);
+
+      if (!Number.isFinite(limit) || limit <= 0) {
+        throw new Error("Missing or invalid value for --limit");
+      }
+
+      options.limit = limit;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--path" || arg === "--root") {
+      const startPath = args[index + 1];
+
+      if (!startPath) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+
+      options.startPath = startPath;
+      options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown intent argument: ${arg}`);
+    }
+
+    queryParts.push(arg);
+  }
+
+  options.query = queryParts.join(" ").trim();
+
+  if (!options.query) {
+    throw new Error("Missing intent query");
+  }
+
+  return options;
+}
+
+function parseMeasureArgs(args: string[]): MeasureCliOptions {
+  const requestParts: string[] = [];
+  const options: MeasureCliOptions = {
+    request: "",
+    json: false
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--path" || arg === "--root") {
+      const startPath = args[index + 1];
+
+      if (!startPath) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+
+      options.startPath = startPath;
+      options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown measure argument: ${arg}`);
+    }
+
+    requestParts.push(arg);
+  }
+
+  options.request = requestParts.join(" ").trim();
+
+  if (!options.request) {
+    throw new Error("Missing measure request");
+  }
+
+  return options;
+}
+
 function getIndexSummaryText(result: IndexResult): string {
   return [
     `${PROJECT_NAME}: index`,
@@ -1445,7 +1760,9 @@ function getSearchText(response: SearchResponse): string {
       `Matched: ${result.matchedFields.join(", ")}`
     );
     if (result.anchor) {
-      lines.push(`Anchor: ${result.anchor.symbol} (${result.anchor.kind}) line ${result.anchor.line ?? "?"}`);
+      lines.push(
+        `Anchor: ${result.anchor.symbol} (${result.anchor.kind}) line ${result.anchor.line ?? "?"}`
+      );
     }
     if (result.textPreview) {
       // Include a code snippet so callers (e.g. the LM) can see what's in the file.
@@ -1458,8 +1775,49 @@ function getSearchText(response: SearchResponse): string {
   return lines.join("\n");
 }
 
+function getIntentSummaryText(result: QueryIntentResult): string {
+  const lines = [
+    `${PROJECT_NAME}: intent`,
+    "",
+    `Query: ${result.query}`,
+    `Intent: ${result.intent}`,
+    `Entities: ${result.entities.join(", ") || "none"}`,
+    `Refined query: ${result.refinedQuery}`
+  ];
+
+  const section = (title: string, items: RelevantFileSummary[]) => {
+    lines.push("", `${title} (${items.length})`);
+    for (const item of items) {
+      lines.push(`- ${item.filePath} (score ${item.score}) — ${item.reason}`);
+    }
+  };
+
+  section("Likely components", result.likelyComponents);
+  section("Relevant tests", result.relevantTests);
+  section("Recent changes", result.recentChanges);
+
+  return lines.join("\n");
+}
+
+function getMeasureSummaryText(result: ContextMeasurement): string {
+  return [
+    `${PROJECT_NAME}: measure`,
+    "",
+    `Request: ${result.request}`,
+    `Naive whole repo: ${result.naiveWholeRepo.fileCount} files, ~${result.naiveWholeRepo.estimatedTokens} tokens`,
+    `Current tool selection: ${result.currentToolSelection.relevantFileCount} relevant file(s), ` +
+      `${result.currentToolSelection.filesReadableOnDisk} readable on disk, ~${result.currentToolSelection.estimatedTokens} tokens`,
+    `Estimated token reduction: ${result.estimatedTokenReductionPercent}%`
+  ].join("\n");
+}
+
 interface PlanCliOptions {
+  subcommand: "generate" | "approve" | "revisions" | "show";
   request: string;
+  planId?: string;
+  revision?: number;
+  approvedBy?: string;
+  note?: string;
   startPath?: string;
   strictRoot?: boolean;
   json: boolean;
@@ -1553,14 +1911,20 @@ function parseValidateArgs(args: string[]): ValidateCliOptions {
 }
 
 function parsePlanArgs(args: string[]): PlanCliOptions {
+  const subcommand: PlanCliOptions["subcommand"] =
+    args[0] === "approve" || args[0] === "revisions" || args[0] === "show"
+      ? args[0]
+      : "generate";
+  const rest = subcommand === "generate" ? args : args.slice(1);
   const requestParts: string[] = [];
   const options: PlanCliOptions = {
+    subcommand,
     request: "",
     json: false
   };
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
 
     if (arg === "--json") {
       options.json = true;
@@ -1568,7 +1932,7 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
     }
 
     if (arg === "--path" || arg === "--root") {
-      const startPath = args[index + 1];
+      const startPath = rest[index + 1];
 
       if (!startPath) {
         throw new Error(`Missing value for ${arg}`);
@@ -1576,6 +1940,54 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
 
       options.startPath = startPath;
       options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--plan-id") {
+      const planId = rest[index + 1];
+
+      if (!planId) {
+        throw new Error("Missing value for --plan-id");
+      }
+
+      options.planId = planId;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--revision") {
+      const revision = Number(rest[index + 1]);
+
+      if (!Number.isFinite(revision)) {
+        throw new Error("Missing or invalid value for --revision");
+      }
+
+      options.revision = revision;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--by") {
+      const approvedBy = rest[index + 1];
+
+      if (!approvedBy) {
+        throw new Error("Missing value for --by");
+      }
+
+      options.approvedBy = approvedBy;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--note") {
+      const note = rest[index + 1];
+
+      if (!note) {
+        throw new Error("Missing value for --note");
+      }
+
+      options.note = note;
       index += 1;
       continue;
     }
@@ -1589,8 +2001,18 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
 
   options.request = requestParts.join(" ").trim();
 
-  if (!options.request) {
+  if (subcommand === "generate" && !options.request) {
     throw new Error("Missing feature request");
+  }
+
+  if (subcommand === "approve") {
+    if (options.revision === undefined) {
+      throw new Error("plan approve requires --revision <n>");
+    }
+
+    if (!options.approvedBy) {
+      throw new Error("plan approve requires --by <name>");
+    }
   }
 
   return options;
@@ -1614,6 +2036,55 @@ function getPlanSummaryText(result: FeaturePlanningResult): string {
   ].join("\n");
 }
 
+function getPlanApproveText(plan: FeaturePlanArtifact): string {
+  return [
+    `${PROJECT_NAME}: plan approve`,
+    "",
+    plan.title,
+    `Plan ID: ${plan.id}`,
+    `Revision: ${plan.revision}`,
+    `Status: ${plan.status}`,
+    `Approved by: ${plan.approval?.approvedBy ?? "unknown"}`,
+    `Approved at: ${plan.approval?.approvedAt ?? "unknown"}`,
+    ...(plan.approval?.note ? [`Note: ${plan.approval.note}`] : [])
+  ].join("\n");
+}
+
+function getPlanRevisionsText(revisions: PlanRevisionSummary[]): string {
+  if (revisions.length === 0) {
+    return `${PROJECT_NAME}: plan revisions\n\nNo revisions found.`;
+  }
+
+  return [
+    `${PROJECT_NAME}: plan revisions`,
+    "",
+    ...revisions.map(
+      (revision) =>
+        `rev ${revision.revision} - ${revision.status} (${revision.source}, ${revision.at})${
+          revision.approval
+            ? ` - approved by ${revision.approval.approvedBy} at ${revision.approval.approvedAt}`
+            : ""
+        }`
+    )
+  ].join("\n");
+}
+
+function getPlanShowText(plan: FeaturePlanArtifact): string {
+  return [
+    `${PROJECT_NAME}: plan show`,
+    "",
+    plan.title,
+    `Plan ID: ${plan.id}`,
+    `Revision: ${plan.revision}`,
+    `Status: ${plan.status}`,
+    `Task: ${plan.task}`,
+    `Summary: ${plan.summary}`,
+    plan.approval
+      ? `Approved by ${plan.approval.approvedBy} at ${plan.approval.approvedAt}`
+      : "Not approved."
+  ].join("\n");
+}
+
 function getValidateSummaryText(result: ValidationRunResult): string {
   const report = result.report;
 
@@ -1633,9 +2104,15 @@ function getValidateSummaryText(result: ValidationRunResult): string {
 }
 
 interface ReviewCliOptions {
+  subcommand: "generate" | "resolve";
   startPath?: string;
   plan?: string;
   validation?: string;
+  findingId?: string;
+  decision?: "accept" | "decline";
+  reason?: string;
+  decidedBy?: string;
+  planRevision?: number;
   json: boolean;
 }
 
@@ -1708,10 +2185,13 @@ interface CliCommandExecutionResult {
 }
 
 function parseReviewArgs(args: string[]): ReviewCliOptions {
-  const options: ReviewCliOptions = { json: false };
+  const subcommand: ReviewCliOptions["subcommand"] =
+    args[0] === "resolve" ? "resolve" : "generate";
+  const rest = subcommand === "resolve" ? args.slice(1) : args;
+  const options: ReviewCliOptions = { subcommand, json: false };
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
 
     if (arg === "--json") {
       options.json = true;
@@ -1719,24 +2199,84 @@ function parseReviewArgs(args: string[]): ReviewCliOptions {
     }
 
     if (arg === "--path") {
-      options.startPath = requiredValue(args, index, "--path");
+      options.startPath = requiredValue(rest, index, "--path");
       index += 1;
       continue;
     }
 
     if (arg === "--plan") {
-      options.plan = requiredValue(args, index, "--plan");
+      options.plan = requiredValue(rest, index, "--plan");
       index += 1;
       continue;
     }
 
     if (arg === "--validation") {
-      options.validation = requiredValue(args, index, "--validation");
+      options.validation = requiredValue(rest, index, "--validation");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--finding-id") {
+      options.findingId = requiredValue(rest, index, "--finding-id");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--decision") {
+      const value = requiredValue(rest, index, "--decision");
+
+      if (value !== "accept" && value !== "decline") {
+        throw new Error("--decision must be 'accept' or 'decline'");
+      }
+
+      options.decision = value;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--reason") {
+      options.reason = requiredValue(rest, index, "--reason");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--by") {
+      options.decidedBy = requiredValue(rest, index, "--by");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--plan-revision") {
+      const value = Number(requiredValue(rest, index, "--plan-revision"));
+
+      if (!Number.isFinite(value)) {
+        throw new Error("Invalid value for --plan-revision");
+      }
+
+      options.planRevision = value;
       index += 1;
       continue;
     }
 
     throw new Error(`Unknown review argument: ${arg}`);
+  }
+
+  if (subcommand === "resolve") {
+    if (!options.findingId) {
+      throw new Error("review resolve requires --finding-id <id>");
+    }
+
+    if (!options.decision) {
+      throw new Error("review resolve requires --decision accept|decline");
+    }
+
+    if (!options.reason) {
+      throw new Error("review resolve requires --reason <text>");
+    }
+
+    if (!options.decidedBy) {
+      throw new Error("review resolve requires --by <name>");
+    }
   }
 
   return options;
@@ -2287,6 +2827,21 @@ function getReviewText(result: ReviewServiceResult): string {
     `Review Markdown: ${result.markdownPath}`,
     `Latest JSON: ${result.latestJsonPath}`,
     `Latest Markdown: ${result.latestMarkdownPath}`
+  ].join("\n");
+}
+
+function getReviewResolveText(result: ResolveReviewFindingResult): string {
+  return [
+    `${PROJECT_NAME}: review resolve`,
+    "",
+    `Finding: ${result.findingId}`,
+    `Status: ${result.status}`,
+    `Decided by: ${result.disposition.decidedBy}`,
+    `Reason: ${result.disposition.reason}`,
+    ...(result.disposition.planRevision !== undefined
+      ? [`Plan revision: ${result.disposition.planRevision}`]
+      : []),
+    `Dispositions file: ${result.dispositionsPath}`
   ].join("\n");
 }
 
@@ -2973,7 +3528,9 @@ async function runDemo(options: {
 
   // Step 4: Diagnostics
   await runStep("Run repo readiness diagnostics", async () => {
-    const result = await new AdvancedAnalysisService().diagnose({ startPath: repoRoot });
+    const result = await new AdvancedAnalysisService().diagnose({
+      startPath: repoRoot
+    });
     log(`Status: ${result.status}`);
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     const warnings = result.diagnostics.filter((d) => d.severity === "warning");

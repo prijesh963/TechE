@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "../packages/cli/src/index.js";
+import { SymbolGraphService } from "../packages/graph/src/index.js";
 import { FeaturePlanningService } from "../packages/planner/src/index.js";
 import type { FeaturePlanArtifact } from "../packages/planner/src/index.js";
 import {
@@ -80,6 +81,273 @@ describe("FeaturePlanningService", () => {
     expect(markdown).toContain("## Planning Context");
     expect(markdown).toContain("## Human Approval Checkpoint");
     expect(markdown).toContain("## Stack-Specific Plan");
+  });
+
+  it("classifies request intent/entities and cites graph edges in relevantFiles reasons", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoices/InvoiceApprovalController.ts":
+        "import { InvoiceApprovalService } from './InvoiceApprovalService';\n" +
+        "export class InvoiceApprovalController {\n" +
+        "  private service = new InvoiceApprovalService();\n" +
+        "  approveInvoice() { return this.service.approveInvoice(); }\n" +
+        "}\n",
+      "src/invoices/InvoiceApprovalService.ts":
+        "export class InvoiceApprovalService {\n" +
+        "  approveInvoice() { return true; }\n" +
+        "}\n"
+    });
+
+    // Without a graph.json yet, reasons fall back to entity/signal-only.
+    const withoutGraph = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      request: "Why is invoice approval failing?"
+    });
+
+    expect(withoutGraph.plan.requestIntent).toBe("debugging");
+    expect(withoutGraph.plan.requestEntities).toEqual(["invoice", "approval"]);
+    const controllerBefore = withoutGraph.plan.relevantFiles.find(
+      (file) => file.filePath === "src/invoices/InvoiceApprovalController.ts"
+    );
+    expect(controllerBefore?.reason).toContain("invoice");
+    expect(controllerBefore?.reason).not.toContain("imports `src/invoices");
+
+    await new SymbolGraphService().build({ startPath: repoRoot });
+
+    const withGraph = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      request: "Why is invoice approval failing?"
+    });
+
+    const controllerAfter = withGraph.plan.relevantFiles.find(
+      (file) => file.filePath === "src/invoices/InvoiceApprovalController.ts"
+    );
+    const serviceAfter = withGraph.plan.relevantFiles.find(
+      (file) => file.filePath === "src/invoices/InvoiceApprovalService.ts"
+    );
+
+    expect(controllerAfter?.reason).toContain(
+      "imports `src/invoices/InvoiceApprovalService.ts`"
+    );
+    expect(serviceAfter?.reason).toContain(
+      "is imported by `src/invoices/InvoiceApprovalController.ts`"
+    );
+  });
+
+  it("revises a draft plan in place without losing prior revisions", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({
+        scripts: { test: "vitest run" },
+        dependencies: { react: "^18.2.0" }
+      }),
+      "src/invoices/InvoiceApproval.tsx":
+        "export function InvoiceApproval() { return 'invoice approval'; }"
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+
+    expect(initial.plan.revision).toBe(1);
+    expect(initial.plan.revisions).toHaveLength(1);
+    expect(initial.plan.revisions[0].source).toBe("initial");
+
+    const revised = await service.revisePlan({
+      startPath: repoRoot,
+      feedback: "Also cover the rejection path, not just approval.",
+      sections: {
+        openQuestions: ["What happens when an approver rejects the invoice?"]
+      }
+    });
+
+    expect(revised.plan.id).toBe(initial.plan.id);
+    expect(revised.plan.revision).toBe(2);
+    expect(revised.plan.supersedes).toBe(`${initial.plan.id}-rev1`);
+    expect(revised.plan.revisions).toHaveLength(2);
+    expect(revised.plan.revisions[1]).toMatchObject({
+      revision: 2,
+      source: "human-feedback",
+      feedback: "Also cover the rejection path, not just approval.",
+      changedSections: ["openQuestions"]
+    });
+    expect(revised.plan.openQuestions).toEqual([
+      "What happens when an approver rejects the invoice?"
+    ]);
+    // Fields not covered by `sections` survive from the previous revision.
+    expect(revised.plan.impactedFrameworks).toContain("React");
+
+    const latestJson = JSON.parse(
+      await readFile(revised.latestJsonPath, "utf8")
+    ) as FeaturePlanArtifact;
+    expect(latestJson.revision).toBe(2);
+
+    const draftDir = path.join(
+      getArtifactDirectoryPath(repoRoot, "plans"),
+      "drafts",
+      initial.plan.id
+    );
+    expect(existsSync(path.join(draftDir, "rev-1.json"))).toBe(true);
+    expect(existsSync(path.join(draftDir, "rev-2.json"))).toBe(true);
+
+    const secondRevision = await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Findings from code review: add an audit log entry.",
+      source: "code-review",
+      reviewFindingIds: ["finding-1"]
+    });
+
+    expect(secondRevision.plan.revision).toBe(3);
+    expect(secondRevision.plan.revisions[2]).toMatchObject({
+      revision: 3,
+      source: "code-review",
+      reviewFindingIds: ["finding-1"]
+    });
+  });
+
+  it("rejects revising a plan when no draft exists", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "no-plan-yet" })
+    });
+
+    await expect(
+      new FeaturePlanningService().revisePlan({
+        startPath: repoRoot,
+        feedback: "This should fail, there is no plan yet."
+      })
+    ).rejects.toThrow(/No draft plan found/);
+  });
+
+  it("approves a specific revision, freezes it, and promotes it to latest", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({
+        scripts: { test: "vitest run" },
+        dependencies: { react: "^18.2.0" }
+      }),
+      "src/invoices/InvoiceApproval.tsx":
+        "export function InvoiceApproval() { return 'invoice approval'; }"
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+
+    expect(initial.plan.status).toBe("draft");
+    expect(initial.plan.approval).toBeUndefined();
+
+    const approved = await service.approvePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      revision: 1,
+      approvedBy: "reviewer@example.test",
+      note: "Looks good."
+    });
+
+    expect(approved.plan.status).toBe("approved");
+    expect(approved.plan.approval).toMatchObject({
+      approvedBy: "reviewer@example.test",
+      revision: 1,
+      note: "Looks good."
+    });
+
+    const latestJson = JSON.parse(
+      await readFile(approved.latestJsonPath, "utf8")
+    ) as FeaturePlanArtifact;
+    expect(latestJson.status).toBe("approved");
+
+    const frozenPath = path.join(
+      getArtifactDirectoryPath(repoRoot, "plans"),
+      "approved",
+      `${initial.plan.id}-rev1-plan.json`
+    );
+    expect(existsSync(frozenPath)).toBe(true);
+    const frozen = JSON.parse(
+      await readFile(frozenPath, "utf8")
+    ) as FeaturePlanArtifact;
+    expect(frozen.approval?.approvedBy).toBe("reviewer@example.test");
+  });
+
+  it("resets status to draft when a revision is made after approval", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "revise-after-approve" })
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+    await service.approvePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      revision: 1,
+      approvedBy: "reviewer"
+    });
+
+    const revised = await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Also add an audit trail entry.",
+      source: "code-review"
+    });
+
+    expect(revised.plan.revision).toBe(2);
+    expect(revised.plan.status).toBe("draft");
+    expect(revised.plan.approval).toBeUndefined();
+  });
+
+  it("rejects approving a revision that does not exist", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "approve-missing-revision" })
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+
+    await expect(
+      service.approvePlan({
+        startPath: repoRoot,
+        planId: initial.plan.id,
+        revision: 5,
+        approvedBy: "reviewer"
+      })
+    ).rejects.toThrow(/Revision 5 not found/);
+  });
+
+  it("lists revisions with status and approval state via listRevisions", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "list-revisions" })
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+    await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Cover rejection path too."
+    });
+    await service.approvePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      revision: 1,
+      approvedBy: "reviewer"
+    });
+
+    const revisions = await service.listRevisions({
+      startPath: repoRoot,
+      planId: initial.plan.id
+    });
+
+    expect(revisions).toHaveLength(2);
+    expect(revisions[0]).toMatchObject({ revision: 1, status: "approved" });
+    expect(revisions[0].approval?.approvedBy).toBe("reviewer");
+    expect(revisions[1]).toMatchObject({ revision: 2, status: "draft" });
+    expect(revisions[1].approval).toBeUndefined();
   });
 
   it("uses optional workspace config, custom commands, and instruction files", async () => {
@@ -269,6 +537,89 @@ describe("FeaturePlanningService", () => {
         path.join(getArtifactDirectoryPath(repoRoot, "plans"), "latest-plan.md")
       )
     ).toBe(true);
+  });
+
+  it("supports plan approve, plan revisions, and plan show CLI subcommands", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = true;"
+    });
+    const capture = () => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      return {
+        stdout,
+        stderr,
+        io: {
+          stdout: (m: string) => stdout.push(m),
+          stderr: (m: string) => stderr.push(m)
+        }
+      };
+    };
+
+    const planCapture = capture();
+    await runCli(
+      ["plan", "Add invoice approval workflow", "--path", repoRoot],
+      planCapture.io
+    );
+
+    const revisionsBefore = capture();
+    const revisionsBeforeResult = await runCli(
+      ["plan", "revisions", "--path", repoRoot, "--json"],
+      revisionsBefore.io
+    );
+    const revisionsBeforeJson = JSON.parse(revisionsBefore.stdout.join("\n"));
+
+    expect(revisionsBeforeResult.exitCode).toBe(0);
+    expect(revisionsBeforeJson).toHaveLength(1);
+    expect(revisionsBeforeJson[0]).toMatchObject({ revision: 1, status: "draft" });
+
+    const approveMissingRevision = capture();
+    const approveMissingResult = await runCli(
+      ["plan", "approve", "--path", repoRoot, "--by", "reviewer"],
+      approveMissingRevision.io
+    );
+    expect(approveMissingResult.exitCode).toBe(1);
+    expect(approveMissingRevision.stderr.join("\n")).toContain("--revision");
+
+    const approveCapture = capture();
+    const approveResult = await runCli(
+      [
+        "plan",
+        "approve",
+        "--path",
+        repoRoot,
+        "--revision",
+        "1",
+        "--by",
+        "reviewer@example.test",
+        "--note",
+        "LGTM",
+        "--json"
+      ],
+      approveCapture.io
+    );
+    const approvedJson = JSON.parse(
+      approveCapture.stdout.join("\n")
+    ) as FeaturePlanArtifact;
+
+    expect(approveResult.exitCode).toBe(0);
+    expect(approvedJson.status).toBe("approved");
+    expect(approvedJson.approval).toMatchObject({
+      approvedBy: "reviewer@example.test",
+      revision: 1,
+      note: "LGTM"
+    });
+
+    const showCapture = capture();
+    const showResult = await runCli(
+      ["plan", "show", "--path", repoRoot, "--revision", "1", "--json"],
+      showCapture.io
+    );
+    const shownJson = JSON.parse(showCapture.stdout.join("\n")) as FeaturePlanArtifact;
+
+    expect(showResult.exitCode).toBe(0);
+    expect(shownJson.status).toBe("approved");
   });
 });
 

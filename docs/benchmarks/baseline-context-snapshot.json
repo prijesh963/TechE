@@ -1,0 +1,147 @@
+{
+  "schemaVersion": "1",
+  "capturedAt": "2026-09-14T16:20:29.198Z",
+  "methodology": {
+    "description": "For each sample repo, runs FeaturePlanningService.createPlanPreview() with a canonical feature request (no artifacts written to the sample repo) and compares the byte size of the files it flags as relevant against the byte size of the whole repo's source files. Token counts are a rough chars/4 estimate, not a real tokenizer — this snapshot is a directional 'before' baseline for architecture item #5, not a billing measurement. It predates the symbol/dependency graph (item #1) and everything downstream of it (hybrid retrieval, intent classification, graph-based citations); re-run this script after those land to compare.",
+    "canonicalRequest": "Add invoice approval workflow",
+    "charsPerTokenEstimate": 4
+  },
+  "samples": [
+    {
+      "sample": "angular-app",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 5,
+        "totalBytes": 773,
+        "estimatedTokens": 193
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 5,
+        "likelyFilesToModifyCount": 5,
+        "filesReadableOnDisk": 5,
+        "totalBytes": 773,
+        "estimatedTokens": 193
+      },
+      "estimatedTokenReductionPercent": 0
+    },
+    {
+      "sample": "generic-repo",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 0,
+        "totalBytes": 0,
+        "estimatedTokens": 0
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 2,
+        "likelyFilesToModifyCount": 2,
+        "filesReadableOnDisk": 2,
+        "totalBytes": 117,
+        "estimatedTokens": 29
+      },
+      "estimatedTokenReductionPercent": 0
+    },
+    {
+      "sample": "java-gradle-service",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 4,
+        "totalBytes": 683,
+        "estimatedTokens": 171
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 3,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 3,
+        "totalBytes": 559,
+        "estimatedTokens": 140
+      },
+      "estimatedTokenReductionPercent": 18.1
+    },
+    {
+      "sample": "java-maven-service",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 4,
+        "totalBytes": 694,
+        "estimatedTokens": 174
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 3,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 3,
+        "totalBytes": 570,
+        "estimatedTokens": 143
+      },
+      "estimatedTokenReductionPercent": 17.8
+    },
+    {
+      "sample": "node-api",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 3,
+        "totalBytes": 566,
+        "estimatedTokens": 142
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 3,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 3,
+        "totalBytes": 566,
+        "estimatedTokens": 142
+      },
+      "estimatedTokenReductionPercent": 0
+    },
+    {
+      "sample": "polyglot-monorepo",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 6,
+        "totalBytes": 498,
+        "estimatedTokens": 125
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 1,
+        "likelyFilesToModifyCount": 1,
+        "filesReadableOnDisk": 1,
+        "totalBytes": 72,
+        "estimatedTokens": 18
+      },
+      "estimatedTokenReductionPercent": 85.6
+    },
+    {
+      "sample": "python-service",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 3,
+        "totalBytes": 449,
+        "estimatedTokens": 112
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 3,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 3,
+        "totalBytes": 449,
+        "estimatedTokens": 112
+      },
+      "estimatedTokenReductionPercent": 0
+    },
+    {
+      "sample": "react-app",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 5,
+        "totalBytes": 748,
+        "estimatedTokens": 187
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 4,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 4,
+        "totalBytes": 720,
+        "estimatedTokens": 180
+      },
+      "estimatedTokenReductionPercent": 3.7
+    }
+  ]
+}

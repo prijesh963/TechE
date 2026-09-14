@@ -20,6 +20,8 @@ import {
   writeJsonFile
 } from "@copilot-architect/shared";
 
+import type { PlanApproval } from "./models.js";
+
 export interface HandoffGenerationOptions {
   startPath?: string;
   plan?: string;
@@ -58,7 +60,16 @@ export class HandoffService {
 
     const startPath = path.resolve(options.startPath ?? process.cwd());
     const planPath = resolvePlanPath(startPath, options.plan);
-    const plan = await readJsonFile<FeaturePlan>(planPath);
+    const plan = await readJsonFile<FeaturePlan & { approval?: PlanApproval }>(
+      planPath
+    );
+
+    if (plan.status !== "approved" || !plan.approval) {
+      throw new Error(
+        `Plan ${plan.id} is at status "${plan.status}". Run approve_plan (or "cli plan approve") before generating a handoff.`
+      );
+    }
+
     const repoRoot = path.resolve(plan.repoRoot || startPath);
     const repoMap = (await new RepoDiscoveryService().analyze({ startPath: repoRoot }))
       .repoMap;

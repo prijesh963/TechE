@@ -59,10 +59,16 @@ describe("HandoffService", () => {
       }),
       "src/invoices/workflow.ts": "export const workflow = 'invoice approval';"
     });
-
-    await new FeaturePlanningService().createPlan({
+    const planningService = new FeaturePlanningService();
+    const created = await planningService.createPlan({
       startPath: repoRoot,
       request: "Add invoice approval workflow"
+    });
+    await planningService.approvePlan({
+      startPath: repoRoot,
+      planId: created.plan.id,
+      revision: 1,
+      approvedBy: "test-reviewer"
     });
 
     const result = await new HandoffService().generate({
@@ -118,9 +124,16 @@ describe("HandoffService", () => {
       { cwd: repoRoot }
     );
 
-    await new FeaturePlanningService().createPlan({
+    const planningService = new FeaturePlanningService();
+    const created = await planningService.createPlan({
       startPath: repoRoot,
       request: "Add invoice approval workflow"
+    });
+    await planningService.approvePlan({
+      startPath: repoRoot,
+      planId: created.plan.id,
+      revision: 1,
+      approvedBy: "test-reviewer"
     });
 
     const result = await new HandoffService().generate({
@@ -144,11 +157,29 @@ describe("handoff CLI", () => {
       "src/invoice.ts": "export const invoice = true;"
     });
     const capture = createCapture();
+    const approveCapture = createCapture();
 
     await new FeaturePlanningService().createPlan({
       startPath: repoRoot,
       request: "Add invoice approval workflow"
     });
+    expect(
+      (
+        await runCli(
+          [
+            "plan",
+            "approve",
+            "--path",
+            repoRoot,
+            "--revision",
+            "1",
+            "--by",
+            "test-reviewer"
+          ],
+          approveCapture.io
+        )
+      ).exitCode
+    ).toBe(0);
 
     const result = await runCli(
       [

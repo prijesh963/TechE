@@ -1,0 +1,196 @@
+{
+  "schemaVersion": "1",
+  "capturedAt": "2026-09-14T17:14:47.284Z",
+  "methodology": {
+    "description": "For each sample repo, runs ContextMeasurementService.measure() (packages/measurement) with the same canonical feature request as the baseline snapshot, and compares against docs/benchmarks/baseline-context-snapshot.json — the 'before' data point captured ahead of items #1-#4. Token counts are a rough chars/4 estimate, not a real tokenizer or a GitHub Copilot billing measurement.",
+    "canonicalRequest": "Add invoice approval workflow",
+    "charsPerTokenEstimate": 4,
+    "comparedAgainst": "docs/benchmarks/baseline-context-snapshot.json"
+  },
+  "samples": [
+    {
+      "sample": "angular-app",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 8,
+        "totalBytes": 1447,
+        "estimatedTokens": 362
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 6,
+        "likelyFilesToModifyCount": 5,
+        "filesReadableOnDisk": 6,
+        "totalBytes": 855,
+        "estimatedTokens": 214
+      },
+      "estimatedTokenReductionPercent": 40.9,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 193,
+        "afterSelectedTokens": 214,
+        "beforeReductionPercent": 0,
+        "afterReductionPercent": 40.9
+      }
+    },
+    {
+      "sample": "generic-repo",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 4,
+        "totalBytes": 245,
+        "estimatedTokens": 61
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 3,
+        "likelyFilesToModifyCount": 2,
+        "filesReadableOnDisk": 3,
+        "totalBytes": 216,
+        "estimatedTokens": 54
+      },
+      "estimatedTokenReductionPercent": 11.5,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 29,
+        "afterSelectedTokens": 54,
+        "beforeReductionPercent": 0,
+        "afterReductionPercent": 11.5
+      }
+    },
+    {
+      "sample": "java-gradle-service",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 8,
+        "totalBytes": 1092,
+        "estimatedTokens": 273
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 4,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 4,
+        "totalBytes": 660,
+        "estimatedTokens": 165
+      },
+      "estimatedTokenReductionPercent": 39.6,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 140,
+        "afterSelectedTokens": 165,
+        "beforeReductionPercent": 18.1,
+        "afterReductionPercent": 39.6
+      }
+    },
+    {
+      "sample": "java-maven-service",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 7,
+        "totalBytes": 1305,
+        "estimatedTokens": 326
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 4,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 4,
+        "totalBytes": 669,
+        "estimatedTokens": 167
+      },
+      "estimatedTokenReductionPercent": 48.8,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 143,
+        "afterSelectedTokens": 167,
+        "beforeReductionPercent": 17.8,
+        "afterReductionPercent": 48.8
+      }
+    },
+    {
+      "sample": "node-api",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 6,
+        "totalBytes": 1126,
+        "estimatedTokens": 282
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 4,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 4,
+        "totalBytes": 645,
+        "estimatedTokens": 161
+      },
+      "estimatedTokenReductionPercent": 42.9,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 142,
+        "afterSelectedTokens": 161,
+        "beforeReductionPercent": 0,
+        "afterReductionPercent": 42.9
+      }
+    },
+    {
+      "sample": "polyglot-monorepo",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 12,
+        "totalBytes": 1448,
+        "estimatedTokens": 362
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 3,
+        "likelyFilesToModifyCount": 2,
+        "filesReadableOnDisk": 3,
+        "totalBytes": 261,
+        "estimatedTokens": 65
+      },
+      "estimatedTokenReductionPercent": 82,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 18,
+        "afterSelectedTokens": 65,
+        "beforeReductionPercent": 85.6,
+        "afterReductionPercent": 82
+      }
+    },
+    {
+      "sample": "python-service",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 7,
+        "totalBytes": 715,
+        "estimatedTokens": 179
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 4,
+        "likelyFilesToModifyCount": 3,
+        "filesReadableOnDisk": 4,
+        "totalBytes": 534,
+        "estimatedTokens": 134
+      },
+      "estimatedTokenReductionPercent": 25.1,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 112,
+        "afterSelectedTokens": 134,
+        "beforeReductionPercent": 0,
+        "afterReductionPercent": 25.1
+      }
+    },
+    {
+      "sample": "react-app",
+      "request": "Add invoice approval workflow",
+      "naiveWholeRepo": {
+        "fileCount": 8,
+        "totalBytes": 1557,
+        "estimatedTokens": 389
+      },
+      "currentToolSelection": {
+        "relevantFileCount": 5,
+        "likelyFilesToModifyCount": 4,
+        "filesReadableOnDisk": 5,
+        "totalBytes": 885,
+        "estimatedTokens": 221
+      },
+      "estimatedTokenReductionPercent": 43.2,
+      "comparedToBaseline": {
+        "beforeSelectedTokens": 180,
+        "afterSelectedTokens": 221,
+        "beforeReductionPercent": 3.7,
+        "afterReductionPercent": 43.2
+      }
+    }
+  ]
+}

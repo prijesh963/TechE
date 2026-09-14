@@ -2,11 +2,15 @@ import path from "node:path";
 
 import { AgentService } from "@copilot-architect/agents";
 import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core";
+import { SymbolGraphService } from "@copilot-architect/graph";
 import { IndexingService } from "@copilot-architect/indexer";
+import { QueryIntentService } from "@copilot-architect/intent";
+import { ContextMeasurementService } from "@copilot-architect/measurement";
 import {
   FeaturePlanningService,
   WorkspacePlanningService
 } from "@copilot-architect/planner";
+import { ReviewService } from "@copilot-architect/reviewer";
 import {
   type DetectedCommand,
   type RepoCommandSet,
@@ -78,6 +82,21 @@ export function createCopilotArchitectTools(
       async (args) => ensureRepoMap(resolveStartPath(args, options))
     ),
     tool(
+      "get_symbol_graph",
+      "Build (or rebuild) the repo's symbol/dependency graph: file, class, " +
+        "function, and method nodes, plus imports/calls/extends/implements " +
+        "edges between them. Use this to find what actually depends on or " +
+        "is called by a piece of code, not just what shares keywords with it.",
+      commonSchema,
+      true,
+      async (args) =>
+        (
+          await new SymbolGraphService().build({
+            startPath: resolveStartPath(args, options)
+          })
+        ).graph
+    ),
+    tool(
       "workspace_map",
       "Read or generate the current multi-repo workspace map.",
       commonSchema,
@@ -139,7 +158,10 @@ export function createCopilotArchitectTools(
     ),
     tool(
       "search_repo",
-      "Search the current repo index.",
+      "Search the current repo index. Hybrid ranking: keyword match, path/symbol " +
+        "match, and — when get_symbol_graph has been run — files connected via " +
+        "the symbol graph even with no shared vocabulary. Each result's " +
+        "`signals` field says which of these found it.",
       searchSchema,
       true,
       async (args) =>
@@ -147,6 +169,21 @@ export function createCopilotArchitectTools(
           startPath: resolveStartPath(args, options),
           query: stringArg(args, "query"),
           limit: numberArg(args, "limit", 20)
+        })
+    ),
+    tool(
+      "analyze_query_intent",
+      "Classify a natural-language query's intent (debugging/feature/refactor/test) " +
+        "and resolve its likely components, relevant tests, and recently-changed " +
+        "files by running the query through search_repo's hybrid ranking. Use " +
+        "this before planning or investigating to scope which files matter.",
+      searchSchema,
+      true,
+      async (args) =>
+        new QueryIntentService().analyze({
+          startPath: resolveStartPath(args, options),
+          query: stringArg(args, "query"),
+          limit: numberArg(args, "limit", 8)
         })
     ),
     tool(
@@ -241,9 +278,26 @@ export function createCopilotArchitectTools(
       }
     ),
     tool(
+      "measure_context_reduction",
+      "Measure how much context a feature request's plan.relevantFiles " +
+        "selection actually saves versus naively sending the whole repo: " +
+        "file counts, byte sizes, and a rough token estimate for both, plus " +
+        "the reduction percentage. Use this to check the actual " +
+        "token-reduction claim for a request rather than assume it.",
+      requestSchema,
+      true,
+      async (args) =>
+        new ContextMeasurementService().measure({
+          startPath: resolveStartPath(args, options),
+          request: stringArg(args, "request")
+        })
+    ),
+    tool(
       "generate_feature_plan",
-      "Generate a feature plan artifact. Requires approved=true.",
-      approvedRequestSchema,
+      "Generate a feature plan artifact (revision 1). Requires approved=true. " +
+        "Fails if a draft plan already exists — use revise_feature_plan to " +
+        "incorporate feedback into it, or pass restart=true to discard it.",
+      generateFeaturePlanSchema,
       false,
       async (args) => {
         if (args.approved !== true) {
@@ -253,12 +307,58 @@ export function createCopilotArchitectTools(
           };
         }
 
+        const startPath = resolveStartPath(args, options);
+        const existingDraft = await readExistingDraftPlan(startPath);
+
+        if (
+          existingDraft &&
+          existingDraft.status === "draft" &&
+          args.restart !== true
+        ) {
+          return {
+            ok: false,
+            error: `A draft plan already exists at revision ${existingDraft.revision}. Use revise_feature_plan to incorporate feedback, or pass restart=true to discard the draft.`
+          };
+        }
+
         return new FeaturePlanningService().createPlan({
-          startPath: resolveStartPath(args, options),
+          startPath,
           request: stringArg(args, "request"),
           searchLimit: numberArg(args, "limit", 12)
         });
       }
+    ),
+    tool(
+      "revise_feature_plan",
+      "Revise the current draft plan in place with feedback from a conversation " +
+        "turn or a code review, without discarding prior revisions.",
+      reviseFeaturePlanSchema,
+      false,
+      async (args) =>
+        new FeaturePlanningService().revisePlan({
+          startPath: resolveStartPath(args, options),
+          planId: typeof args.planId === "string" ? args.planId : undefined,
+          feedback: stringArg(args, "feedback"),
+          sections: isPlainObject(args.sections) ? args.sections : undefined,
+          source: args.source === "code-review" ? "code-review" : "human-feedback",
+          reviewFindingIds: stringArrayArg(args, "reviewFindingIds")
+        })
+    ),
+    tool(
+      "approve_plan",
+      "Approve one specific plan revision, freezing it and promoting it to " +
+        "latest-plan.*. Revision is required — approval is always per-revision, " +
+        "never 'whatever is newest'.",
+      approvePlanSchema,
+      false,
+      async (args) =>
+        new FeaturePlanningService().approvePlan({
+          startPath: resolveStartPath(args, options),
+          planId: typeof args.planId === "string" ? args.planId : undefined,
+          revision: requiredNumberArg(args, "revision"),
+          approvedBy: stringArg(args, "approvedBy"),
+          note: typeof args.note === "string" ? args.note : undefined
+        })
     ),
     tool(
       "get_validation_commands",
@@ -303,6 +403,26 @@ export function createCopilotArchitectTools(
           resolveStartPath(args, options),
           "reviews/latest-review.json"
         )
+    ),
+    tool(
+      "resolve_review_finding",
+      "Record a durable accept/decline decision on one review finding by its " +
+        "stable id. A declined finding never reappears on the next review; an " +
+        "accepted one should be folded into a plan revision separately via " +
+        "revise_feature_plan. reason is required for both decisions — it is " +
+        "the audit trail.",
+      resolveReviewFindingSchema,
+      false,
+      async (args) =>
+        new ReviewService().resolveFinding({
+          startPath: resolveStartPath(args, options),
+          findingId: stringArg(args, "findingId"),
+          decision: args.decision === "accept" ? "accept" : "decline",
+          reason: stringArg(args, "reason"),
+          decidedBy: stringArg(args, "decidedBy"),
+          planRevision:
+            typeof args.planRevision === "number" ? args.planRevision : undefined
+        })
     ),
     tool(
       "agent_status",
@@ -364,6 +484,41 @@ function detectedValidationCommands(commands: RepoCommandSet): DetectedCommand[]
     ...commands.format,
     ...commands.validation
   ];
+}
+
+async function readExistingDraftPlan(
+  startPath: string
+): Promise<{ status: string; revision: number } | undefined> {
+  const repoMap = await ensureRepoMap(startPath);
+  const latestPlanPath = path.join(
+    repoMap.workspaceRoot,
+    ".copilot-architect",
+    "plans",
+    "latest-plan.json"
+  );
+
+  return (await tryReadJson(latestPlanPath)) as
+    | { status: string; revision: number }
+    | undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringArrayArg(
+  args: Record<string, unknown>,
+  key: string
+): string[] | undefined {
+  const value = args[key];
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const strings = value.filter((entry): entry is string => typeof entry === "string");
+
+  return strings.length > 0 ? strings : undefined;
 }
 
 async function readOptionalArtifact(
@@ -453,6 +608,16 @@ function numberArg(
   return fallback;
 }
 
+function requiredNumberArg(args: Record<string, unknown>, key: string): number {
+  const value = args[key];
+
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${key} is required`);
+  }
+
+  return value;
+}
+
 const commonSchema = {
   path: z.string().optional()
 };
@@ -472,4 +637,35 @@ const requestSchema = {
 const approvedRequestSchema = {
   ...requestSchema,
   approved: z.boolean().optional()
+};
+
+const generateFeaturePlanSchema = {
+  ...approvedRequestSchema,
+  restart: z.boolean().optional()
+};
+
+const reviseFeaturePlanSchema = {
+  ...commonSchema,
+  planId: z.string().optional(),
+  feedback: z.string(),
+  sections: z.record(z.string(), z.unknown()).optional(),
+  source: z.enum(["human-feedback", "code-review"]).optional(),
+  reviewFindingIds: z.array(z.string()).optional()
+};
+
+const approvePlanSchema = {
+  ...commonSchema,
+  planId: z.string().optional(),
+  revision: z.number(),
+  approvedBy: z.string(),
+  note: z.string().optional()
+};
+
+const resolveReviewFindingSchema = {
+  ...commonSchema,
+  findingId: z.string(),
+  decision: z.enum(["accept", "decline"]),
+  reason: z.string(),
+  decidedBy: z.string(),
+  planRevision: z.number().optional()
 };

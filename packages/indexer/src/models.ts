@@ -1,4 +1,4 @@
-import type { CodeSymbol } from "@copilot-architect/shared";
+import type { CodeSymbol, FileChangeActivity } from "@copilot-architect/shared";
 import type {
   WorkspaceRepoDescriptor,
   WorkspaceServiceResult
@@ -17,6 +17,13 @@ export interface LocalIndex {
    * Optional for backward compatibility with indexes written before this field.
    */
   searchStats?: SearchStats;
+  /**
+   * Git recency/frequency signal, precomputed at index time (one `git log`
+   * walk) rather than re-shelling out to git on every search call. Optional
+   * for backward compatibility with indexes written before this field; empty
+   * when the repo has no `.git` directory or git is unavailable.
+   */
+  gitActivity?: FileChangeActivity[];
 }
 
 /** Token frequency map for one document field (token -> occurrence count). */
@@ -128,7 +135,17 @@ export interface SearchResult {
    * can point an agent at the relevant declaration rather than the whole file.
    */
   anchor?: SearchAnchor;
+  /**
+   * Which ranking signals this result was found through: "lexical" (BM25
+   * keyword match), "structural" (query terms in path/symbol names), "graph"
+   * (connected to a top keyword match via the symbol/dependency graph — see
+   * @copilot-architect/graph), "recency" (frequently/recently changed per
+   * git history). A result can carry more than one.
+   */
+  signals: SearchSignal[];
 }
+
+export type SearchSignal = "lexical" | "structural" | "graph" | "recency";
 
 export interface SearchAnchor {
   symbol: string;

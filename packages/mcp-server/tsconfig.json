@@ -12,8 +12,12 @@
   "references": [
     { "path": "../agents" },
     { "path": "../core" },
+    { "path": "../graph" },
     { "path": "../indexer" },
+    { "path": "../intent" },
+    { "path": "../measurement" },
     { "path": "../planner" },
+    { "path": "../reviewer" },
     { "path": "../shared" },
     { "path": "../validator" }
   ]

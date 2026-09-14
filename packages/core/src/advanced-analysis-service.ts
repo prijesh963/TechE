@@ -9,6 +9,7 @@ import {
   type AdvancedArchitecturePattern,
   type AdvancedRiskScore,
   type DependencyManifest,
+  type FileChangeActivity,
   type RepoMap,
   type RepoReadinessDiagnostic,
   type RouteApiEndpoint,
@@ -66,6 +67,7 @@ export class AdvancedAnalysisService {
     const testRelationships = detectTestRelationships(files, routes);
     const architecturePatterns = detectArchitecturePatterns(repoMap, repo, files);
     const diagnostics = await createReadinessDiagnostics(repo.repoRoot, repo, files);
+    const gitActivity = await collectGitActivity(repo.repoRoot);
     const riskScores = scoreRisks({
       repoMap,
       repo,
@@ -73,6 +75,7 @@ export class AdvancedAnalysisService {
       routes,
       testRelationships,
       diagnostics,
+      gitActivity,
       request: options.request
     });
 
@@ -86,14 +89,16 @@ export class AdvancedAnalysisService {
         routes,
         testRelationships,
         riskScores,
-        diagnostics
+        diagnostics,
+        gitActivity
       }),
       architecturePatterns,
       dependencyManifests,
       routes,
       testRelationships,
       riskScores,
-      diagnostics
+      diagnostics,
+      gitActivity
     };
   }
 
@@ -656,6 +661,88 @@ async function createReadinessDiagnostics(
   return diagnostics;
 }
 
+const GIT_ACTIVITY_MAX_COMMITS = 500;
+const GIT_ACTIVITY_MAX_FILES = 50;
+
+/**
+ * One `git log` walk over the last `GIT_ACTIVITY_MAX_COMMITS` commits,
+ * aggregated per file into commit count (a proxy for coupling/importance a
+ * one-shot repo scan cannot see) and last-touched recency. Never one `git
+ * log` per file — cost stays bounded regardless of repo size. Degrades to
+ * `[]` on any failure: no `.git` directory, git unavailable, or an empty
+ * history are all expected, not errors.
+ */
+export async function collectGitActivity(
+  repoRoot: string
+): Promise<FileChangeActivity[]> {
+  let stdout: string;
+
+  try {
+    const result = await execFileAsync(
+      "git",
+      [
+        "log",
+        "-n",
+        String(GIT_ACTIVITY_MAX_COMMITS),
+        "--pretty=format:%x00%aI",
+        "--name-only"
+      ],
+      { cwd: repoRoot, maxBuffer: 10 * 1024 * 1024 }
+    );
+    stdout = result.stdout;
+  } catch {
+    return [];
+  }
+
+  const activityByFile = new Map<
+    string,
+    { commitCount: number; lastChangedAt: string }
+  >();
+  let currentTimestamp: string | undefined;
+
+  for (const rawLine of stdout.split("\n")) {
+    if (rawLine.startsWith(" ")) {
+      currentTimestamp = rawLine.slice(1).trim();
+      continue;
+    }
+
+    const filePath = rawLine.trim();
+    if (!filePath || !currentTimestamp) {
+      continue;
+    }
+
+    const existing = activityByFile.get(filePath);
+    if (existing) {
+      existing.commitCount += 1;
+      // git log is newest-first, so the first timestamp seen per file is
+      // already its most recent — never overwrite lastChangedAt here.
+    } else {
+      activityByFile.set(filePath, { commitCount: 1, lastChangedAt: currentTimestamp });
+    }
+  }
+
+  const now = Date.now();
+
+  return [...activityByFile.entries()]
+    .map(([filePath, activity]) => ({
+      filePath,
+      commitCount: activity.commitCount,
+      lastChangedAt: activity.lastChangedAt,
+      lastChangedDaysAgo: Math.max(
+        0,
+        Math.round(
+          (now - new Date(activity.lastChangedAt).getTime()) / (24 * 60 * 60 * 1000)
+        )
+      )
+    }))
+    .sort(
+      (left, right) =>
+        right.commitCount - left.commitCount ||
+        left.lastChangedDaysAgo - right.lastChangedDaysAgo
+    )
+    .slice(0, GIT_ACTIVITY_MAX_FILES);
+}
+
 function scoreRisks(input: {
   repoMap: UniversalRepoMap;
   repo: RepoMap;
@@ -663,6 +750,7 @@ function scoreRisks(input: {
   routes: RouteApiEndpoint[];
   testRelationships: TestRelationship[];
   diagnostics: RepoReadinessDiagnostic[];
+  gitActivity: FileChangeActivity[];
   request?: string;
 }): AdvancedRiskScore[] {
   const request = input.request?.toLowerCase() ?? "";
@@ -677,6 +765,14 @@ function scoreRisks(input: {
   );
   const missingTests = input.testRelationships.filter(
     (relationship) => !relationship.testFile
+  );
+  const hotspotFiles = new Set(
+    input.gitActivity
+      .filter((activity) => activity.commitCount >= 3)
+      .map((activity) => activity.filePath)
+  );
+  const missingTestHotspots = missingTests.filter((relationship) =>
+    hotspotFiles.has(relationship.sourceFile)
   );
   const migrationSignals = [
     request,
@@ -740,13 +836,25 @@ function scoreRisks(input: {
     createRiskScore({
       category: "missing-test",
       score:
-        input.diagnostics.some((diagnostic) => diagnostic.code === "MISSING_TESTS") ||
-        missingTests.length > 0
-          ? 75
-          : 20,
+        missingTestHotspots.length > 0
+          ? 90
+          : input.diagnostics.some(
+                (diagnostic) => diagnostic.code === "MISSING_TESTS"
+              ) || missingTests.length > 0
+            ? 75
+            : 20,
       reasons:
         missingTests.length > 0
-          ? [`${missingTests.length} source/route relationship(s) have no nearby test.`]
+          ? [
+              `${missingTests.length} source/route relationship(s) have no nearby test.`,
+              ...(missingTestHotspots.length > 0
+                ? [
+                    `${missingTestHotspots.length} of those change frequently (${missingTestHotspots
+                      .map((relationship) => relationship.sourceFile)
+                      .join(", ")}) — untested hotspots compound risk.`
+                  ]
+                : [])
+            ]
           : [
               "Detected source/test relationships are covered or no source relationships were found."
             ],
@@ -779,6 +887,7 @@ function summarizeAdvancedAnalysis(input: {
   testRelationships: TestRelationship[];
   riskScores: AdvancedRiskScore[];
   diagnostics: RepoReadinessDiagnostic[];
+  gitActivity: FileChangeActivity[];
 }): string {
   const highRisks = input.riskScores.filter((risk) => risk.level === "high");
 
@@ -788,7 +897,8 @@ function summarizeAdvancedAnalysis(input: {
     `${input.routes.length} route/API surface(s)`,
     `${input.testRelationships.length} test relationship(s)`,
     `${highRisks.length} high risk score(s)`,
-    `${input.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length} readiness warning(s)`
+    `${input.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length} readiness warning(s)`,
+    `${input.gitActivity.length} file(s) with recent git activity`
   ].join(", ");
 }
 

@@ -1,8 +1,14 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { AdvancedAnalysisService, RepoDiscoveryService } from "@copilot-architect/core";
+import type { SymbolEdgeKind, SymbolGraph } from "@copilot-architect/graph";
 import { IndexingService, type SearchResult } from "@copilot-architect/indexer";
+import {
+  classifyIntent,
+  extractEntities,
+  type QueryIntentLabel
+} from "@copilot-architect/intent";
 import {
   CURRENT_SCHEMA_VERSION,
   type AdvancedAnalysis,
@@ -36,10 +42,16 @@ import type {
   FeaturePlanPreviewResult,
   FeaturePlanningOptions,
   FeaturePlanningResult,
+  PlanApproval,
+  PlanApprovalOptions,
   PlanArtifactPaths,
+  PlanDraftArtifactPaths,
   PlanEndpointReference,
   PlanFileReference,
   PlanningContextSummary,
+  PlanRevisionEntry,
+  PlanRevisionOptions,
+  PlanRevisionSummary,
   StackSpecificPlan
 } from "./models.js";
 
@@ -52,23 +64,245 @@ interface PlanningContext {
 export class FeaturePlanningService {
   async createPlan(options: FeaturePlanningOptions): Promise<FeaturePlanningResult> {
     const preview = await this.createPlanPreview(options);
-    const paths = createPlanArtifactPaths(preview.repoRoot, preview.plan.id);
+    const revisionEntry: PlanRevisionEntry = {
+      revision: 1,
+      at: preview.plan.generatedAt,
+      source: "initial",
+      feedback: options.request.trim(),
+      changedSections: []
+    };
+    const plan: FeaturePlanArtifact = {
+      ...preview.plan,
+      revision: 1,
+      revisions: [revisionEntry]
+    };
+    const markdown = renderFeaturePlanMarkdown(plan);
+    const paths = createPlanArtifactPaths(preview.repoRoot, plan.id);
+    const draftPaths = createPlanDraftPaths(preview.repoRoot, plan.id, 1);
 
     await mkdir(getArtifactDirectoryPath(preview.repoRoot, "plans"), {
       recursive: true
     });
-    await writeJsonFile(paths.timestampJsonPath, preview.plan);
-    await writeJsonFile(paths.latestJsonPath, preview.plan);
-    await writeTextFile(paths.timestampMarkdownPath, preview.markdown);
-    await writeTextFile(paths.latestMarkdownPath, preview.markdown);
+    await mkdir(path.dirname(draftPaths.draftJsonPath), { recursive: true });
+    await writeJsonFile(paths.timestampJsonPath, plan);
+    await writeJsonFile(paths.latestJsonPath, plan);
+    await writeJsonFile(draftPaths.draftJsonPath, plan);
+    await writeTextFile(paths.timestampMarkdownPath, markdown);
+    await writeTextFile(paths.latestMarkdownPath, markdown);
+    await writeTextFile(draftPaths.draftMarkdownPath, markdown);
 
     return {
       ...preview,
+      plan,
+      markdown,
       jsonPath: paths.timestampJsonPath,
       markdownPath: paths.timestampMarkdownPath,
       latestJsonPath: paths.latestJsonPath,
       latestMarkdownPath: paths.latestMarkdownPath
     };
+  }
+
+  /**
+   * Edits the current draft in place instead of regenerating it, so
+   * feedback from earlier conversation turns is never discarded. See
+   * docs/PLAN_LIFECYCLE_DESIGN.md section 1.
+   */
+  async revisePlan(options: PlanRevisionOptions): Promise<FeaturePlanningResult> {
+    const feedback = options.feedback.trim();
+
+    if (!feedback) {
+      throw new Error("feedback is required to revise a plan");
+    }
+
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error(
+        "No draft plan found to revise. Call generate_feature_plan first."
+      );
+    }
+
+    const current = await loadLatestDraftRevision(repoRoot, planId);
+    const nextRevision = current.revision + 1;
+    const changedSections = options.sections ? Object.keys(options.sections) : [];
+    const revisionEntry: PlanRevisionEntry = {
+      revision: nextRevision,
+      at: new Date().toISOString(),
+      source: options.source ?? "human-feedback",
+      feedback,
+      changedSections,
+      reviewFindingIds: options.reviewFindingIds
+    };
+    const plan: FeaturePlanArtifact = {
+      ...current,
+      ...(options.sections ?? {}),
+      // A revision is always unapproved: the previous approval was granted
+      // for the revision it replaces, not for this one.
+      status: "draft",
+      approval: undefined,
+      revision: nextRevision,
+      supersedes: `${planId}-rev${current.revision}`,
+      revisions: [...current.revisions, revisionEntry]
+    };
+    const markdown = renderFeaturePlanMarkdown(plan);
+    const paths = createPlanArtifactPaths(repoRoot, planId);
+    const draftPaths = createPlanDraftPaths(repoRoot, planId, nextRevision);
+
+    await mkdir(path.dirname(draftPaths.draftJsonPath), { recursive: true });
+    await writeJsonFile(draftPaths.draftJsonPath, plan);
+    await writeJsonFile(paths.latestJsonPath, plan);
+    await writeTextFile(draftPaths.draftMarkdownPath, markdown);
+    await writeTextFile(paths.latestMarkdownPath, markdown);
+
+    return {
+      repoRoot,
+      plan,
+      markdown,
+      jsonPath: draftPaths.draftJsonPath,
+      markdownPath: draftPaths.draftMarkdownPath,
+      latestJsonPath: paths.latestJsonPath,
+      latestMarkdownPath: paths.latestMarkdownPath,
+      searchResults: []
+    };
+  }
+
+  /**
+   * Stamps approval onto one specific, already-saved revision and promotes
+   * exactly that revision to latest-plan.*. Approval is always per-revision
+   * — there is no "approve whatever is newest". See
+   * docs/PLAN_LIFECYCLE_DESIGN.md section 2.
+   */
+  async approvePlan(options: PlanApprovalOptions): Promise<FeaturePlanningResult> {
+    const approvedBy = options.approvedBy.trim();
+
+    if (!approvedBy) {
+      throw new Error("approvedBy is required to approve a plan");
+    }
+
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error(
+        "No draft plan found to approve. Call generate_feature_plan first."
+      );
+    }
+
+    const draftPaths = createPlanDraftPaths(repoRoot, planId, options.revision);
+    const target = await readOptionalJson<FeaturePlanArtifact>(
+      draftPaths.draftJsonPath
+    );
+
+    if (!target) {
+      throw new Error(
+        `Revision ${options.revision} not found for plan "${planId}". Call plan revisions to see what exists.`
+      );
+    }
+
+    const approval: PlanApproval = {
+      approvedAt: new Date().toISOString(),
+      approvedBy,
+      revision: options.revision,
+      note: options.note
+    };
+    const plan: FeaturePlanArtifact = {
+      ...target,
+      status: "approved",
+      approval
+    };
+    const markdown = renderFeaturePlanMarkdown(plan);
+    const paths = createPlanArtifactPaths(repoRoot, planId);
+    const approvedCopyPath = createApprovedPlanPath(repoRoot, planId, options.revision);
+
+    await mkdir(path.dirname(approvedCopyPath), { recursive: true });
+    // Keep the draft revision consistent with its own approval state...
+    await writeJsonFile(draftPaths.draftJsonPath, plan);
+    await writeTextFile(draftPaths.draftMarkdownPath, markdown);
+    // ...and freeze an immutable copy that later revisions can never touch.
+    await writeJsonFile(approvedCopyPath, plan);
+    // Promote this exact revision to latest, even if newer unapproved
+    // drafts exist.
+    await writeJsonFile(paths.latestJsonPath, plan);
+    await writeTextFile(paths.latestMarkdownPath, markdown);
+
+    return {
+      repoRoot,
+      plan,
+      markdown,
+      jsonPath: approvedCopyPath,
+      markdownPath: draftPaths.draftMarkdownPath,
+      latestJsonPath: paths.latestJsonPath,
+      latestMarkdownPath: paths.latestMarkdownPath,
+      searchResults: []
+    };
+  }
+
+  async listRevisions(options: {
+    startPath?: string;
+    strictRoot?: boolean;
+    planId?: string;
+  }): Promise<PlanRevisionSummary[]> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error("No draft plan found. Call generate_feature_plan first.");
+    }
+
+    const revisionNumbers = await listDraftRevisionNumbers(repoRoot, planId);
+
+    return Promise.all(
+      revisionNumbers.map(async (revision) => {
+        const plan = await readJsonFile<FeaturePlanArtifact>(
+          createPlanDraftPaths(repoRoot, planId, revision).draftJsonPath
+        );
+        const latestEntry = plan.revisions[plan.revisions.length - 1];
+
+        return {
+          revision: plan.revision,
+          status: plan.status,
+          at: latestEntry?.at ?? plan.generatedAt,
+          source: latestEntry?.source ?? "initial",
+          approval: plan.approval
+        };
+      })
+    );
+  }
+
+  async showRevision(options: {
+    startPath?: string;
+    strictRoot?: boolean;
+    planId?: string;
+    revision?: number;
+  }): Promise<FeaturePlanArtifact> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error("No draft plan found. Call generate_feature_plan first.");
+    }
+
+    if (options.revision === undefined) {
+      return loadLatestDraftRevision(repoRoot, planId);
+    }
+
+    const draftPaths = createPlanDraftPaths(repoRoot, planId, options.revision);
+    const plan = await readOptionalJson<FeaturePlanArtifact>(draftPaths.draftJsonPath);
+
+    if (!plan) {
+      throw new Error(`Revision ${options.revision} not found for plan "${planId}".`);
+    }
+
+    return plan;
   }
 
   async createPlanPreview(
@@ -86,10 +320,17 @@ export class FeaturePlanningService {
     const planningContext = await loadPlanningContext(repoRoot);
     const indexer = new IndexingService();
     await indexer.index({ startPath: repoRoot, strictRoot: options.strictRoot });
+    // Intent-aware retrieval (see docs/CODEBASE_INTELLIGENCE_DESIGN.md
+    // section 4): reuse #3's pure classification/entity-extraction to
+    // search on the request's subject terms rather than the raw sentence.
+    const requestIntent = classifyIntent(request);
+    const requestEntities = extractEntities(request);
+    const refinedQuery =
+      requestEntities.length > 0 ? requestEntities.join(" ") : request;
     const searchResponse = await indexer.findSimilarFeatures({
       startPath: repoRoot,
       strictRoot: options.strictRoot,
-      query: request,
+      query: refinedQuery,
       limit: options.searchLimit ?? 12
     });
     const repo = repoMap.repos[0];
@@ -103,11 +344,17 @@ export class FeaturePlanningService {
       request,
       repoMap
     });
+    // Read-only, same precedent as packages/indexer's own tryReadGraph:
+    // never build the graph inline here, only cite it if it already exists.
+    const graph = await tryReadGraph(repoRoot);
     const plan = buildPlan(
       request,
+      requestIntent,
+      requestEntities,
       repoMap,
       repo,
       searchResponse.results,
+      graph,
       planningContext,
       advancedAnalysis
     );
@@ -119,6 +366,14 @@ export class FeaturePlanningService {
       markdown,
       searchResults: searchResponse.results
     };
+  }
+}
+
+async function tryReadGraph(repoRoot: string): Promise<SymbolGraph | undefined> {
+  try {
+    return await readJsonFile<SymbolGraph>(getArtifactFilePath(repoRoot, "graph"));
+  } catch {
+    return undefined;
   }
 }
 
@@ -158,22 +413,29 @@ async function loadPlanningContext(repoRoot: string): Promise<PlanningContext> {
 
 function buildPlan(
   request: string,
+  requestIntent: QueryIntentLabel,
+  requestEntities: string[],
   repoMap: UniversalRepoMap,
   repo: RepoMap,
   searchResults: SearchResult[],
+  graph: SymbolGraph | undefined,
   planningContext: PlanningContext,
   advancedAnalysis: AdvancedAnalysis
 ): FeaturePlanArtifact {
   const id = timestampId();
   const title = titleFromRequest(request);
-  const relevantFiles = searchResults.slice(0, 8).map(toRelevantFile);
+  const candidateFiles = new Set(searchResults.map((result) => result.relativePath));
+  const citations = buildGraphCitations(graph, candidateFiles);
+  const relevantFiles = searchResults
+    .slice(0, 8)
+    .map((result) => toRelevantFile(result, requestEntities, citations));
   const similarFeatureCandidates = searchResults
     .filter((result) => !result.isConfigFile)
     .slice(0, 6)
     .map((result) => ({
       filePath: result.relativePath,
       score: result.score,
-      reason: `Matched ${result.matchedFields.join(", ")} for the feature request.`
+      reason: describeRelevance(result, requestEntities, citations)
     }));
   const impactedModules = inferImpactedModules(searchResults, repo);
   const validationCommands = collectValidationCommands(
@@ -250,6 +512,8 @@ function buildPlan(
   return {
     ...featurePlan,
     requestInterpretation,
+    requestIntent,
+    requestEntities,
     repoArchitectureSummary: repoMap.summary.summary,
     planningContext: summarizePlanningContext(planningContext),
     relevantFiles,
@@ -273,7 +537,9 @@ function buildPlan(
     riskScores: advancedAnalysis.riskScores,
     planQuality,
     readinessDiagnostics: advancedAnalysis.diagnostics,
-    relatedEndpoints
+    relatedEndpoints,
+    revision: 1,
+    revisions: []
   };
 }
 
@@ -829,12 +1095,108 @@ function inferImpactedModules(searchResults: SearchResult[], repo: RepoMap): str
   ]).slice(0, 10);
 }
 
-function toRelevantFile(result: SearchResult): PlanFileReference {
+function toRelevantFile(
+  result: SearchResult,
+  requestEntities: string[],
+  citations: Map<string, GraphCitation[]>
+): PlanFileReference {
   return {
     filePath: result.relativePath,
     score: result.score,
-    reason: `Matched ${result.matchedFields.join(", ")} in local index search.`
+    reason: describeRelevance(result, requestEntities, citations)
   };
+}
+
+interface GraphCitation {
+  phrase: string;
+  otherFile: string;
+}
+
+const EDGE_CITATION_PHRASES: Record<
+  SymbolEdgeKind,
+  { outgoing: string; incoming: string }
+> = {
+  imports: { outgoing: "imports", incoming: "is imported by" },
+  calls: { outgoing: "calls into", incoming: "is called by" },
+  extends: { outgoing: "extends", incoming: "is extended by" },
+  implements: { outgoing: "implements", incoming: "is implemented by" }
+};
+
+/**
+ * File-level "why relevant" citations from the symbol/dependency graph
+ * (see docs/CODEBASE_INTELLIGENCE_DESIGN.md section 4). Only edges where
+ * both endpoints are already in this plan's candidate file set become
+ * citations — a graph edge to some unrelated file elsewhere in the repo
+ * doesn't answer "why does this matter to this plan".
+ */
+function buildGraphCitations(
+  graph: SymbolGraph | undefined,
+  candidateFiles: Set<string>
+): Map<string, GraphCitation[]> {
+  const citations = new Map<string, GraphCitation[]>();
+
+  if (!graph) {
+    return citations;
+  }
+
+  const fileById = new Map(graph.nodes.map((node) => [node.id, node.filePath]));
+  const seenKeys = new Map<string, Set<string>>();
+
+  const add = (file: string, citation: GraphCitation): void => {
+    const key = `${citation.phrase}|${citation.otherFile}`;
+    const seen = seenKeys.get(file) ?? new Set<string>();
+    if (seen.has(key)) return;
+    seen.add(key);
+    seenKeys.set(file, seen);
+
+    const list = citations.get(file) ?? [];
+    list.push(citation);
+    citations.set(file, list);
+  };
+
+  for (const edge of graph.edges) {
+    const fromFile = fileById.get(edge.from);
+    const toFile = fileById.get(edge.to);
+
+    if (!fromFile || !toFile || fromFile === toFile) continue;
+    if (!candidateFiles.has(fromFile) || !candidateFiles.has(toFile)) continue;
+
+    const phrase = EDGE_CITATION_PHRASES[edge.kind];
+    add(fromFile, { phrase: phrase.outgoing, otherFile: toFile });
+    add(toFile, { phrase: phrase.incoming, otherFile: fromFile });
+  }
+
+  return citations;
+}
+
+function describeRelevance(
+  result: SearchResult,
+  requestEntities: string[],
+  citations: Map<string, GraphCitation[]>
+): string {
+  const parts: string[] = [];
+  const matchedEntities = requestEntities.filter(
+    (entity) =>
+      result.relativePath.toLowerCase().includes(entity) ||
+      result.symbols.some((symbol) => symbol.name.toLowerCase().includes(entity)) ||
+      result.textPreview.toLowerCase().includes(entity)
+  );
+
+  if (matchedEntities.length > 0) {
+    parts.push(`matches entity term(s) ${matchedEntities.join(", ")}`);
+  } else if (result.matchedFields.length > 0) {
+    parts.push(`matched ${result.matchedFields.join(", ")} in local index search`);
+  }
+
+  for (const citation of (citations.get(result.relativePath) ?? []).slice(0, 2)) {
+    parts.push(`${citation.phrase} \`${citation.otherFile}\``);
+  }
+
+  if (result.signals.includes("recency")) {
+    parts.push("recently/frequently changed");
+  }
+
+  return parts.length > 0 ? `${parts.join("; ")}.` : "Matched in local index search.";
 }
 
 function createPlanArtifactPaths(repoRoot: string, id: string): PlanArtifactPaths {
@@ -846,6 +1208,86 @@ function createPlanArtifactPaths(repoRoot: string, id: string): PlanArtifactPath
     latestJsonPath: path.join(plansRoot, "latest-plan.json"),
     latestMarkdownPath: path.join(plansRoot, "latest-plan.md")
   };
+}
+
+function createPlanDraftPaths(
+  repoRoot: string,
+  planId: string,
+  revision: number
+): PlanDraftArtifactPaths {
+  const plansRoot = getArtifactDirectoryPath(repoRoot, "plans");
+  const draftDir = path.join(plansRoot, "drafts", planId);
+
+  return {
+    draftJsonPath: path.join(draftDir, `rev-${revision}.json`),
+    draftMarkdownPath: path.join(draftDir, `rev-${revision}.md`),
+    latestJsonPath: path.join(plansRoot, "latest-plan.json"),
+    latestMarkdownPath: path.join(plansRoot, "latest-plan.md")
+  };
+}
+
+async function findLatestDraftPlanId(repoRoot: string): Promise<string | undefined> {
+  const latestPath = path.join(
+    getArtifactDirectoryPath(repoRoot, "plans"),
+    "latest-plan.json"
+  );
+  const plan = await readOptionalJson<FeaturePlanArtifact>(latestPath);
+
+  return plan?.id;
+}
+
+function createApprovedPlanPath(
+  repoRoot: string,
+  planId: string,
+  revision: number
+): string {
+  const plansRoot = getArtifactDirectoryPath(repoRoot, "plans");
+
+  return path.join(plansRoot, "approved", `${planId}-rev${revision}-plan.json`);
+}
+
+async function listDraftRevisionNumbers(
+  repoRoot: string,
+  planId: string
+): Promise<number[]> {
+  const draftDir = path.join(
+    getArtifactDirectoryPath(repoRoot, "plans"),
+    "drafts",
+    planId
+  );
+  let entries: string[];
+
+  try {
+    entries = await readdir(draftDir);
+  } catch {
+    throw new Error(
+      `No draft plan found for id "${planId}". Call generate_feature_plan first.`
+    );
+  }
+
+  const revisionNumbers = entries
+    .map((name) => /^rev-(\d+)\.json$/.exec(name))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => Number(match[1]))
+    .sort((left, right) => left - right);
+
+  if (revisionNumbers.length === 0) {
+    throw new Error(`No draft revisions found for plan "${planId}".`);
+  }
+
+  return revisionNumbers;
+}
+
+async function loadLatestDraftRevision(
+  repoRoot: string,
+  planId: string
+): Promise<FeaturePlanArtifact> {
+  const revisionNumbers = await listDraftRevisionNumbers(repoRoot, planId);
+  const latestRevision = revisionNumbers[revisionNumbers.length - 1];
+
+  return readJsonFile<FeaturePlanArtifact>(
+    createPlanDraftPaths(repoRoot, planId, latestRevision).draftJsonPath
+  );
 }
 
 async function writeTextFile(filePath: string, contents: string): Promise<void> {

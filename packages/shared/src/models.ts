@@ -201,6 +201,18 @@ export interface AdvancedAnalysis extends GeneratedArtifact {
   testRelationships: TestRelationship[];
   riskScores: AdvancedRiskScore[];
   diagnostics: RepoReadinessDiagnostic[];
+  /** Recency/frequency signal from git history. Empty when the repo has no
+   *  `.git` directory, git is unavailable, or the history is empty. */
+  gitActivity: FileChangeActivity[];
+}
+
+export interface FileChangeActivity {
+  filePath: string;
+  /** Commits touching this file within the lookback window. */
+  commitCount: number;
+  /** ISO timestamp of the most recent commit touching it. */
+  lastChangedAt: string;
+  lastChangedDaysAgo: number;
 }
 
 export interface AdvancedArchitecturePattern {
@@ -352,11 +364,24 @@ export interface ReviewReport extends GeneratedArtifact {
 }
 
 export interface ReviewFinding {
+  /** Stable across runs: a hash of severity + title + filePath, excluding line/details. */
+  id: string;
   severity: Severity;
   title: string;
   filePath?: string;
   line?: number;
   details: string;
+  status: "open" | "accepted" | "declined" | "resolved";
+  disposition?: FindingDisposition;
+}
+
+export interface FindingDisposition {
+  decidedAt: string;
+  decidedBy: string;
+  /** Required for both accept and decline — this is the audit trail. */
+  reason: string;
+  /** Set when accepted and folded into a new plan revision. */
+  planRevision?: number;
 }
 
 export interface SafetyPolicy extends GeneratedArtifact {

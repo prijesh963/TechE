@@ -12,9 +12,12 @@
   "references": [
     { "path": "../agents" },
     { "path": "../core" },
+    { "path": "../graph" },
     { "path": "../indexer" },
     { "path": "../instructions" },
+    { "path": "../intent" },
     { "path": "../mcp-server" },
+    { "path": "../measurement" },
     { "path": "../planner" },
     { "path": "../reviewer" },
     { "path": "../shared" },

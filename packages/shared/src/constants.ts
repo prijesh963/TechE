@@ -10,7 +10,8 @@ export const ARTIFACT_FILE_NAMES = {
   repoMap: "repo-map.json",
   workspace: "workspace.json",
   commands: "commands.json",
-  policy: "policy.json"
+  policy: "policy.json",
+  graph: "graph.json"
 } as const;
 
 export const ARTIFACT_DIRECTORY_NAMES = {
@@ -26,9 +27,12 @@ export const ARTIFACT_DIRECTORY_NAMES = {
 export const CLI_COMMANDS = [
   "init",
   "analyze",
+  "graph",
   "index",
   "search",
+  "intent",
   "plan",
+  "measure",
   "commands",
   "validate",
   "policy",
@@ -55,7 +59,10 @@ export const REQUIRED_PACKAGE_DIRECTORIES = [
   "packages/core",
   "packages/adapters",
   "packages/indexer",
+  "packages/graph",
+  "packages/intent",
   "packages/planner",
+  "packages/measurement",
   "packages/validator",
   "packages/reviewer",
   "packages/agents",

@@ -157,6 +157,7 @@ describe("Phase 12 CLI completion", () => {
       "src/invoice.ts": "export const invoice = true;"
     });
     const planCapture = createCapture();
+    const approveCapture = createCapture();
     const blockedHandoff = createCapture();
     const handoffCapture = createCapture();
     const reviewCapture = createCapture();
@@ -173,6 +174,23 @@ describe("Phase 12 CLI completion", () => {
       (await runCli(["handoff", "--path", repoRoot], blockedHandoff.io)).exitCode
     ).toBe(1);
     expect(blockedHandoff.stderr.join("\n")).toContain("requires --approve");
+    expect(
+      (
+        await runCli(
+          [
+            "plan",
+            "approve",
+            "--path",
+            repoRoot,
+            "--revision",
+            "1",
+            "--by",
+            "reviewer"
+          ],
+          approveCapture.io
+        )
+      ).exitCode
+    ).toBe(0);
     expect(
       (
         await runCli(
