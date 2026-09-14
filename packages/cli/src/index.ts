@@ -37,6 +37,10 @@ import {
   type InstructionValidationResult
 } from "@copilot-architect/instructions";
 import {
+  ContextMeasurementService,
+  type ContextMeasurement
+} from "@copilot-architect/measurement";
+import {
   FeaturePlanningService,
   HandoffService,
   WorkspacePlanningService,
@@ -111,6 +115,8 @@ const commandDescriptions = {
   search: "Search the local repo index.",
   intent: "Classify a query's intent and resolve likely relevant files.",
   plan: "Generate a feature implementation plan.",
+  measure:
+    "Measure how much a plan's file selection narrows context vs the whole repo.",
   commands: "Manage custom validation command configuration.",
   validate: "Run safe validation commands.",
   policy: "Inspect and validate the local safety policy.",
@@ -142,6 +148,8 @@ const commandUsage = {
   intent:
     'npm run cli -- intent "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
   plan: 'npm run cli -- plan "feature request" [--path <repo>|--root <repo>] [--json]',
+  measure:
+    'npm run cli -- measure "feature request" [--path <repo>|--root <repo>] [--json]',
   commands: "npm run cli -- commands <list|validate> [--path <repo>] [--json]",
   validate:
     "npm run cli -- validate [--build|--test|--lint|--format|--validation] [--path <repo>|--root <repo>] [--json]",
@@ -695,6 +703,20 @@ export async function runCli(
     }
   }
 
+  if (rawCommand === "measure") {
+    try {
+      const options = parseMeasureArgs(commandArgs);
+      const result = await new ContextMeasurementService().measure(options);
+      stdout(
+        options.json ? JSON.stringify(result, null, 2) : getMeasureSummaryText(result)
+      );
+      return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
   if (rawCommand === "validate") {
     try {
       const options = parseValidateArgs(commandArgs);
@@ -887,6 +909,13 @@ interface IntentCliOptions {
   query: string;
   json: boolean;
   limit?: number;
+}
+
+interface MeasureCliOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  request: string;
+  json: boolean;
 }
 
 interface InitCliOptions {
@@ -1658,6 +1687,50 @@ function parseIntentArgs(args: string[]): IntentCliOptions {
   return options;
 }
 
+function parseMeasureArgs(args: string[]): MeasureCliOptions {
+  const requestParts: string[] = [];
+  const options: MeasureCliOptions = {
+    request: "",
+    json: false
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--path" || arg === "--root") {
+      const startPath = args[index + 1];
+
+      if (!startPath) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+
+      options.startPath = startPath;
+      options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown measure argument: ${arg}`);
+    }
+
+    requestParts.push(arg);
+  }
+
+  options.request = requestParts.join(" ").trim();
+
+  if (!options.request) {
+    throw new Error("Missing measure request");
+  }
+
+  return options;
+}
+
 function getIndexSummaryText(result: IndexResult): string {
   return [
     `${PROJECT_NAME}: index`,
@@ -1724,6 +1797,18 @@ function getIntentSummaryText(result: QueryIntentResult): string {
   section("Recent changes", result.recentChanges);
 
   return lines.join("\n");
+}
+
+function getMeasureSummaryText(result: ContextMeasurement): string {
+  return [
+    `${PROJECT_NAME}: measure`,
+    "",
+    `Request: ${result.request}`,
+    `Naive whole repo: ${result.naiveWholeRepo.fileCount} files, ~${result.naiveWholeRepo.estimatedTokens} tokens`,
+    `Current tool selection: ${result.currentToolSelection.relevantFileCount} relevant file(s), ` +
+      `${result.currentToolSelection.filesReadableOnDisk} readable on disk, ~${result.currentToolSelection.estimatedTokens} tokens`,
+    `Estimated token reduction: ${result.estimatedTokenReductionPercent}%`
+  ].join("\n");
 }
 
 interface PlanCliOptions {

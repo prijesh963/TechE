@@ -436,7 +436,7 @@ customer creation failing?"` tokenizes today into `why`, `is`, `customer`,
 `creation`, `failing` — three of those five terms are noise for BM25
 (common, low-signal words that dilute matching against file content
 that never contains "why" or "is" meaningfully). Extracting entities
-(`customer`, `creation`) and searching on *that* instead of the raw
+(`customer`, `creation`) and searching on _that_ instead of the raw
 sentence is the "ahead of retrieval" part of the name: intent
 classification happens before the search call, not just as a label
 applied to its output afterward.
@@ -454,8 +454,8 @@ applied to its output afterward.
   clearer one — a "why is X broken, should I refactor it" query is a
   debugging query first.
 - **Entities exclude intent-trigger words.** "failing", "fix", "add",
-  "implement" etc. describe the *action* (captured by `intent`), not the
-  *subject* — including them in `entities` would just re-inject the noise
+  "implement" etc. describe the _action_ (captured by `intent`), not the
+  _subject_ — including them in `entities` would just re-inject the noise
   query refinement is meant to remove.
 - **Not wired into `FeaturePlanningService` in this phase.** Swapping the
   raw `request` string for a refined query inside plan generation would
@@ -470,11 +470,16 @@ applied to its output afterward.
 ### Schema
 
 ```ts
-export type QueryIntentLabel = "debugging" | "feature" | "refactor" | "test" | "unknown";
+export type QueryIntentLabel =
+  | "debugging"
+  | "feature"
+  | "refactor"
+  | "test"
+  | "unknown";
 
 export interface RelevantFileSummary {
   filePath: string;
-  reason: string;          // synthesized from which SearchResult.signals fired
+  reason: string; // synthesized from which SearchResult.signals fired
   score: number;
   signals: SearchSignal[];
   anchor?: SearchAnchor;
@@ -486,9 +491,9 @@ export interface QueryIntentResult extends GeneratedArtifact {
   intent: QueryIntentLabel;
   entities: string[];
   refinedQuery: string;
-  likelyComponents: RelevantFileSummary[];  // non-test results
-  relevantTests: RelevantFileSummary[];     // isTestFile results
-  recentChanges: RelevantFileSummary[];     // results with signals including "recency"
+  likelyComponents: RelevantFileSummary[]; // non-test results
+  relevantTests: RelevantFileSummary[]; // isTestFile results
+  recentChanges: RelevantFileSummary[]; // results with signals including "recency"
 }
 ```
 
@@ -508,7 +513,7 @@ answer to one query, not repo state, so there is nothing durable to write
    this is the only place #3 touches retrieval, and it calls the
    unmodified #2 pipeline.
 4. Partition the results: non-test → `likelyComponents` (capped), test →
-   `relevantTests` (capped), `signals.includes("recency")` → 
+   `relevantTests` (capped), `signals.includes("recency")` →
    `recentChanges` (capped) — categories can and do overlap, matching the
    feedback's own example where `CustomerService.java` appears under both
    "likely components" and "recent changes".
@@ -555,8 +560,8 @@ additive to the existing pipeline:
    own `refinedQuery` logic, applied here instead of duplicated.
 2. **Graph-grounded reasons.** `PlanFileReference.reason` is currently
    `"Matched ${matchedFields.join(", ")} in local index search."` —
-   accurate but generic; it never says *what* was matched or *why a file
-   matters relative to the others in the plan*. The new `reason` cites, in
+   accurate but generic; it never says _what_ was matched or _why a file
+   matters relative to the others in the plan_. The new `reason` cites, in
    order: which extracted entity terms the file actually matches, which
    other candidate files it's connected to via the symbol/dependency graph
    (naming the specific file and edge kind — "imports", "is called by",
@@ -571,7 +576,7 @@ additive to the existing pipeline:
   — that's a full AST parse and too expensive to run on every plan
   generation.
 - **Citations are relative to the candidate list, not the whole repo.**
-  A graph edge only becomes a citation when *both* endpoints are already
+  A graph edge only becomes a citation when _both_ endpoints are already
   in the search results being explained (default top 12). An edge to some
   unrelated file elsewhere in the repo doesn't answer "why does this
   matter to this plan" — it's noise. This mirrors #2's own graph-signal
@@ -638,3 +643,115 @@ In `buildPlan`:
 - A repo with no `graph.json` yet (the common case for a first-time
   `plan` call before anyone has run `graph`) falls back to entity/signal
   reasons only — verified no regression in that path either.
+
+## 5. Token/Context Measurement Harness (`packages/measurement`) — Implemented
+
+### Scope for this phase
+
+The feedback's core thesis is "measure the actual token-reduction claim
+rather than assume it." `scripts/context-baseline.mjs` already captured a
+frozen "before" data point (`docs/benchmarks/baseline-context-snapshot.json`,
+`BASELINE.md`) ahead of item #1, using this methodology: for a canonical
+request, compare the byte size of every source file in a repo ("naive
+whole-repo context") against the byte size of just the files
+`FeaturePlanningService` flags as relevant ("current tool selection"),
+converting to a rough chars÷4 token estimate.
+
+Item #5 has two parts:
+
+1. **Formalize the one-off script into a real, reusable capability** —
+   `ContextMeasurementService.measure({ startPath, request })`, following
+   this codebase's own convention (every other capability in this design
+   doc — graph, hybrid search, intent, citations — is a real
+   Noun+Service class wired into the CLI and MCP server, not just a
+   script). A coding agent can now ask "how much would this actually
+   narrow context for this request" on any repo, not just the sample
+   matrix, at any time — not only once as a historical snapshot.
+2. **Run it** against the same sample matrix and the same canonical
+   request as the baseline, and honestly report whether items #1–#4
+   changed anything — that comparison is the actual deliverable, not just
+   the tooling to produce it.
+
+### Design decisions
+
+- **Reuses `scanRepository`/`isBinaryPath` from `@copilot-architect/shared`
+  for the "naive" measurement** instead of the original script's
+  hand-rolled walker and hardcoded source-extension allowlist. This is
+  the same exclusion/binary logic `packages/indexer` itself uses to decide
+  what's indexable, so "naive whole-repo context" now means the same
+  thing as "everything the tool would consider readable source" —
+  a more accurate naive baseline than an arbitrary extension list, and one
+  less list to keep in sync.
+- **Not persisted as a `.copilot-architect/` artifact** — same precedent
+  as #3's `QueryIntentResult`: a point-in-time measurement for one
+  request, not repo state.
+- **`createPlanPreview` is reused unmodified** — the harness measures
+  whatever the planner actually selects today (already intent-aware
+  retrieval from #4, already graph-aware citations), not a separate
+  code path that could drift from what users actually get.
+- **The sample-matrix comparison stays a script**
+  (`scripts/context-measure-samples.mjs`), not a package method — looping
+  over this repo's own `samples/` directory and diffing against a
+  specific checked-in baseline file is a one-repo operational concern
+  (identical precedent to `context-baseline.mjs` itself), not a reusable
+  library feature. It's a thin orchestration layer on top of the new
+  service.
+
+### Schema
+
+```ts
+export interface ContextMeasurement extends GeneratedArtifact {
+  repoRoot: string;
+  request: string;
+  naiveWholeRepo: { fileCount: number; totalBytes: number; estimatedTokens: number };
+  currentToolSelection: {
+    relevantFileCount: number;
+    likelyFilesToModifyCount: number;
+    filesReadableOnDisk: number;
+    totalBytes: number;
+    estimatedTokens: number;
+  };
+  estimatedTokenReductionPercent: number;
+}
+```
+
+Field-for-field identical to each sample entry in
+`baseline-context-snapshot.json` (minus the `sample` name, which is the
+sample-matrix script's concern) so the two are directly diffable.
+
+### Behavior
+
+`ContextMeasurementService.measure({ startPath, strictRoot, request })`:
+
+1. Calls `FeaturePlanningService.createPlanPreview()` unmodified.
+2. Measures "naive": walks `preview.repoRoot` via `scanRepository`,
+   summing size of every non-binary file.
+3. Measures "selected": stats every file `preview.plan.relevantFiles`
+   points to.
+4. Converts both to a chars÷4 token estimate and computes the reduction
+   percentage.
+
+New MCP tool `measure_context_reduction` (read-only, same precedent as
+`analyze_query_intent`) and CLI command `measure "request"`.
+
+### Compatibility
+
+- Fully additive: new package, new MCP tool, new CLI command. Nothing
+  existing changes shape or behavior.
+
+### Implementation Notes
+
+- `packages/measurement` depends on `@copilot-architect/planner` (for
+  `FeaturePlanningService`) and `@copilot-architect/shared` (for
+  `scanRepository`/`isBinaryPath`/`CURRENT_SCHEMA_VERSION`).
+- Ran `scripts/context-measure-samples.mjs` against the same sample matrix
+  and canonical request (`"Add invoice approval workflow"`) as the
+  baseline. Full results and honest read: see `docs/benchmarks/AFTER.md`.
+  Summary: on the tiny `samples/` fixtures, **selected file bytes actually
+  went up** in every sample (hybrid retrieval's multi-signal fusion
+  broadens candidate discovery, and these fixtures have no irrelevant
+  content left to trade off against) — the harness caught a real,
+  unflattering result instead of assuming a win. On this repo's own
+  codebase (243 files, not a fixture), the same request selects 8 files at
+  ~86% estimated token reduction — the value shows up on repos large
+  enough to have something to filter out.

@@ -15,6 +15,7 @@
     { "path": "../graph" },
     { "path": "../indexer" },
     { "path": "../intent" },
+    { "path": "../measurement" },
     { "path": "../planner" },
     { "path": "../reviewer" },
     { "path": "../shared" },

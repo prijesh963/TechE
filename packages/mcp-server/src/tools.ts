@@ -5,6 +5,7 @@ import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core"
 import { SymbolGraphService } from "@copilot-architect/graph";
 import { IndexingService } from "@copilot-architect/indexer";
 import { QueryIntentService } from "@copilot-architect/intent";
+import { ContextMeasurementService } from "@copilot-architect/measurement";
 import {
   FeaturePlanningService,
   WorkspacePlanningService
@@ -275,6 +276,21 @@ export function createCopilotArchitectTools(
         });
         return { repoMap, search };
       }
+    ),
+    tool(
+      "measure_context_reduction",
+      "Measure how much context a feature request's plan.relevantFiles " +
+        "selection actually saves versus naively sending the whole repo: " +
+        "file counts, byte sizes, and a rough token estimate for both, plus " +
+        "the reduction percentage. Use this to check the actual " +
+        "token-reduction claim for a request rather than assume it.",
+      requestSchema,
+      true,
+      async (args) =>
+        new ContextMeasurementService().measure({
+          startPath: resolveStartPath(args, options),
+          request: stringArg(args, "request")
+        })
     ),
     tool(
       "generate_feature_plan",

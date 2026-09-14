@@ -84,6 +84,7 @@ Run any command with `npm run cli -- <command> [flags]` or `copilot-architect <c
 | `plan revisions`             | List a plan's revisions with status and approval state                                |
 | `plan show`                  | Show a plan revision (defaults to the latest draft)                                   |
 | `plan approve`               | Approve a specific revision (`--revision <n> --by <name>`)                            |
+| `measure "feature"`          | Measure how much a plan's file selection narrows context vs the whole repo            |
 | `commands list`              | List detected + custom validation commands                                            |
 | `commands validate`          | Validate `.copilot-architect/commands.json`                                           |
 | `validate`                   | Run safe build/test/lint/format commands                                              |
@@ -397,6 +398,7 @@ Start: `npm run cli -- mcp [--path <repo>]`
 | `analyze_impact`            | Summarize impact analysis for a feature request                                                                                     |
 | `analyze_cross_repo_impact` | Cross-repo impact for workspace plans                                                                                               |
 | `generate_plan_context`     | Return planning context without writing artifacts                                                                                   |
+| `measure_context_reduction` | Measure a request's naive-whole-repo vs plan.relevantFiles context cost (file counts, bytes, estimated tokens, reduction %)         |
 | `generate_feature_plan`     | Write plan revision 1 (requires `approved=true`; fails over an existing draft unless `restart=true`)                                |
 | `revise_feature_plan`       | Edit the current draft in place with feedback, preserving revision history                                                          |
 | `approve_plan`              | Approve one specific revision (`revision` required) and promote it to latest                                                        |
@@ -512,6 +514,7 @@ copilot-architect/
 │   ├── graph/            symbol/dependency graph (classes, functions, imports, calls)
 │   ├── intent/           query intent classification (debugging/feature/refactor/test)
 │   ├── planner/         feature planning, handoff, workspace planning
+│   ├── measurement/      naive-vs-selected context/token measurement harness
 │   ├── validator/       validation engine, safety policy, audit, risk assessment
 │   ├── reviewer/        review report generation
 │   ├── agents/          Copilot agent template generation

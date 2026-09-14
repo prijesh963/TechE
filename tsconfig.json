@@ -21,6 +21,7 @@
     { "path": "./packages/graph" },
     { "path": "./packages/intent" },
     { "path": "./packages/planner" },
+    { "path": "./packages/measurement" },
     { "path": "./packages/validator" },
     { "path": "./packages/reviewer" },
     { "path": "./packages/agents" },
