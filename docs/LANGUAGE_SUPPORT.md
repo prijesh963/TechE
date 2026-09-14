@@ -190,11 +190,41 @@ To add a new **integration** instead, add one entry to `INTEGRATION_SIGNALS` in
 `packages/adapters/src/integration-detector.ts` (and optionally a guidance line
 to `INTEGRATION_GUIDANCE` in the planner) — no adapter changes required.
 
-## Known Limit — Symbol Graph Is TypeScript/JavaScript Only
+## Symbol Graph Coverage
 
-The symbol/dependency graph (`npm run cli -- graph`), which powers graph-based
-search ranking and the "why relevant" citations in plans, parses `.ts`, `.tsx`,
-`.js` and `.jsx` only. On a Java, Python or other repo, planning and search
-still work — they fall back to keyword, path and git-recency signals — but there
-are no `imports`/`calls`/`extends` edges, so citations cite matches rather than
-call relationships.
+The symbol/dependency graph (`npm run cli -- graph`) powers graph-based search
+ranking and the "why relevant" citations in plans.
+
+| Language              | Extraction                                                                             |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| TypeScript/JavaScript | Real TypeScript AST (`.ts`, `.tsx`, `.js`, `.jsx`)                                     |
+| **Java**              | Declaration scanner (`.java`) — package, imports, types, heritage, methods, call sites |
+| Everything else       | File-level nodes only; search falls back to keyword, path and git-recency signals      |
+
+### Why Java uses a scanner rather than a parser
+
+The TS path uses the real TypeScript AST because `typescript` is already a
+dependency. For Java, the only viable pure-JS parser (`java-parser`) pins
+chevrotain 11, which carries a high-severity lodash advisory, and forcing a
+newer chevrotain breaks it — adopting it would have taken this repo from zero
+known vulnerabilities to six. Since the graph only needs declaration-level
+facts, `packages/graph/src/java-extractor.ts` scans for them directly after
+blanking comments and string literals (so a `{` in a comment or a `}` in a
+string cannot throw off brace matching).
+
+Java resolution is package-aware rather than path-based: imports resolve
+through a repo-wide qualified-name index, a call receiver is mapped from the
+field's declared type (`repo.save(…)` → `OrderRepository.save`), and an
+inherited call is found by walking resolved supertypes. A call that resolves to
+no known method — a JDK or third-party call — is dropped rather than pointed at
+the enclosing class.
+
+Known limits, consistent with the TS path's "best effort, degrade gracefully"
+contract: annotations are not modelled, anonymous and local classes get no node
+of their own, and overloads collapse to one method node. A file it cannot make
+sense of yields fewer nodes, never wrong ones.
+
+Validated against `spring-projects/spring-petclinic`: 47 classes, 3 interfaces,
+190 methods and 121 edges with zero parse failures, correctly recovering
+`Owner extends Person extends BaseEntity` and controller → repository call
+edges such as `OwnerController.findOwner → OwnerRepository.findById`.

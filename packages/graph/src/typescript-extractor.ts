@@ -23,6 +23,13 @@ export interface FileExtraction {
   /** Every raw import specifier referenced in the file, deduped. */
   importedSpecifiers: string[];
   pendingReferences: PendingReference[];
+  /**
+   * Java only. Imports and heritage resolve by fully-qualified name rather
+   * than by relative path, so the service needs the declaring package and the
+   * qualified names this file declares to build a global type index.
+   */
+  packageName?: string;
+  qualifiedTypes?: { qualifiedName: string; nodeId: string }[];
 }
 
 /**

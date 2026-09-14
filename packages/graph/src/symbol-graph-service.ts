@@ -19,6 +19,7 @@ import type {
   SymbolGraphResult,
   SymbolNode
 } from "./models.js";
+import { extractJavaFileSymbols, JAVA_EXTENSIONS } from "./java-extractor.js";
 import {
   extractFileSymbols,
   SUPPORTED_EXTENSIONS,
@@ -46,6 +47,12 @@ export class SymbolGraphService {
     const localSymbolsByFile = new Map<string, Map<string, string>>();
     const importSpecifiersByFile = new Map<string, Map<string, string>>();
     const pendingByFile: Array<{ filePath: string; refs: PendingReference[] }> = [];
+    /** Java qualified type name -> where it is declared. Built across all files. */
+    const javaTypeIndex = new Map<string, { nodeId: string; filePath: string }>();
+    const javaFiles = new Map<
+      string,
+      { packageName?: string; importedSpecifiers: string[] }
+    >();
     const edges: SymbolEdge[] = [];
     const edgeKeys = new Set<string>();
 
@@ -67,10 +74,13 @@ export class SymbolGraphService {
         exported: false
       });
 
+      const extension = path.posix.extname(entry.relativePath);
+      const isJava = JAVA_EXTENSIONS.has(extension);
+
       if (
         entry.sizeBytes > MAX_FILE_BYTES ||
         isBinaryPath(entry.relativePath) ||
-        !SUPPORTED_EXTENSIONS.has(path.posix.extname(entry.relativePath))
+        !(SUPPORTED_EXTENSIONS.has(extension) || isJava)
       ) {
         continue;
       }
@@ -82,7 +92,9 @@ export class SymbolGraphService {
         continue;
       }
 
-      const extraction = extractFileSymbols(entry.relativePath, sourceText);
+      const extraction = isJava
+        ? extractJavaFileSymbols(entry.relativePath, sourceText)
+        : extractFileSymbols(entry.relativePath, sourceText);
       if (!extraction) {
         diagnostics.push({
           severity: "warning",
@@ -108,6 +120,23 @@ export class SymbolGraphService {
         refs: extraction.pendingReferences
       });
 
+      if (isJava) {
+        // Java resolves by fully-qualified name, so imports cannot be resolved
+        // until every file's package and declared types are known. Defer to
+        // the second pass below.
+        javaFiles.set(entry.relativePath, {
+          packageName: extraction.packageName,
+          importedSpecifiers: extraction.importedSpecifiers
+        });
+        for (const declared of extraction.qualifiedTypes ?? []) {
+          javaTypeIndex.set(declared.qualifiedName, {
+            nodeId: declared.nodeId,
+            filePath: entry.relativePath
+          });
+        }
+        continue;
+      }
+
       for (const specifier of extraction.importedSpecifiers) {
         const target = resolveImportSpecifier(
           entry.relativePath,
@@ -120,41 +149,106 @@ export class SymbolGraphService {
       }
     }
 
-    const nodesById = new Map(nodes.map((node) => [node.id, node]));
-
-    for (const { filePath, refs } of pendingByFile) {
-      const localSymbols = localSymbolsByFile.get(filePath) ?? new Map();
-      const importSpecifiers = importSpecifiersByFile.get(filePath) ?? new Map();
-
-      for (const ref of refs) {
-        const resolved = resolveIdentifier(
-          ref.identifierName,
-          filePath,
-          localSymbols,
-          importSpecifiers,
-          localSymbolsByFile,
-          knownFiles
-        );
-        if (!resolved) {
-          continue;
-        }
-
-        let targetId = resolved;
-        if (ref.kind === "calls" && ref.propertyName) {
-          const candidateNode = nodesById.get(resolved);
-          if (candidateNode?.kind === "class") {
-            const methodId = `${resolved}.${ref.propertyName}`;
-            if (nodesById.has(methodId)) {
-              targetId = methodId;
+    // Java pass 2: now that every package and type is known, resolve imports by
+    // qualified name. A wildcard import (`com.acme.*`) links to every file in
+    // that package.
+    for (const [filePath, java] of javaFiles) {
+      for (const specifier of java.importedSpecifiers) {
+        if (specifier.endsWith(".*")) {
+          const packagePrefix = specifier.slice(0, -1);
+          for (const [qualifiedName, target] of javaTypeIndex) {
+            if (
+              qualifiedName.startsWith(packagePrefix) &&
+              !qualifiedName.slice(packagePrefix.length).includes(".") &&
+              target.filePath !== filePath
+            ) {
+              addEdge({ kind: "imports", from: filePath, to: target.filePath });
             }
           }
-        }
-
-        if (targetId === ref.fromId) {
           continue;
         }
 
-        addEdge({ kind: ref.kind, from: ref.fromId, to: targetId });
+        const target = javaTypeIndex.get(specifier);
+        if (target && target.filePath !== filePath) {
+          addEdge({ kind: "imports", from: filePath, to: target.filePath });
+        }
+      }
+    }
+
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    /** Type node id -> its resolved supertypes, so inherited calls can be found. */
+    const superTypes = new Map<string, string[]>();
+
+    // Two passes: heritage first, so that when calls are resolved the
+    // supertype chain is already known and an inherited method can be found.
+    for (const pass of ["heritage", "calls"] as const) {
+      for (const { filePath, refs } of pendingByFile) {
+        const localSymbols = localSymbolsByFile.get(filePath) ?? new Map();
+        const importSpecifiers = importSpecifiersByFile.get(filePath) ?? new Map();
+        const java = javaFiles.get(filePath);
+
+        for (const ref of refs) {
+          const isCall = ref.kind === "calls";
+          if (pass === "heritage" ? isCall : !isCall) {
+            continue;
+          }
+          const resolved = java
+            ? resolveJavaIdentifier(
+                ref.identifierName,
+                localSymbols,
+                importSpecifiers,
+                java.packageName,
+                javaTypeIndex
+              )
+            : resolveIdentifier(
+                ref.identifierName,
+                filePath,
+                localSymbols,
+                importSpecifiers,
+                localSymbolsByFile,
+                knownFiles
+              );
+          if (!resolved) {
+            continue;
+          }
+
+          let targetId = resolved;
+          if (ref.kind === "calls" && ref.propertyName) {
+            const candidateNode = nodesById.get(resolved);
+            if (
+              candidateNode?.kind === "class" ||
+              candidateNode?.kind === "interface"
+            ) {
+              const methodId = findMethodOnTypeOrSupertype(
+                resolved,
+                ref.propertyName,
+                nodesById,
+                superTypes
+              );
+              if (methodId) {
+                targetId = methodId;
+              } else if (java) {
+                // A Java bare call that resolves to no known method is usually a
+                // JDK or third-party method. Pointing the edge at the enclosing
+                // class instead would be noise, so drop it.
+                continue;
+              }
+            }
+          }
+
+          if (targetId === ref.fromId) {
+            continue;
+          }
+
+          if (ref.kind === "extends" || ref.kind === "implements") {
+            superTypes.set(ref.fromId, [
+              ...(superTypes.get(ref.fromId) ?? []),
+              targetId
+            ]);
+          }
+
+          addEdge({ kind: ref.kind, from: ref.fromId, to: targetId });
+        }
       }
     }
 
@@ -229,6 +323,75 @@ function resolveImportSpecifier(
  * otherwise to the target file node itself. Returns undefined for anything
  * that resolves to neither (a global/builtin, or an external package).
  */
+/**
+ * Finds `typeId.methodName`, walking up resolved supertypes when the type does
+ * not declare it itself. Without this an inherited call (`audit(...)` defined
+ * on a base class) would resolve to nothing useful.
+ */
+function findMethodOnTypeOrSupertype(
+  typeId: string,
+  methodName: string,
+  nodesById: Map<string, SymbolNode>,
+  superTypes: Map<string, string[]>,
+  seen = new Set<string>()
+): string | undefined {
+  if (seen.has(typeId)) {
+    return undefined;
+  }
+  seen.add(typeId);
+
+  const direct = `${typeId}.${methodName}`;
+  if (nodesById.has(direct)) {
+    return direct;
+  }
+
+  for (const superTypeId of superTypes.get(typeId) ?? []) {
+    const inherited = findMethodOnTypeOrSupertype(
+      superTypeId,
+      methodName,
+      nodesById,
+      superTypes,
+      seen
+    );
+    if (inherited) {
+      return inherited;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Java name resolution, in the order the language itself uses: a type declared
+ * in this file wins, then an explicit single-type import, then another type in
+ * the same package. Anything unresolved (a JDK type, a third-party class, a
+ * local variable used as a call receiver) is dropped rather than guessed —
+ * same precision-over-recall stance as the TS path.
+ */
+function resolveJavaIdentifier(
+  identifierName: string,
+  localSymbols: Map<string, string>,
+  importSpecifiers: Map<string, string>,
+  packageName: string | undefined,
+  javaTypeIndex: Map<string, { nodeId: string; filePath: string }>
+): string | undefined {
+  const local = localSymbols.get(identifierName);
+  if (local) {
+    return local;
+  }
+
+  const imported = importSpecifiers.get(identifierName);
+  if (imported) {
+    return javaTypeIndex.get(imported)?.nodeId;
+  }
+
+  if (packageName) {
+    return javaTypeIndex.get(`${packageName}.${identifierName}`)?.nodeId;
+  }
+
+  return undefined;
+}
+
 function resolveIdentifier(
   name: string,
   filePath: string,
