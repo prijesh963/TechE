@@ -8,9 +8,8 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "baseUrl": ".",
     "paths": {
-      "@copilot-architect/*": ["packages/*/src/index.ts"]
+      "@copilot-architect/*": ["./packages/*/src/index.ts"]
     }
   },
   "files": [],
