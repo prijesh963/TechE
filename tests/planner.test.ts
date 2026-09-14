@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "../packages/cli/src/index.js";
+import { SymbolGraphService } from "../packages/graph/src/index.js";
 import { FeaturePlanningService } from "../packages/planner/src/index.js";
 import type { FeaturePlanArtifact } from "../packages/planner/src/index.js";
 import {
@@ -80,6 +81,57 @@ describe("FeaturePlanningService", () => {
     expect(markdown).toContain("## Planning Context");
     expect(markdown).toContain("## Human Approval Checkpoint");
     expect(markdown).toContain("## Stack-Specific Plan");
+  });
+
+  it("classifies request intent/entities and cites graph edges in relevantFiles reasons", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoices/InvoiceApprovalController.ts":
+        "import { InvoiceApprovalService } from './InvoiceApprovalService';\n" +
+        "export class InvoiceApprovalController {\n" +
+        "  private service = new InvoiceApprovalService();\n" +
+        "  approveInvoice() { return this.service.approveInvoice(); }\n" +
+        "}\n",
+      "src/invoices/InvoiceApprovalService.ts":
+        "export class InvoiceApprovalService {\n" +
+        "  approveInvoice() { return true; }\n" +
+        "}\n"
+    });
+
+    // Without a graph.json yet, reasons fall back to entity/signal-only.
+    const withoutGraph = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      request: "Why is invoice approval failing?"
+    });
+
+    expect(withoutGraph.plan.requestIntent).toBe("debugging");
+    expect(withoutGraph.plan.requestEntities).toEqual(["invoice", "approval"]);
+    const controllerBefore = withoutGraph.plan.relevantFiles.find(
+      (file) => file.filePath === "src/invoices/InvoiceApprovalController.ts"
+    );
+    expect(controllerBefore?.reason).toContain("invoice");
+    expect(controllerBefore?.reason).not.toContain("imports `src/invoices");
+
+    await new SymbolGraphService().build({ startPath: repoRoot });
+
+    const withGraph = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      request: "Why is invoice approval failing?"
+    });
+
+    const controllerAfter = withGraph.plan.relevantFiles.find(
+      (file) => file.filePath === "src/invoices/InvoiceApprovalController.ts"
+    );
+    const serviceAfter = withGraph.plan.relevantFiles.find(
+      (file) => file.filePath === "src/invoices/InvoiceApprovalService.ts"
+    );
+
+    expect(controllerAfter?.reason).toContain(
+      "imports `src/invoices/InvoiceApprovalService.ts`"
+    );
+    expect(serviceAfter?.reason).toContain(
+      "is imported by `src/invoices/InvoiceApprovalController.ts`"
+    );
   });
 
   it("revises a draft plan in place without losing prior revisions", async () => {

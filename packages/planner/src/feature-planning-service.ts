@@ -2,7 +2,13 @@ import { access, mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { AdvancedAnalysisService, RepoDiscoveryService } from "@copilot-architect/core";
+import type { SymbolEdgeKind, SymbolGraph } from "@copilot-architect/graph";
 import { IndexingService, type SearchResult } from "@copilot-architect/indexer";
+import {
+  classifyIntent,
+  extractEntities,
+  type QueryIntentLabel
+} from "@copilot-architect/intent";
 import {
   CURRENT_SCHEMA_VERSION,
   type AdvancedAnalysis,
@@ -314,10 +320,17 @@ export class FeaturePlanningService {
     const planningContext = await loadPlanningContext(repoRoot);
     const indexer = new IndexingService();
     await indexer.index({ startPath: repoRoot, strictRoot: options.strictRoot });
+    // Intent-aware retrieval (see docs/CODEBASE_INTELLIGENCE_DESIGN.md
+    // section 4): reuse #3's pure classification/entity-extraction to
+    // search on the request's subject terms rather than the raw sentence.
+    const requestIntent = classifyIntent(request);
+    const requestEntities = extractEntities(request);
+    const refinedQuery =
+      requestEntities.length > 0 ? requestEntities.join(" ") : request;
     const searchResponse = await indexer.findSimilarFeatures({
       startPath: repoRoot,
       strictRoot: options.strictRoot,
-      query: request,
+      query: refinedQuery,
       limit: options.searchLimit ?? 12
     });
     const repo = repoMap.repos[0];
@@ -331,11 +344,17 @@ export class FeaturePlanningService {
       request,
       repoMap
     });
+    // Read-only, same precedent as packages/indexer's own tryReadGraph:
+    // never build the graph inline here, only cite it if it already exists.
+    const graph = await tryReadGraph(repoRoot);
     const plan = buildPlan(
       request,
+      requestIntent,
+      requestEntities,
       repoMap,
       repo,
       searchResponse.results,
+      graph,
       planningContext,
       advancedAnalysis
     );
@@ -347,6 +366,14 @@ export class FeaturePlanningService {
       markdown,
       searchResults: searchResponse.results
     };
+  }
+}
+
+async function tryReadGraph(repoRoot: string): Promise<SymbolGraph | undefined> {
+  try {
+    return await readJsonFile<SymbolGraph>(getArtifactFilePath(repoRoot, "graph"));
+  } catch {
+    return undefined;
   }
 }
 
@@ -386,22 +413,29 @@ async function loadPlanningContext(repoRoot: string): Promise<PlanningContext> {
 
 function buildPlan(
   request: string,
+  requestIntent: QueryIntentLabel,
+  requestEntities: string[],
   repoMap: UniversalRepoMap,
   repo: RepoMap,
   searchResults: SearchResult[],
+  graph: SymbolGraph | undefined,
   planningContext: PlanningContext,
   advancedAnalysis: AdvancedAnalysis
 ): FeaturePlanArtifact {
   const id = timestampId();
   const title = titleFromRequest(request);
-  const relevantFiles = searchResults.slice(0, 8).map(toRelevantFile);
+  const candidateFiles = new Set(searchResults.map((result) => result.relativePath));
+  const citations = buildGraphCitations(graph, candidateFiles);
+  const relevantFiles = searchResults
+    .slice(0, 8)
+    .map((result) => toRelevantFile(result, requestEntities, citations));
   const similarFeatureCandidates = searchResults
     .filter((result) => !result.isConfigFile)
     .slice(0, 6)
     .map((result) => ({
       filePath: result.relativePath,
       score: result.score,
-      reason: `Matched ${result.matchedFields.join(", ")} for the feature request.`
+      reason: describeRelevance(result, requestEntities, citations)
     }));
   const impactedModules = inferImpactedModules(searchResults, repo);
   const validationCommands = collectValidationCommands(
@@ -478,6 +512,8 @@ function buildPlan(
   return {
     ...featurePlan,
     requestInterpretation,
+    requestIntent,
+    requestEntities,
     repoArchitectureSummary: repoMap.summary.summary,
     planningContext: summarizePlanningContext(planningContext),
     relevantFiles,
@@ -1059,12 +1095,108 @@ function inferImpactedModules(searchResults: SearchResult[], repo: RepoMap): str
   ]).slice(0, 10);
 }
 
-function toRelevantFile(result: SearchResult): PlanFileReference {
+function toRelevantFile(
+  result: SearchResult,
+  requestEntities: string[],
+  citations: Map<string, GraphCitation[]>
+): PlanFileReference {
   return {
     filePath: result.relativePath,
     score: result.score,
-    reason: `Matched ${result.matchedFields.join(", ")} in local index search.`
+    reason: describeRelevance(result, requestEntities, citations)
   };
+}
+
+interface GraphCitation {
+  phrase: string;
+  otherFile: string;
+}
+
+const EDGE_CITATION_PHRASES: Record<
+  SymbolEdgeKind,
+  { outgoing: string; incoming: string }
+> = {
+  imports: { outgoing: "imports", incoming: "is imported by" },
+  calls: { outgoing: "calls into", incoming: "is called by" },
+  extends: { outgoing: "extends", incoming: "is extended by" },
+  implements: { outgoing: "implements", incoming: "is implemented by" }
+};
+
+/**
+ * File-level "why relevant" citations from the symbol/dependency graph
+ * (see docs/CODEBASE_INTELLIGENCE_DESIGN.md section 4). Only edges where
+ * both endpoints are already in this plan's candidate file set become
+ * citations — a graph edge to some unrelated file elsewhere in the repo
+ * doesn't answer "why does this matter to this plan".
+ */
+function buildGraphCitations(
+  graph: SymbolGraph | undefined,
+  candidateFiles: Set<string>
+): Map<string, GraphCitation[]> {
+  const citations = new Map<string, GraphCitation[]>();
+
+  if (!graph) {
+    return citations;
+  }
+
+  const fileById = new Map(graph.nodes.map((node) => [node.id, node.filePath]));
+  const seenKeys = new Map<string, Set<string>>();
+
+  const add = (file: string, citation: GraphCitation): void => {
+    const key = `${citation.phrase}|${citation.otherFile}`;
+    const seen = seenKeys.get(file) ?? new Set<string>();
+    if (seen.has(key)) return;
+    seen.add(key);
+    seenKeys.set(file, seen);
+
+    const list = citations.get(file) ?? [];
+    list.push(citation);
+    citations.set(file, list);
+  };
+
+  for (const edge of graph.edges) {
+    const fromFile = fileById.get(edge.from);
+    const toFile = fileById.get(edge.to);
+
+    if (!fromFile || !toFile || fromFile === toFile) continue;
+    if (!candidateFiles.has(fromFile) || !candidateFiles.has(toFile)) continue;
+
+    const phrase = EDGE_CITATION_PHRASES[edge.kind];
+    add(fromFile, { phrase: phrase.outgoing, otherFile: toFile });
+    add(toFile, { phrase: phrase.incoming, otherFile: fromFile });
+  }
+
+  return citations;
+}
+
+function describeRelevance(
+  result: SearchResult,
+  requestEntities: string[],
+  citations: Map<string, GraphCitation[]>
+): string {
+  const parts: string[] = [];
+  const matchedEntities = requestEntities.filter(
+    (entity) =>
+      result.relativePath.toLowerCase().includes(entity) ||
+      result.symbols.some((symbol) => symbol.name.toLowerCase().includes(entity)) ||
+      result.textPreview.toLowerCase().includes(entity)
+  );
+
+  if (matchedEntities.length > 0) {
+    parts.push(`matches entity term(s) ${matchedEntities.join(", ")}`);
+  } else if (result.matchedFields.length > 0) {
+    parts.push(`matched ${result.matchedFields.join(", ")} in local index search`);
+  }
+
+  for (const citation of (citations.get(result.relativePath) ?? []).slice(0, 2)) {
+    parts.push(`${citation.phrase} \`${citation.otherFile}\``);
+  }
+
+  if (result.signals.includes("recency")) {
+    parts.push("recently/frequently changed");
+  }
+
+  return parts.length > 0 ? `${parts.join("; ")}.` : "Matched in local index search.";
 }
 
 function createPlanArtifactPaths(repoRoot: string, id: string): PlanArtifactPaths {

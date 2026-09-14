@@ -538,3 +538,103 @@ missing) and CLI command `intent "query"`.
   `debugging`, extracts entities `["customer", "creation"]`, and returns
   the controller/service/validator under `likelyComponents` and their
   specs under `relevantTests`.
+
+## 4. "Why Relevant" Citations (`packages/planner`) — Implemented
+
+### Scope for this phase
+
+Two changes to `FeaturePlanningService.createPlanPreview()`, both
+additive to the existing pipeline:
+
+1. **Intent-aware retrieval.** `createPlanPreview` currently calls
+   `IndexingService.findSimilarFeatures({ query: request, ... })` with the
+   raw request string. Reusing #3's pure `classifyIntent`/`extractEntities`
+   functions (no new I/O — they're synchronous, no-dependency helpers),
+   the search query becomes the extracted entities when any were found,
+   falling back to the raw request otherwise — exactly `packages/intent`'s
+   own `refinedQuery` logic, applied here instead of duplicated.
+2. **Graph-grounded reasons.** `PlanFileReference.reason` is currently
+   `"Matched ${matchedFields.join(", ")} in local index search."` —
+   accurate but generic; it never says *what* was matched or *why a file
+   matters relative to the others in the plan*. The new `reason` cites, in
+   order: which extracted entity terms the file actually matches, which
+   other candidate files it's connected to via the symbol/dependency graph
+   (naming the specific file and edge kind — "imports", "is called by",
+   etc. — not just a signal flag), and whether it's a recency hotspot.
+
+### Design decisions
+
+- **Read-only graph access, same as #2.** `createPlanPreview` reads
+  `graph.json` if it exists (`tryReadGraph`, identical precedent to
+  `packages/indexer`'s own helper) and degrades gracefully to
+  entity/signal-only reasons if it doesn't. Never builds the graph inline
+  — that's a full AST parse and too expensive to run on every plan
+  generation.
+- **Citations are relative to the candidate list, not the whole repo.**
+  A graph edge only becomes a citation when *both* endpoints are already
+  in the search results being explained (default top 12). An edge to some
+  unrelated file elsewhere in the repo doesn't answer "why does this
+  matter to this plan" — it's noise. This mirrors #2's own graph-signal
+  scoping (only surfaces neighbors of files already ranked by another
+  signal).
+- **Edge citations name the specific file and relationship**, e.g.
+  `` imports `src/hooks/useInvoiceApproval.ts` ``, not "connected via the
+  graph to a top match" (that generic phrasing is #3's, which deliberately
+  avoided this level of detail since its job was classification, not
+  citation). Item #4 is where the graph read finally earns its keep for
+  the human/agent reading a plan.
+- **`FeaturePlanArtifact` gains two additive fields** —
+  `requestIntent: QueryIntentLabel` and `requestEntities: string[]` —
+  surfacing #3's classification on the plan itself (JSON and the "Request
+  Interpretation" markdown section) so it's visible why the search query
+  was refined the way it was. No existing field changes shape; nothing
+  else consuming `FeaturePlanArtifact` needed updating (no other package
+  constructs one directly — always via `FeaturePlanningService`).
+- **`PlanFileReference`'s shape is unchanged** (`filePath`, `reason`,
+  `score`) — only the text `reason` carries the richer content, so nothing
+  reading that interface needs updating.
+
+### Behavior
+
+In `buildPlan`:
+
+1. Compute `requestIntent = classifyIntent(request)` and
+   `requestEntities = extractEntities(request)` (already done once in
+   `createPlanPreview` to build the refined search query — the same
+   values are threaded through, not recomputed).
+2. Read the graph via `tryReadGraph(repoRoot)`.
+3. Build a file→citations map from `graph.edges`, keeping only edges
+   where both endpoint files are in the current `searchResults` set;
+   dedupe by (file, edge kind + direction, other file).
+4. `describeRelevance(result, requestEntities, citations)` composes the
+   `reason` string for both `relevantFiles` and `similarFeatureCandidates`
+   (previously worded slightly differently for each list; now unified,
+   since both are answering the same question): entity matches, then up
+   to 2 graph citations, then a recency note if `result.signals` includes
+   `"recency"`.
+
+### Compatibility
+
+- `PlanFileReference`'s interface shape is unchanged; only the `.reason`
+  string content is richer.
+- `FeaturePlanArtifact` gains two new required-but-always-populated fields
+  (`requestIntent`, `requestEntities`). No other package constructs a
+  `FeaturePlanArtifact` literal directly, so this is safe without an
+  optional-field compromise.
+- Retrieval still calls the unmodified `IndexingService.findSimilarFeatures`
+  — only the query string passed to it changes when entities are found.
+
+### Implementation Notes
+
+- `packages/planner` gained two new workspace dependencies:
+  `@copilot-architect/intent` (for `classifyIntent`/`extractEntities`,
+  pure functions, no additional I/O) and `@copilot-architect/graph` (for
+  the `SymbolGraph`/`SymbolEdgeKind` types — read-only, no build).
+- Verified with a fixture mirroring #1's own resolution test
+  (`InvoiceApprovalController` → `InvoiceApprovalService` →
+  `InvoiceValidator`, connected by real `import`/`calls` edges) plus a
+  `graph` build step before planning: `relevantFiles` reasons cite the
+  specific downstream file and edge kind, not just "graph" as a flag.
+- A repo with no `graph.json` yet (the common case for a first-time
+  `plan` call before anyone has run `graph`) falls back to entity/signal
+  reasons only — verified no regression in that path either.

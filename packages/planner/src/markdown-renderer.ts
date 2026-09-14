@@ -13,6 +13,7 @@ export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
     "",
     "## Request Interpretation",
     plan.requestInterpretation,
+    `Classified as **${plan.requestIntent}** intent (entities: ${plan.requestEntities.join(", ") || "none"}).`,
     "",
     "## Repo Architecture Summary",
     plan.repoArchitectureSummary,

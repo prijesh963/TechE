@@ -9,6 +9,7 @@ import type {
   ValidationCommand
 } from "@copilot-architect/shared";
 import type { WorkspaceRepoDescriptor } from "@copilot-architect/core";
+import type { QueryIntentLabel } from "@copilot-architect/intent";
 
 import type { SearchResult, WorkspaceSearchResult } from "@copilot-architect/indexer";
 
@@ -39,6 +40,11 @@ export interface FeaturePlanPreviewResult {
 
 export interface FeaturePlanArtifact extends FeaturePlan {
   requestInterpretation: string;
+  /** Classified via @copilot-architect/intent's classifyIntent(request). */
+  requestIntent: QueryIntentLabel;
+  /** Extracted via @copilot-architect/intent's extractEntities(request); also
+   *  what refined the search query behind relevantFiles/similarFeatureCandidates. */
+  requestEntities: string[];
   repoArchitectureSummary: string;
   planningContext: PlanningContextSummary;
   relevantFiles: PlanFileReference[];
