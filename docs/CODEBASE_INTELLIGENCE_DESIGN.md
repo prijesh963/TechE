@@ -135,7 +135,7 @@ script after items #1–#4 land to get the "after" numbers for the same
 sample repos and the same request — that comparison is what the
 measurement harness (#5) formalizes.
 
-## 1. Symbol/Dependency Graph (`packages/graph`)
+## 1. Symbol/Dependency Graph (`packages/graph`) — Implemented
 
 ### Scope for this phase
 
@@ -222,3 +222,31 @@ breadth."
   Nothing existing changes shape.
 - `CURRENT_SCHEMA_VERSION` bump not required — no existing artifact
   gains or loses fields.
+
+### Implementation Notes
+
+- Shipped as designed: `SymbolGraphService.build()` in `packages/graph`,
+  writing `.copilot-architect/graph.json`; `get_symbol_graph` MCP tool
+  (read-only, mirroring `repo_map`); `graph` CLI command. File enumeration
+  reuses `scanRepository`/`findRepoRoot` from `packages/shared` directly
+  (the same primitives `RepoDiscoveryService` itself builds on) rather than
+  depending on the heavier `RepoDiscoveryService`/`adapters` — keeps
+  `packages/graph`'s own dependency footprint to just `shared` +
+  `typescript`.
+- Parser: the TypeScript compiler API (`ts.createSourceFile`, no full
+  `Program`/type-checker), not Tree-sitter — sufficient for the TS/JS-only
+  scope and avoids a new dependency, per the "depth over breadth, revisit
+  Tree-sitter only when expanding language coverage" call above.
+- Edge resolution is precision-first by design: `extends`/`implements`
+  and `calls` are only recorded when the callee/heritage identifier
+  resolves unambiguously to a same-file symbol or an imported binding
+  (with the import specifier resolved to an in-repo file); anything
+  ambiguous or pointing at a global/external symbol is dropped rather than
+  guessed. `service.method()`-style calls resolve to the specific method
+  node when the receiver identifier is known to be that class; `this.x()`
+  and deeper property chains are intentionally not attempted without a
+  type checker.
+- Verified end to end against this repo's own `packages/planner` (110
+  nodes, 98 edges, 0 diagnostics) and against `samples/node-api`, in
+  addition to the unit/integration suite in `tests/graph.test.ts` and
+  `tests/mcp-server.test.ts`.

@@ -12,6 +12,7 @@
   "references": [
     { "path": "../agents" },
     { "path": "../core" },
+    { "path": "../graph" },
     { "path": "../indexer" },
     { "path": "../instructions" },
     { "path": "../mcp-server" },

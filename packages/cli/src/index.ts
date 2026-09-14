@@ -17,6 +17,7 @@ import {
   type RepoReadinessReport,
   type WorkspaceServiceResult
 } from "@copilot-architect/core";
+import { SymbolGraphService, type SymbolGraphResult } from "@copilot-architect/graph";
 import {
   IndexingService,
   type IndexResult,
@@ -100,6 +101,7 @@ export interface CliResult {
 const commandDescriptions = {
   init: "Initialize local .copilot-architect artifacts.",
   analyze: "Analyze the current repo or workspace.",
+  graph: "Build the symbol/dependency graph.",
   index: "Build the local searchable index.",
   search: "Search the local repo index.",
   plan: "Generate a feature implementation plan.",
@@ -126,6 +128,7 @@ const commandUsage = {
   init: "npm run cli -- init [--path <repo>] [--overwrite] [--json]",
   analyze:
     "npm run cli -- analyze [path] [--path <repo>|--root <repo>] [--json] [--output <file>]",
+  graph: "npm run cli -- graph [path] [--path <repo>|--root <repo>] [--json]",
   index:
     "npm run cli -- index [path] [--path <repo>|--root <repo>] [--rebuild] [--json]",
   search:
@@ -565,6 +568,27 @@ export async function runCli(
     }
   }
 
+  if (rawCommand === "graph") {
+    try {
+      const options = parseGraphArgs(commandArgs);
+      const result = await new SymbolGraphService().build({
+        startPath: options.startPath,
+        strictRoot: options.strictRoot
+      });
+
+      stdout(
+        options.json
+          ? JSON.stringify(result.graph, null, 2)
+          : getGraphSummaryText(result)
+      );
+
+      return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
   if (rawCommand === "index") {
     try {
       const options = parseIndexArgs(commandArgs);
@@ -826,6 +850,12 @@ interface AnalyzeCliOptions {
   startPath?: string;
   strictRoot?: boolean;
   outputPath?: string;
+  json: boolean;
+}
+
+interface GraphCliOptions {
+  startPath?: string;
+  strictRoot?: boolean;
   json: boolean;
 }
 
@@ -1198,6 +1228,64 @@ function parseAnalyzeArgs(args: string[]): AnalyzeCliOptions {
   }
 
   return options;
+}
+
+function parseGraphArgs(args: string[]): GraphCliOptions {
+  const options: GraphCliOptions = {
+    json: false
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--path" || arg === "--root") {
+      const startPath = args[index + 1];
+
+      if (!startPath) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+
+      options.startPath = startPath;
+      options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (!arg.startsWith("-") && !options.startPath) {
+      options.startPath = arg;
+      continue;
+    }
+
+    throw new Error(`Unknown graph argument: ${arg}`);
+  }
+
+  return options;
+}
+
+function getGraphSummaryText(result: SymbolGraphResult): string {
+  const { graph } = result;
+  const kindCounts = new Map<string, number>();
+  for (const node of graph.nodes) {
+    kindCounts.set(node.kind, (kindCounts.get(node.kind) ?? 0) + 1);
+  }
+  const edgeCounts = new Map<string, number>();
+  for (const edge of graph.edges) {
+    edgeCounts.set(edge.kind, (edgeCounts.get(edge.kind) ?? 0) + 1);
+  }
+
+  return [
+    `${PROJECT_NAME}: graph`,
+    "",
+    `Nodes: ${graph.nodes.length} (${[...kindCounts.entries()].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"})`,
+    `Edges: ${graph.edges.length} (${[...edgeCounts.entries()].map(([kind, count]) => `${count} ${kind}`).join(", ") || "none"})`,
+    `Diagnostics: ${graph.diagnostics.length}`,
+    `Graph JSON: ${result.jsonPath}`
+  ].join("\n");
 }
 
 function getAnalyzeSummaryText(

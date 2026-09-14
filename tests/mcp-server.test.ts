@@ -36,6 +36,7 @@ describe("Copilot Architect MCP server", () => {
     expect(names).toEqual(
       expect.arrayContaining([
         "repo_map",
+        "get_symbol_graph",
         "workspace_map",
         "search_repo",
         "search_across_repos",
@@ -83,6 +84,41 @@ describe("Copilot Architect MCP server", () => {
     ).toContain("src/invoices/invoice-service.ts");
     expect(plan.data.plan.task).toBe("Add invoice approval workflow");
     expect(validationCommands.data.commands.length).toBeGreaterThan(0);
+  });
+
+  it("builds the symbol/dependency graph through get_symbol_graph", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice-service.ts":
+        "export function approveInvoice() { return 'approved invoice'; }",
+      "src/server.ts": [
+        "import { approveInvoice } from './invoice-service.js';",
+        "",
+        "export function approve() {",
+        "  return approveInvoice();",
+        "}"
+      ].join("\n")
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const graph = await callJsonTool(client, "get_symbol_graph", { path: repoRoot });
+
+    expect(graph.ok).toBe(true);
+    expect(graph.data.nodes.map((node: { id: string }) => node.id)).toEqual(
+      expect.arrayContaining([
+        "src/server.ts#approve",
+        "src/invoice-service.ts#approveInvoice"
+      ])
+    );
+    expect(graph.data.edges).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "calls",
+          from: "src/server.ts#approve",
+          to: "src/invoice-service.ts#approveInvoice"
+        }
+      ])
+    );
   });
 
   it("handles missing latest artifacts gracefully", async () => {

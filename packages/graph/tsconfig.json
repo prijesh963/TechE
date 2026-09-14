@@ -9,14 +9,5 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [
-    { "path": "../agents" },
-    { "path": "../core" },
-    { "path": "../graph" },
-    { "path": "../indexer" },
-    { "path": "../planner" },
-    { "path": "../reviewer" },
-    { "path": "../shared" },
-    { "path": "../validator" }
-  ]
+  "references": [{ "path": "../shared" }]
 }

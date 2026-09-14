@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { AgentService } from "@copilot-architect/agents";
 import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core";
+import { SymbolGraphService } from "@copilot-architect/graph";
 import { IndexingService } from "@copilot-architect/indexer";
 import {
   FeaturePlanningService,
@@ -77,6 +78,21 @@ export function createCopilotArchitectTools(
       commonSchema,
       true,
       async (args) => ensureRepoMap(resolveStartPath(args, options))
+    ),
+    tool(
+      "get_symbol_graph",
+      "Build (or rebuild) the repo's symbol/dependency graph: file, class, " +
+        "function, and method nodes, plus imports/calls/extends/implements " +
+        "edges between them. Use this to find what actually depends on or " +
+        "is called by a piece of code, not just what shares keywords with it.",
+      commonSchema,
+      true,
+      async (args) =>
+        (
+          await new SymbolGraphService().build({
+            startPath: resolveStartPath(args, options)
+          })
+        ).graph
     ),
     tool(
       "workspace_map",
