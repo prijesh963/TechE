@@ -19,6 +19,7 @@
     { "path": "./packages/adapters" },
     { "path": "./packages/indexer" },
     { "path": "./packages/graph" },
+    { "path": "./packages/intent" },
     { "path": "./packages/planner" },
     { "path": "./packages/validator" },
     { "path": "./packages/reviewer" },

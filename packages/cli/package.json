@@ -14,6 +14,7 @@
     "@copilot-architect/graph": "0.1.0",
     "@copilot-architect/indexer": "0.1.0",
     "@copilot-architect/instructions": "0.1.0",
+    "@copilot-architect/intent": "0.1.0",
     "@copilot-architect/mcp-server": "0.1.0",
     "@copilot-architect/planner": "0.1.0",
     "@copilot-architect/reviewer": "0.1.0",

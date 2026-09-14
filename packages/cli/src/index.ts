@@ -26,6 +26,11 @@ import {
   type WorkspaceSearchResponse
 } from "@copilot-architect/indexer";
 import {
+  QueryIntentService,
+  type QueryIntentResult,
+  type RelevantFileSummary
+} from "@copilot-architect/intent";
+import {
   InstructionService,
   type InstructionGenerationSummary,
   type InstructionPreviewResult,
@@ -104,6 +109,7 @@ const commandDescriptions = {
   graph: "Build the symbol/dependency graph.",
   index: "Build the local searchable index.",
   search: "Search the local repo index.",
+  intent: "Classify a query's intent and resolve likely relevant files.",
   plan: "Generate a feature implementation plan.",
   commands: "Manage custom validation command configuration.",
   validate: "Run safe validation commands.",
@@ -133,6 +139,8 @@ const commandUsage = {
     "npm run cli -- index [path] [--path <repo>|--root <repo>] [--rebuild] [--json]",
   search:
     'npm run cli -- search "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
+  intent:
+    'npm run cli -- intent "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
   plan: 'npm run cli -- plan "feature request" [--path <repo>|--root <repo>] [--json]',
   commands: "npm run cli -- commands <list|validate> [--path <repo>] [--json]",
   validate:
@@ -615,6 +623,20 @@ export async function runCli(
     }
   }
 
+  if (rawCommand === "intent") {
+    try {
+      const options = parseIntentArgs(commandArgs);
+      const result = await new QueryIntentService().analyze(options);
+      stdout(
+        options.json ? JSON.stringify(result, null, 2) : getIntentSummaryText(result)
+      );
+      return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
   if (rawCommand === "plan") {
     try {
       const options = parsePlanArgs(commandArgs);
@@ -857,6 +879,14 @@ interface GraphCliOptions {
   startPath?: string;
   strictRoot?: boolean;
   json: boolean;
+}
+
+interface IntentCliOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  query: string;
+  json: boolean;
+  limit?: number;
 }
 
 interface InitCliOptions {
@@ -1572,6 +1602,62 @@ function parseSearchArgs(args: string[]): SearchCliOptions {
   return options;
 }
 
+function parseIntentArgs(args: string[]): IntentCliOptions {
+  const queryParts: string[] = [];
+  const options: IntentCliOptions = {
+    query: "",
+    json: false
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--limit") {
+      const limit = Number(args[index + 1]);
+
+      if (!Number.isFinite(limit) || limit <= 0) {
+        throw new Error("Missing or invalid value for --limit");
+      }
+
+      options.limit = limit;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--path" || arg === "--root") {
+      const startPath = args[index + 1];
+
+      if (!startPath) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+
+      options.startPath = startPath;
+      options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown intent argument: ${arg}`);
+    }
+
+    queryParts.push(arg);
+  }
+
+  options.query = queryParts.join(" ").trim();
+
+  if (!options.query) {
+    throw new Error("Missing intent query");
+  }
+
+  return options;
+}
+
 function getIndexSummaryText(result: IndexResult): string {
   return [
     `${PROJECT_NAME}: index`,
@@ -1612,6 +1698,30 @@ function getSearchText(response: SearchResponse): string {
       lines.push("---");
     }
   }
+
+  return lines.join("\n");
+}
+
+function getIntentSummaryText(result: QueryIntentResult): string {
+  const lines = [
+    `${PROJECT_NAME}: intent`,
+    "",
+    `Query: ${result.query}`,
+    `Intent: ${result.intent}`,
+    `Entities: ${result.entities.join(", ") || "none"}`,
+    `Refined query: ${result.refinedQuery}`
+  ];
+
+  const section = (title: string, items: RelevantFileSummary[]) => {
+    lines.push("", `${title} (${items.length})`);
+    for (const item of items) {
+      lines.push(`- ${item.filePath} (score ${item.score}) — ${item.reason}`);
+    }
+  };
+
+  section("Likely components", result.likelyComponents);
+  section("Relevant tests", result.relevantTests);
+  section("Recent changes", result.recentChanges);
 
   return lines.join("\n");
 }

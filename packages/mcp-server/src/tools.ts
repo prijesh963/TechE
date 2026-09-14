@@ -4,6 +4,7 @@ import { AgentService } from "@copilot-architect/agents";
 import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core";
 import { SymbolGraphService } from "@copilot-architect/graph";
 import { IndexingService } from "@copilot-architect/indexer";
+import { QueryIntentService } from "@copilot-architect/intent";
 import {
   FeaturePlanningService,
   WorkspacePlanningService
@@ -167,6 +168,21 @@ export function createCopilotArchitectTools(
           startPath: resolveStartPath(args, options),
           query: stringArg(args, "query"),
           limit: numberArg(args, "limit", 20)
+        })
+    ),
+    tool(
+      "analyze_query_intent",
+      "Classify a natural-language query's intent (debugging/feature/refactor/test) " +
+        "and resolve its likely components, relevant tests, and recently-changed " +
+        "files by running the query through search_repo's hybrid ranking. Use " +
+        "this before planning or investigating to scope which files matter.",
+      searchSchema,
+      true,
+      async (args) =>
+        new QueryIntentService().analyze({
+          startPath: resolveStartPath(args, options),
+          query: stringArg(args, "query"),
+          limit: numberArg(args, "limit", 8)
         })
     ),
     tool(

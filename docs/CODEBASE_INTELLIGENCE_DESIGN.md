@@ -412,3 +412,129 @@ backward-compatibility pattern as `searchStats`). `SearchResult` gains
   zero-keyword-overlap file, no graph signal when no graph exists,
   recency signal from precomputed `gitActivity`, and ordinary lexical/
   structural signals still reported for a plain keyword match.
+
+## 3. Query/Intent Classification (`packages/intent`) — Implemented
+
+### Scope for this phase
+
+The feedback's own illustration (`"Why is customer creation failing?"` →
+intent `Debugging`, entities `Customer creation`, likely components,
+relevant tests, recent changes) is the spec. The question is how much of
+it to build from scratch versus reuse.
+
+**Decision: reuse #2's hybrid search entirely; add only classification and
+result-shaping on top of it.** `likelyComponents`/`relevantTests`/
+`recentChanges` are not a new resolution mechanism — they are the
+existing `IndexingService.search()` results (already graph- and
+recency-aware, per #2), partitioned by `isTestFile` and by whether
+`signals` includes `"recency"`. Reinventing entity-to-component
+resolution independently of the retrieval this design doc just built
+would be pure duplication.
+
+The one genuinely new mechanism is **query refinement**: `"Why is
+customer creation failing?"` tokenizes today into `why`, `is`, `customer`,
+`creation`, `failing` — three of those five terms are noise for BM25
+(common, low-signal words that dilute matching against file content
+that never contains "why" or "is" meaningfully). Extracting entities
+(`customer`, `creation`) and searching on *that* instead of the raw
+sentence is the "ahead of retrieval" part of the name: intent
+classification happens before the search call, not just as a label
+applied to its output afterward.
+
+### Design decisions
+
+- **Heuristic, not NLP.** Both intent classification and entity
+  extraction are regex/stopword-list heuristics, consistent with every
+  other classification in this codebase (`createRisks`'s security/
+  migration signal regexes, `AdvancedAnalysisService`'s pattern
+  detectors). No new dependency, no model call.
+- **Intent labels are deliberately few and ordered by precedence**:
+  `debugging` > `refactor` > `test` > `feature` > `unknown`. A query
+  matching multiple categories (rare) resolves to the operationally
+  clearer one — a "why is X broken, should I refactor it" query is a
+  debugging query first.
+- **Entities exclude intent-trigger words.** "failing", "fix", "add",
+  "implement" etc. describe the *action* (captured by `intent`), not the
+  *subject* — including them in `entities` would just re-inject the noise
+  query refinement is meant to remove.
+- **Not wired into `FeaturePlanningService` in this phase.** Swapping the
+  raw `request` string for a refined query inside plan generation would
+  touch a widely-exercised, already-tested code path for a marginal
+  precision gain (most test/production requests are already short and
+  entity-dense, e.g. "Add invoice approval workflow"). That integration —
+  giving `PlanFileReference.reason` real citations — is squarely item #4's
+  job, not a reason to touch planner internals here. `packages/intent` is
+  additive and standalone: a new service, MCP tool, and CLI command that
+  compose with the existing pipeline without modifying it.
+
+### Schema
+
+```ts
+export type QueryIntentLabel = "debugging" | "feature" | "refactor" | "test" | "unknown";
+
+export interface RelevantFileSummary {
+  filePath: string;
+  reason: string;          // synthesized from which SearchResult.signals fired
+  score: number;
+  signals: SearchSignal[];
+  anchor?: SearchAnchor;
+}
+
+export interface QueryIntentResult extends GeneratedArtifact {
+  repoRoot: string;
+  query: string;
+  intent: QueryIntentLabel;
+  entities: string[];
+  refinedQuery: string;
+  likelyComponents: RelevantFileSummary[];  // non-test results
+  relevantTests: RelevantFileSummary[];     // isTestFile results
+  recentChanges: RelevantFileSummary[];     // results with signals including "recency"
+}
+```
+
+Not persisted as a `.copilot-architect/` artifact — it's a point-in-time
+answer to one query, not repo state, so there is nothing durable to write
+(unlike `repo-map.json`/`graph.json`/`index.json`).
+
+### Behavior
+
+`QueryIntentService.analyze({ startPath, query, limit })`:
+
+1. Classify intent and extract entities from the raw query (pure
+   functions, no I/O).
+2. Build `refinedQuery` from the entities (falls back to the raw query
+   if entity extraction found nothing usable).
+3. Call the existing `IndexingService.search()` with `refinedQuery` —
+   this is the only place #3 touches retrieval, and it calls the
+   unmodified #2 pipeline.
+4. Partition the results: non-test → `likelyComponents` (capped), test →
+   `relevantTests` (capped), `signals.includes("recency")` → 
+   `recentChanges` (capped) — categories can and do overlap, matching the
+   feedback's own example where `CustomerService.java` appears under both
+   "likely components" and "recent changes".
+5. Synthesize a human-readable `reason` per result from which signals
+   fired (e.g., "matches entity term(s) customer; connected via the
+   symbol/dependency graph to a top match").
+
+New MCP tool `analyze_query_intent` (read-only, same precedent as
+`search_repo`/`find_similar_feature` — internally may build the index if
+missing) and CLI command `intent "query"`.
+
+### Compatibility
+
+- Fully additive: new package, new MCP tool, new CLI command. Nothing
+  existing changes shape or behavior.
+
+### Implementation Notes
+
+- `packages/intent` depends only on `@copilot-architect/indexer` (for
+  search) and `@copilot-architect/shared` (for `CURRENT_SCHEMA_VERSION`/
+  `GeneratedArtifact`) — no direct dependency on `@copilot-architect/graph`
+  or `@copilot-architect/core`, since the search it calls already carries
+  the graph and recency signals.
+- Verified against the feedback's own worked example: a fixture with
+  `CustomerController`/`CustomerService`/`CustomerValidator` and their
+  spec files — `"Why is customer creation failing?"` classifies as
+  `debugging`, extracts entities `["customer", "creation"]`, and returns
+  the controller/service/validator under `likelyComponents` and their
+  specs under `relevantTests`.

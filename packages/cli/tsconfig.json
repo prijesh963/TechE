@@ -15,6 +15,7 @@
     { "path": "../graph" },
     { "path": "../indexer" },
     { "path": "../instructions" },
+    { "path": "../intent" },
     { "path": "../mcp-server" },
     { "path": "../planner" },
     { "path": "../reviewer" },

@@ -79,6 +79,7 @@ Run any command with `npm run cli -- <command> [flags]` or `copilot-architect <c
 | `graph`                      | Build the symbol/dependency graph and write `graph.json`                              |
 | `index`                      | Build the local searchable file index                                                 |
 | `search "query"`             | Search the local index                                                                |
+| `intent "query"`             | Classify a query's intent and resolve likely components/tests/recent changes          |
 | `plan "feature"`             | Generate a feature implementation plan (revision 1)                                   |
 | `plan revisions`             | List a plan's revisions with status and approval state                                |
 | `plan show`                  | Show a plan revision (defaults to the latest draft)                                   |
@@ -389,6 +390,7 @@ Start: `npm run cli -- mcp [--path <repo>]`
 | `detect_build_commands`     | Build commands                                                                                                                      |
 | `detect_test_commands`      | Test commands                                                                                                                       |
 | `search_repo`               | Hybrid search the local index (keyword + path/symbol + graph-connected + recency; see `signals` per result)                         |
+| `analyze_query_intent`      | Classify a query's intent (debugging/feature/refactor/test) and resolve likely components, tests, and recent changes                |
 | `search_across_repos`       | Search across all workspace repos                                                                                                   |
 | `find_similar_feature`      | Find files similar to a described feature                                                                                           |
 | `find_impacted_files`       | List files likely affected by a change                                                                                              |
@@ -508,6 +510,7 @@ copilot-architect/
 │   ├── adapters/        language/framework/toolchain adapters
 │   ├── indexer/         file indexing and search
 │   ├── graph/            symbol/dependency graph (classes, functions, imports, calls)
+│   ├── intent/           query intent classification (debugging/feature/refactor/test)
 │   ├── planner/         feature planning, handoff, workspace planning
 │   ├── validator/       validation engine, safety policy, audit, risk assessment
 │   ├── reviewer/        review report generation
