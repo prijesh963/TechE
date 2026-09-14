@@ -78,12 +78,15 @@ Run any command with `npm run cli -- <command> [flags]` or `copilot-architect <c
 | `analyze` | Analyze the repo or workspace and write `repo-map.json` |
 | `index` | Build the local searchable file index |
 | `search "query"` | Search the local index |
-| `plan "feature"` | Generate a feature implementation plan |
+| `plan "feature"` | Generate a feature implementation plan (revision 1) |
+| `plan revisions` | List a plan's revisions with status and approval state |
+| `plan show` | Show a plan revision (defaults to the latest draft) |
+| `plan approve` | Approve a specific revision (`--revision <n> --by <name>`) |
 | `commands list` | List detected + custom validation commands |
 | `commands validate` | Validate `.copilot-architect/commands.json` |
 | `validate` | Run safe build/test/lint/format commands |
 | `review` | Generate a review report from git diff + validation evidence |
-| `handoff` | Generate an implementation handoff prompt (requires `--approve`) |
+| `handoff` | Generate an implementation handoff prompt (requires `--approve` and an approved plan) |
 | `agents install` | Install custom Copilot agent templates under `.github/agents/` |
 | `agents list` | List available agent templates |
 | `agents validate` | Validate installed agent files |
@@ -140,12 +143,20 @@ npm run cli -- search "invoice"             # search the index
 
 ```bash
 npm run cli -- plan "Add invoice approval workflow"
-# writes .copilot-architect/plans/latest-plan.md and latest-plan.json
+# writes revision 1 to .copilot-architect/plans/latest-plan.md and latest-plan.json
 ```
 
-Review the plan, make adjustments, then approve:
+Review the plan and revise as needed (each call edits the draft in place — nothing is discarded):
 
 ```bash
+npm run cli -- plan revisions               # list revisions with status
+npm run cli -- plan show --revision 1       # inspect a specific revision
+```
+
+Once the plan looks right, approve the exact revision — approval is required before a handoff can be generated:
+
+```bash
+npm run cli -- plan approve --revision 1 --by "your-name"
 npm run cli -- handoff --plan latest --approve
 # copies prompt to clipboard and writes .copilot-architect/handoffs/latest-handoff.md
 ```
@@ -373,7 +384,9 @@ Start: `npm run cli -- mcp [--path <repo>]`
 | `analyze_impact` | Summarize impact analysis for a feature request |
 | `analyze_cross_repo_impact` | Cross-repo impact for workspace plans |
 | `generate_plan_context` | Return planning context without writing artifacts |
-| `generate_feature_plan` | Write plan artifacts (requires `approved=true`) |
+| `generate_feature_plan` | Write plan revision 1 (requires `approved=true`; fails over an existing draft unless `restart=true`) |
+| `revise_feature_plan` | Edit the current draft in place with feedback, preserving revision history |
+| `approve_plan` | Approve one specific revision (`revision` required) and promote it to latest |
 | `get_validation_commands` | List safe validation commands |
 | `get_safety_policy` | Return the active safety policy |
 | `get_latest_plan` | Return the latest plan artifact |
@@ -399,8 +412,15 @@ All runtime artifacts live under `.copilot-architect/` inside the repo root:
 ├── plans/
 │   ├── <timestamp>-plan.json
 │   ├── <timestamp>-plan.md
-│   ├── latest-plan.json
-│   └── latest-plan.md
+│   ├── latest-plan.json          ← mirrors the newest revision, or the
+│   ├── latest-plan.md              approved one once approve_plan runs
+│   ├── drafts/<planId>/
+│   │   ├── rev-1.json            ← nothing is ever destroyed
+│   │   ├── rev-1.md
+│   │   ├── rev-2.json
+│   │   └── rev-2.md
+│   └── approved/
+│       └── <planId>-rev<n>-plan.json  ← frozen copy from approve_plan
 ├── handoffs/
 │   ├── <timestamp>-handoff.json
 │   ├── <timestamp>-handoff.md

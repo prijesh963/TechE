@@ -193,6 +193,62 @@ describe("Copilot Architect MCP server", () => {
     expect(restarted.data.plan.task).toBe("Add invoice approval workflow, take two");
   });
 
+  it("approves a specific revision through approve_plan and gates handoff on it", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = 'draft';"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const created = await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow",
+      approved: true
+    });
+    const unapproved = await callJsonTool(client, "get_latest_plan", {
+      path: repoRoot
+    });
+    const approved = await callJsonTool(client, "approve_plan", {
+      path: repoRoot,
+      planId: created.data.plan.id,
+      revision: 1,
+      approvedBy: "reviewer@example.test"
+    });
+    const latestAfterApproval = await callJsonTool(client, "get_latest_plan", {
+      path: repoRoot
+    });
+
+    expect(unapproved.data.status).toBe("draft");
+    expect(approved.ok).toBe(true);
+    expect(approved.data.plan.status).toBe("approved");
+    expect(approved.data.plan.approval).toMatchObject({
+      approvedBy: "reviewer@example.test",
+      revision: 1
+    });
+    expect(latestAfterApproval.data.status).toBe("approved");
+  });
+
+  it("requires a revision number to approve a plan", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = 'draft';"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    await callJsonTool(client, "generate_feature_plan", {
+      path: repoRoot,
+      request: "Add invoice approval workflow",
+      approved: true
+    });
+
+    const result = await client.callTool({
+      name: "approve_plan",
+      arguments: { path: repoRoot, approvedBy: "reviewer" }
+    });
+
+    expect(result.isError).toBe(true);
+  });
+
   it("writes a Copilot Chat MCP configuration for VS Code", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ name: "mcp-config" })

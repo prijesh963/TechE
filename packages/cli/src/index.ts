@@ -34,8 +34,10 @@ import {
   FeaturePlanningService,
   HandoffService,
   WorkspacePlanningService,
+  type FeaturePlanArtifact,
   type FeaturePlanningResult,
   type HandoffGenerationResult,
+  type PlanRevisionSummary,
   type WorkspaceImpactResult,
   type WorkspacePlanningResult
 } from "@copilot-architect/planner";
@@ -588,7 +590,51 @@ export async function runCli(
   if (rawCommand === "plan") {
     try {
       const options = parsePlanArgs(commandArgs);
-      const result = await new FeaturePlanningService().createPlan(options);
+      const service = new FeaturePlanningService();
+
+      if (options.subcommand === "approve") {
+        const result = await service.approvePlan({
+          startPath: options.startPath,
+          strictRoot: options.strictRoot,
+          planId: options.planId,
+          revision: options.revision as number,
+          approvedBy: options.approvedBy as string,
+          note: options.note
+        });
+        stdout(
+          options.json
+            ? JSON.stringify(result.plan, null, 2)
+            : getPlanApproveText(result.plan)
+        );
+        return { exitCode: 0 };
+      }
+
+      if (options.subcommand === "revisions") {
+        const revisions = await service.listRevisions({
+          startPath: options.startPath,
+          strictRoot: options.strictRoot,
+          planId: options.planId
+        });
+        stdout(
+          options.json
+            ? JSON.stringify(revisions, null, 2)
+            : getPlanRevisionsText(revisions)
+        );
+        return { exitCode: 0 };
+      }
+
+      if (options.subcommand === "show") {
+        const plan = await service.showRevision({
+          startPath: options.startPath,
+          strictRoot: options.strictRoot,
+          planId: options.planId,
+          revision: options.revision
+        });
+        stdout(options.json ? JSON.stringify(plan, null, 2) : getPlanShowText(plan));
+        return { exitCode: 0 };
+      }
+
+      const result = await service.createPlan(options);
       stdout(
         options.json ? JSON.stringify(result.plan, null, 2) : getPlanSummaryText(result)
       );
@@ -742,7 +788,9 @@ export async function runCli(
     try {
       const options = parseDemoArgs(commandArgs);
       const result = await runDemo({ startPath: options.startPath, stdout });
-      stdout(options.json ? JSON.stringify(result, null, 2) : getDemoSummaryText(result));
+      stdout(
+        options.json ? JSON.stringify(result, null, 2) : getDemoSummaryText(result)
+      );
       return { exitCode: result.success ? 0 : 1 };
     } catch (error) {
       stderr(error instanceof Error ? error.message : String(error));
@@ -1445,7 +1493,9 @@ function getSearchText(response: SearchResponse): string {
       `Matched: ${result.matchedFields.join(", ")}`
     );
     if (result.anchor) {
-      lines.push(`Anchor: ${result.anchor.symbol} (${result.anchor.kind}) line ${result.anchor.line ?? "?"}`);
+      lines.push(
+        `Anchor: ${result.anchor.symbol} (${result.anchor.kind}) line ${result.anchor.line ?? "?"}`
+      );
     }
     if (result.textPreview) {
       // Include a code snippet so callers (e.g. the LM) can see what's in the file.
@@ -1459,7 +1509,12 @@ function getSearchText(response: SearchResponse): string {
 }
 
 interface PlanCliOptions {
+  subcommand: "generate" | "approve" | "revisions" | "show";
   request: string;
+  planId?: string;
+  revision?: number;
+  approvedBy?: string;
+  note?: string;
   startPath?: string;
   strictRoot?: boolean;
   json: boolean;
@@ -1553,14 +1608,20 @@ function parseValidateArgs(args: string[]): ValidateCliOptions {
 }
 
 function parsePlanArgs(args: string[]): PlanCliOptions {
+  const subcommand: PlanCliOptions["subcommand"] =
+    args[0] === "approve" || args[0] === "revisions" || args[0] === "show"
+      ? args[0]
+      : "generate";
+  const rest = subcommand === "generate" ? args : args.slice(1);
   const requestParts: string[] = [];
   const options: PlanCliOptions = {
+    subcommand,
     request: "",
     json: false
   };
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
 
     if (arg === "--json") {
       options.json = true;
@@ -1568,7 +1629,7 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
     }
 
     if (arg === "--path" || arg === "--root") {
-      const startPath = args[index + 1];
+      const startPath = rest[index + 1];
 
       if (!startPath) {
         throw new Error(`Missing value for ${arg}`);
@@ -1576,6 +1637,54 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
 
       options.startPath = startPath;
       options.strictRoot = arg === "--root";
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--plan-id") {
+      const planId = rest[index + 1];
+
+      if (!planId) {
+        throw new Error("Missing value for --plan-id");
+      }
+
+      options.planId = planId;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--revision") {
+      const revision = Number(rest[index + 1]);
+
+      if (!Number.isFinite(revision)) {
+        throw new Error("Missing or invalid value for --revision");
+      }
+
+      options.revision = revision;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--by") {
+      const approvedBy = rest[index + 1];
+
+      if (!approvedBy) {
+        throw new Error("Missing value for --by");
+      }
+
+      options.approvedBy = approvedBy;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--note") {
+      const note = rest[index + 1];
+
+      if (!note) {
+        throw new Error("Missing value for --note");
+      }
+
+      options.note = note;
       index += 1;
       continue;
     }
@@ -1589,8 +1698,18 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
 
   options.request = requestParts.join(" ").trim();
 
-  if (!options.request) {
+  if (subcommand === "generate" && !options.request) {
     throw new Error("Missing feature request");
+  }
+
+  if (subcommand === "approve") {
+    if (options.revision === undefined) {
+      throw new Error("plan approve requires --revision <n>");
+    }
+
+    if (!options.approvedBy) {
+      throw new Error("plan approve requires --by <name>");
+    }
   }
 
   return options;
@@ -1611,6 +1730,55 @@ function getPlanSummaryText(result: FeaturePlanningResult): string {
     `Plan Markdown: ${result.markdownPath}`,
     `Latest JSON: ${result.latestJsonPath}`,
     `Latest Markdown: ${result.latestMarkdownPath}`
+  ].join("\n");
+}
+
+function getPlanApproveText(plan: FeaturePlanArtifact): string {
+  return [
+    `${PROJECT_NAME}: plan approve`,
+    "",
+    plan.title,
+    `Plan ID: ${plan.id}`,
+    `Revision: ${plan.revision}`,
+    `Status: ${plan.status}`,
+    `Approved by: ${plan.approval?.approvedBy ?? "unknown"}`,
+    `Approved at: ${plan.approval?.approvedAt ?? "unknown"}`,
+    ...(plan.approval?.note ? [`Note: ${plan.approval.note}`] : [])
+  ].join("\n");
+}
+
+function getPlanRevisionsText(revisions: PlanRevisionSummary[]): string {
+  if (revisions.length === 0) {
+    return `${PROJECT_NAME}: plan revisions\n\nNo revisions found.`;
+  }
+
+  return [
+    `${PROJECT_NAME}: plan revisions`,
+    "",
+    ...revisions.map(
+      (revision) =>
+        `rev ${revision.revision} - ${revision.status} (${revision.source}, ${revision.at})${
+          revision.approval
+            ? ` - approved by ${revision.approval.approvedBy} at ${revision.approval.approvedAt}`
+            : ""
+        }`
+    )
+  ].join("\n");
+}
+
+function getPlanShowText(plan: FeaturePlanArtifact): string {
+  return [
+    `${PROJECT_NAME}: plan show`,
+    "",
+    plan.title,
+    `Plan ID: ${plan.id}`,
+    `Revision: ${plan.revision}`,
+    `Status: ${plan.status}`,
+    `Task: ${plan.task}`,
+    `Summary: ${plan.summary}`,
+    plan.approval
+      ? `Approved by ${plan.approval.approvedBy} at ${plan.approval.approvedAt}`
+      : "Not approved."
   ].join("\n");
 }
 
@@ -2973,7 +3141,9 @@ async function runDemo(options: {
 
   // Step 4: Diagnostics
   await runStep("Run repo readiness diagnostics", async () => {
-    const result = await new AdvancedAnalysisService().diagnose({ startPath: repoRoot });
+    const result = await new AdvancedAnalysisService().diagnose({
+      startPath: repoRoot
+    });
     log(`Status: ${result.status}`);
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     const warnings = result.diagnostics.filter((d) => d.severity === "warning");

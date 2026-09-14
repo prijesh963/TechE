@@ -131,6 +131,7 @@ const agentDefinitions: AgentDefinition[] = [
       "generate_plan_context",
       "generate_feature_plan",
       "revise_feature_plan",
+      "approve_plan",
       "get_safety_policy"
     ],
     handoffs: [
@@ -154,14 +155,16 @@ const agentDefinitions: AgentDefinition[] = [
       "Step 7 — MANDATORY FIRST SAVE: call `generate_feature_plan` with approved=true exactly once to persist revision 1. This writes `.copilot-architect/plans/latest-plan.md` and `latest-plan.json`. A plan that is only described in chat but never written to disk does not exist for the next agent — you MUST call this tool.",
       "Step 8 — Feedback loop: ask the human to confirm or refine the saved draft. For every round of feedback, call `revise_feature_plan` with the verbatim feedback (and, if applicable, `sections` overrides) to edit the existing draft in place — never call `generate_feature_plan` again for this plan, since that discards every revision made so far and re-calling it is a guarded error unless you pass restart=true. Repeat until the human explicitly approves.",
       "Step 9 — Confirm the current state by calling `get_latest_plan`. Check `revision` matches the number of feedback rounds you incorporated, and that the content reflects the latest round.",
-      "Step 10 — Only after the saved plan is confirmed, hand off to FeatureImplementer."
+      "Step 10 — MANDATORY APPROVAL: once the human explicitly approves that exact revision, call `approve_plan` with `revision` set to the confirmed revision number and `approvedBy` set to the human's name or identity. Approval is per-revision — never call `approve_plan` without first confirming the revision number via `get_latest_plan`; approving 'whatever is newest' is not allowed.",
+      'Step 11 — Confirm the approval by calling `get_latest_plan` again and checking `status` is `"approved"` with an `approval` object present.',
+      "Step 12 — Only after approval is confirmed, hand off to FeatureImplementer."
     ],
     handoffGuidance: [
       "The plan must be specific enough that FeatureImplementer can act without guessing: exact file paths, function names, and code snippets.",
       "Point to `.copilot-architect/plans/latest-plan.md` and `.copilot-architect/plans/latest-plan.json`.",
       "If a similar feature already exists, describe it fully before proposing any new code.",
       "When control is passed from CodeAnalysisAgent, use its report as input but still run the full flow ending in `generate_feature_plan` (approved=true) — the analysis report is NOT a persisted plan.",
-      "Never hand off to FeatureImplementer until `get_latest_plan` confirms the plan is on disk.",
+      'Never hand off to FeatureImplementer until `get_latest_plan` confirms `status: "approved"` — a saved-but-unapproved draft is not enough.',
       "Never re-run `generate_feature_plan` to apply feedback on an existing draft — that discards prior turns. Use `revise_feature_plan` instead."
     ],
     safetyRules: [
@@ -169,7 +172,8 @@ const agentDefinitions: AgentDefinition[] = [
       "Do not run mutating commands.",
       "Do not expose secrets found in repository files or logs.",
       "Never end your turn with only a chat description of the plan: you MUST have called `generate_feature_plan` with approved=true and confirmed `latest-plan.md` exists via `get_latest_plan`.",
-      "Never call `generate_feature_plan` a second time for the same plan to fold in feedback — use `revise_feature_plan`, which preserves the revision history instead of discarding it."
+      "Never call `generate_feature_plan` a second time for the same plan to fold in feedback — use `revise_feature_plan`, which preserves the revision history instead of discarding it.",
+      'Never hand off to FeatureImplementer before calling `approve_plan` and confirming `status: "approved"` via `get_latest_plan` — a draft, however refined, is not an approved plan.'
     ]
   },
   {
@@ -202,7 +206,7 @@ const agentDefinitions: AgentDefinition[] = [
     purpose:
       "Implement only an approved plan with minimal, scoped changes, tests, and captured validation evidence.",
     instructions: [
-      "Step 1 — Call `get_latest_plan` and read the full plan before touching any file. If it reports the plan is missing, STOP and ask the human to run FeatureArchitect first — do not improvise a plan.",
+      'Step 1 — Call `get_latest_plan` and read the full plan before touching any file. If it reports the plan is missing, STOP and ask the human to run FeatureArchitect first — do not improvise a plan. If the plan exists but `status` is not `"approved"` (no `approval` object present), STOP and ask FeatureArchitect to call `approve_plan` first — never implement a draft, however detailed.',
       "Step 2 — Call `search_repo` on the exact files listed in the plan and read their current content so you have an accurate BEFORE snapshot.",
       "Step 3 — For each file, present the change as a clear BEFORE → AFTER diff (fenced code block showing the exact current code and the exact replacement) so the human can see precisely what will change.",
       "Step 4 — Feedback loop: pause after presenting the diffs and let the human confirm or adjust before you write anything. Incorporate their feedback into the AFTER code. (issue 5 — feedback before final code is generated.)",
@@ -220,7 +224,8 @@ const agentDefinitions: AgentDefinition[] = [
     safetyRules: [
       "Do not implement scope not in the approved plan.",
       "Do not write files outside the workspace root.",
-      "Do not run commands flagged as blocked by `get_safety_policy`."
+      "Do not run commands flagged as blocked by `get_safety_policy`.",
+      'Do not implement a plan whose `status` is not `"approved"` — a draft, however detailed, is not authorization to write code.'
     ]
   },
   {

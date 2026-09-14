@@ -293,6 +293,22 @@ export function createCopilotArchitectTools(
         })
     ),
     tool(
+      "approve_plan",
+      "Approve one specific plan revision, freezing it and promoting it to " +
+        "latest-plan.*. Revision is required — approval is always per-revision, " +
+        "never 'whatever is newest'.",
+      approvePlanSchema,
+      false,
+      async (args) =>
+        new FeaturePlanningService().approvePlan({
+          startPath: resolveStartPath(args, options),
+          planId: typeof args.planId === "string" ? args.planId : undefined,
+          revision: requiredNumberArg(args, "revision"),
+          approvedBy: stringArg(args, "approvedBy"),
+          note: typeof args.note === "string" ? args.note : undefined
+        })
+    ),
+    tool(
       "get_validation_commands",
       "Get merged detected and custom validation commands.",
       commonSchema,
@@ -520,6 +536,16 @@ function numberArg(
   return fallback;
 }
 
+function requiredNumberArg(args: Record<string, unknown>, key: string): number {
+  const value = args[key];
+
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${key} is required`);
+  }
+
+  return value;
+}
+
 const commonSchema = {
   path: z.string().optional()
 };
@@ -553,4 +579,12 @@ const reviseFeaturePlanSchema = {
   sections: z.record(z.string(), z.unknown()).optional(),
   source: z.enum(["human-feedback", "code-review"]).optional(),
   reviewFindingIds: z.array(z.string()).optional()
+};
+
+const approvePlanSchema = {
+  ...commonSchema,
+  planId: z.string().optional(),
+  revision: z.number(),
+  approvedBy: z.string(),
+  note: z.string().optional()
 };

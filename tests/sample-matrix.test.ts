@@ -239,6 +239,7 @@ describe("Phase 22 sample repo matrix", () => {
       ["plan", "Add invoice approval workflow", "--path", repoRoot],
       ["agents", "install", "--path", repoRoot],
       ["instructions", "generate", "--path", repoRoot],
+      ["plan", "approve", "--path", repoRoot, "--revision", "1", "--by", "reviewer"],
       [
         "handoff",
         "--approve",

@@ -36,6 +36,8 @@ import type {
   FeaturePlanPreviewResult,
   FeaturePlanningOptions,
   FeaturePlanningResult,
+  PlanApproval,
+  PlanApprovalOptions,
   PlanArtifactPaths,
   PlanDraftArtifactPaths,
   PlanEndpointReference,
@@ -43,6 +45,7 @@ import type {
   PlanningContextSummary,
   PlanRevisionEntry,
   PlanRevisionOptions,
+  PlanRevisionSummary,
   StackSpecificPlan
 } from "./models.js";
 
@@ -130,6 +133,10 @@ export class FeaturePlanningService {
     const plan: FeaturePlanArtifact = {
       ...current,
       ...(options.sections ?? {}),
+      // A revision is always unapproved: the previous approval was granted
+      // for the revision it replaces, not for this one.
+      status: "draft",
+      approval: undefined,
       revision: nextRevision,
       supersedes: `${planId}-rev${current.revision}`,
       revisions: [...current.revisions, revisionEntry]
@@ -154,6 +161,142 @@ export class FeaturePlanningService {
       latestMarkdownPath: paths.latestMarkdownPath,
       searchResults: []
     };
+  }
+
+  /**
+   * Stamps approval onto one specific, already-saved revision and promotes
+   * exactly that revision to latest-plan.*. Approval is always per-revision
+   * — there is no "approve whatever is newest". See
+   * docs/PLAN_LIFECYCLE_DESIGN.md section 2.
+   */
+  async approvePlan(options: PlanApprovalOptions): Promise<FeaturePlanningResult> {
+    const approvedBy = options.approvedBy.trim();
+
+    if (!approvedBy) {
+      throw new Error("approvedBy is required to approve a plan");
+    }
+
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error(
+        "No draft plan found to approve. Call generate_feature_plan first."
+      );
+    }
+
+    const draftPaths = createPlanDraftPaths(repoRoot, planId, options.revision);
+    const target = await readOptionalJson<FeaturePlanArtifact>(
+      draftPaths.draftJsonPath
+    );
+
+    if (!target) {
+      throw new Error(
+        `Revision ${options.revision} not found for plan "${planId}". Call plan revisions to see what exists.`
+      );
+    }
+
+    const approval: PlanApproval = {
+      approvedAt: new Date().toISOString(),
+      approvedBy,
+      revision: options.revision,
+      note: options.note
+    };
+    const plan: FeaturePlanArtifact = {
+      ...target,
+      status: "approved",
+      approval
+    };
+    const markdown = renderFeaturePlanMarkdown(plan);
+    const paths = createPlanArtifactPaths(repoRoot, planId);
+    const approvedCopyPath = createApprovedPlanPath(repoRoot, planId, options.revision);
+
+    await mkdir(path.dirname(approvedCopyPath), { recursive: true });
+    // Keep the draft revision consistent with its own approval state...
+    await writeJsonFile(draftPaths.draftJsonPath, plan);
+    await writeTextFile(draftPaths.draftMarkdownPath, markdown);
+    // ...and freeze an immutable copy that later revisions can never touch.
+    await writeJsonFile(approvedCopyPath, plan);
+    // Promote this exact revision to latest, even if newer unapproved
+    // drafts exist.
+    await writeJsonFile(paths.latestJsonPath, plan);
+    await writeTextFile(paths.latestMarkdownPath, markdown);
+
+    return {
+      repoRoot,
+      plan,
+      markdown,
+      jsonPath: approvedCopyPath,
+      markdownPath: draftPaths.draftMarkdownPath,
+      latestJsonPath: paths.latestJsonPath,
+      latestMarkdownPath: paths.latestMarkdownPath,
+      searchResults: []
+    };
+  }
+
+  async listRevisions(options: {
+    startPath?: string;
+    strictRoot?: boolean;
+    planId?: string;
+  }): Promise<PlanRevisionSummary[]> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error("No draft plan found. Call generate_feature_plan first.");
+    }
+
+    const revisionNumbers = await listDraftRevisionNumbers(repoRoot, planId);
+
+    return Promise.all(
+      revisionNumbers.map(async (revision) => {
+        const plan = await readJsonFile<FeaturePlanArtifact>(
+          createPlanDraftPaths(repoRoot, planId, revision).draftJsonPath
+        );
+        const latestEntry = plan.revisions[plan.revisions.length - 1];
+
+        return {
+          revision: plan.revision,
+          status: plan.status,
+          at: latestEntry?.at ?? plan.generatedAt,
+          source: latestEntry?.source ?? "initial",
+          approval: plan.approval
+        };
+      })
+    );
+  }
+
+  async showRevision(options: {
+    startPath?: string;
+    strictRoot?: boolean;
+    planId?: string;
+    revision?: number;
+  }): Promise<FeaturePlanArtifact> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error("No draft plan found. Call generate_feature_plan first.");
+    }
+
+    if (options.revision === undefined) {
+      return loadLatestDraftRevision(repoRoot, planId);
+    }
+
+    const draftPaths = createPlanDraftPaths(repoRoot, planId, options.revision);
+    const plan = await readOptionalJson<FeaturePlanArtifact>(draftPaths.draftJsonPath);
+
+    if (!plan) {
+      throw new Error(`Revision ${options.revision} not found for plan "${planId}".`);
+    }
+
+    return plan;
   }
 
   async createPlanPreview(
@@ -961,10 +1104,20 @@ async function findLatestDraftPlanId(repoRoot: string): Promise<string | undefin
   return plan?.id;
 }
 
-async function loadLatestDraftRevision(
+function createApprovedPlanPath(
+  repoRoot: string,
+  planId: string,
+  revision: number
+): string {
+  const plansRoot = getArtifactDirectoryPath(repoRoot, "plans");
+
+  return path.join(plansRoot, "approved", `${planId}-rev${revision}-plan.json`);
+}
+
+async function listDraftRevisionNumbers(
   repoRoot: string,
   planId: string
-): Promise<FeaturePlanArtifact> {
+): Promise<number[]> {
   const draftDir = path.join(
     getArtifactDirectoryPath(repoRoot, "plans"),
     "drafts",
@@ -984,15 +1137,24 @@ async function loadLatestDraftRevision(
     .map((name) => /^rev-(\d+)\.json$/.exec(name))
     .filter((match): match is RegExpExecArray => match !== null)
     .map((match) => Number(match[1]))
-    .sort((left, right) => right - left);
-  const latestRevision = revisionNumbers[0];
+    .sort((left, right) => left - right);
 
-  if (latestRevision === undefined) {
+  if (revisionNumbers.length === 0) {
     throw new Error(`No draft revisions found for plan "${planId}".`);
   }
 
+  return revisionNumbers;
+}
+
+async function loadLatestDraftRevision(
+  repoRoot: string,
+  planId: string
+): Promise<FeaturePlanArtifact> {
+  const revisionNumbers = await listDraftRevisionNumbers(repoRoot, planId);
+  const latestRevision = revisionNumbers[revisionNumbers.length - 1];
+
   return readJsonFile<FeaturePlanArtifact>(
-    path.join(draftDir, `rev-${latestRevision}.json`)
+    createPlanDraftPaths(repoRoot, planId, latestRevision).draftJsonPath
   );
 }
 

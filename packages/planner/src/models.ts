@@ -4,6 +4,7 @@ import type {
   DetectedCommand,
   FeaturePlan,
   PlanQualityScore,
+  PlanStatus,
   RepoReadinessDiagnostic,
   ValidationCommand
 } from "@copilot-architect/shared";
@@ -68,6 +69,34 @@ export interface FeaturePlanArtifact extends FeaturePlan {
   supersedes?: string;
   /** Full history of revisions, oldest first, including the initial save. */
   revisions: PlanRevisionEntry[];
+  /** Present only once `approve_plan` has stamped this exact revision. */
+  approval?: PlanApproval;
+}
+
+export interface PlanApproval {
+  approvedAt: string;
+  approvedBy: string;
+  revision: number;
+  note?: string;
+}
+
+export interface PlanApprovalOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  /** Defaults to the id of the latest saved plan. */
+  planId?: string;
+  /** Required — approval is always per-revision, never "whatever is newest". */
+  revision: number;
+  approvedBy: string;
+  note?: string;
+}
+
+export interface PlanRevisionSummary {
+  revision: number;
+  status: PlanStatus;
+  at: string;
+  source: PlanRevisionEntry["source"];
+  approval?: PlanApproval;
 }
 
 export interface PlanRevisionEntry {
