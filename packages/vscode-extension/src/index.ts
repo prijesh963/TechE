@@ -71,6 +71,68 @@ export const COPILOT_ARCHITECT_COMMANDS: CopilotArchitectCommand[] = [
   }
 ];
 
+/**
+ * The links rendered directly in the dashboard's action row. Everything else
+ * lives behind "More actions…" (see COPILOT_ARCHITECT_SECONDARY_ACTIONS) so a
+ * narrow sidebar shows one row of buttons instead of eleven wrapped links.
+ */
+export const DASHBOARD_PRIMARY_ACTIONS: { id: string; label: string }[] = [
+  { id: "copilotArchitect.setupRepo", label: "Setup Repo" },
+  { id: "copilotArchitect.startAndSetupMcp", label: "Start & Setup MCP" },
+  { id: "copilotArchitect.stopMcp", label: "Stop MCP" },
+  { id: "copilotArchitect.installAgents", label: "Install Agents" },
+  { id: "copilotArchitect.generateInstructions", label: "Generate Instructions" }
+];
+
+/**
+ * Commands reachable from the dashboard's "More actions…" quick pick rather
+ * than as their own link. The dashboard row itself stays at five entries
+ * (Setup Repo, Start & Setup MCP, Stop MCP, Install Agents, Generate
+ * Instructions) — everything here is either a step Setup Repo already runs
+ * or a lower-frequency action.
+ */
+export const COPILOT_ARCHITECT_SECONDARY_ACTIONS: {
+  id: string;
+  label: string;
+  description: string;
+}[] = [
+  {
+    id: "copilotArchitect.openRepoInNewWindow",
+    label: "Open Repo",
+    description: "Open a different repository folder in this window"
+  },
+  {
+    id: "copilotArchitect.workspaceScan",
+    label: "Scan & Register Sub-repos",
+    description: "Register every sub-directory of a folder as a workspace repo"
+  },
+  {
+    id: "copilotArchitect.analyzeRepo",
+    label: "Analyze Repo",
+    description: "Rebuild repo-map.json only"
+  },
+  {
+    id: "copilotArchitect.buildIndex",
+    label: "Build Index",
+    description: "Rebuild the searchable index only"
+  },
+  {
+    id: "copilotArchitect.generatePlan",
+    label: "Generate Plan",
+    description: "Plan a feature request against this repo"
+  },
+  {
+    id: "copilotArchitect.validate",
+    label: "Validate",
+    description: "Run the detected build/test/lint commands"
+  },
+  {
+    id: "copilotArchitect.review",
+    label: "Review",
+    description: "Review the working diff against the latest plan"
+  }
+];
+
 export interface DisposableLike {
   dispose(): void;
 }
@@ -164,6 +226,12 @@ export interface LanguageModelLike {
   ): Promise<LanguageModelResponseLike>;
 }
 
+export interface QuickPickItemLike {
+  label: string;
+  description?: string;
+  detail?: string;
+}
+
 export interface VscodeApiLike {
   commands: {
     registerCommand(
@@ -187,6 +255,10 @@ export interface VscodeApiLike {
       openLabel?: string;
       title?: string;
     }): Promise<UriLike[] | undefined>;
+    showQuickPick?(
+      items: QuickPickItemLike[],
+      options?: { title?: string; placeHolder?: string }
+    ): Promise<QuickPickItemLike | undefined>;
     registerWebviewViewProvider?(
       viewId: string,
       provider: WebviewViewProviderLike
@@ -328,6 +400,26 @@ export function activate(
     );
   }
 
+  /**
+   * Starts (or restarts) the MCP server process. Shared by the Start MCP
+   * command, Start & Setup MCP, and Setup Repo's final step so all three
+   * track the same `activeMcpProcess` handle that Stop MCP disposes.
+   */
+  const startMcpServer = (cliArgs: string[] = ["mcp"]): void => {
+    activeMcpProcess?.dispose();
+    state.mcpStatus = "starting";
+    const mcpArgs = [...cliArgs, "--path", workspaceRoot];
+    outputChannel.appendLine(`$ ${createCliCommandLine(mcpArgs)}`);
+    activeMcpProcess = mcpStarter.start({
+      args: mcpArgs,
+      cwd: extensionRoot,
+      onOutput: (stream, text) => outputChannel.appendLine(`[${stream}] ${text}`)
+    });
+    state.mcpStatus = "running";
+    state.lastCommand = createCliCommandLine(cliArgs);
+    dashboard.refresh();
+  };
+
   const runWorkflowCommand = async (
     commandId: string
   ): Promise<CliRunResult | undefined> => {
@@ -338,18 +430,7 @@ export function activate(
     }
 
     if (command.startsMcp) {
-      activeMcpProcess?.dispose();
-      state.mcpStatus = "starting";
-      const mcpArgs = [...command.cliArgs, "--path", workspaceRoot];
-      outputChannel.appendLine(`$ ${createCliCommandLine(mcpArgs)}`);
-      activeMcpProcess = mcpStarter.start({
-        args: mcpArgs,
-        cwd: extensionRoot,
-        onOutput: (stream, text) => outputChannel.appendLine(`[${stream}] ${text}`)
-      });
-      state.mcpStatus = "running";
-      state.lastCommand = createCliCommandLine(command.cliArgs);
-      dashboard.refresh();
+      startMcpServer(command.cliArgs);
       vscode.window.showInformationMessage("Copilot Architect MCP server started.");
       return undefined;
     }
@@ -534,6 +615,215 @@ export function activate(
     return result;
   };
 
+  /** Runs one Setup Repo step, logging it and reporting whether it passed. */
+  const runSetupStep = async (label: string, args: string[]): Promise<boolean> => {
+    outputChannel.appendLine(`\n[setup] ${label}`);
+    outputChannel.appendLine(`$ ${createCliCommandLine(args)}`);
+    const result = await runner.run({
+      args,
+      cwd: extensionRoot,
+      onOutput: (stream, text) => outputChannel.appendLine(`[${stream}] ${text}`)
+    });
+    outputChannel.appendLine(
+      result.exitCode === 0 ? `✓ ${label}` : `✗ ${label} (exit ${result.exitCode})`
+    );
+    return result.exitCode === 0;
+  };
+
+  /**
+   * Registers every immediate sub-directory of `reposDir` as a workspace repo.
+   * Shared by Setup Repo's multi-repo path and the standalone Scan & Register
+   * command so the two cannot drift apart. Returns the directories that were
+   * registered successfully.
+   */
+  const registerSubRepos = async (reposDir: string): Promise<string[]> => {
+    let subDirs: string[];
+    try {
+      const entries = await readdir(reposDir, { withFileTypes: true });
+      subDirs = entries
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => path.join(reposDir, entry.name));
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Could not read folder: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return [];
+    }
+
+    if (subDirs.length === 0) {
+      vscode.window.showInformationMessage(
+        "No sub-directories found in the selected folder."
+      );
+      return [];
+    }
+
+    outputChannel.appendLine(
+      `[workspace scan] ${subDirs.length} repo(s) found in ${reposDir}`
+    );
+
+    // Skip workspace init when workspace.json already exists so a re-scan does
+    // not drop previously registered repos.
+    const existingWorkspace = await readJsonSafe<unknown>(
+      path.join(workspaceRoot, ".copilot-architect", "workspace.json")
+    );
+    if (!existingWorkspace) {
+      await runner.run({
+        args: ["workspace", "init", "--path", workspaceRoot],
+        cwd: extensionRoot,
+        onOutput: (_s, t) => outputChannel.appendLine(t)
+      });
+    }
+
+    // The CLI takes repo name and path as positional arguments — passing the
+    // name via --name would set the *workspace* name and leave the repo unnamed.
+    const registeredDirs: string[] = [];
+    for (const subDir of subDirs) {
+      const repoName = path.basename(subDir);
+      const result = await runner.run({
+        args: ["workspace", "add", repoName, subDir, "--path", workspaceRoot],
+        cwd: extensionRoot,
+        onOutput: (_s, t) => outputChannel.appendLine(t)
+      });
+      if (result.exitCode === 0) {
+        registeredDirs.push(subDir);
+        outputChannel.appendLine(`✓ registered: ${repoName}`);
+      } else {
+        outputChannel.appendLine(`✗ failed:     ${repoName}`);
+      }
+    }
+
+    return registeredDirs;
+  };
+
+  /**
+   * One-click repo onboarding: initialize artifacts, analyze, build the
+   * symbol graph and index, run the readiness assessment, install agents, and
+   * configure + start the MCP server. Handles a single repo (the current
+   * workspace folder) or a parent folder of sub-repos, chosen up front.
+   *
+   * Steps run to completion even if an earlier one fails — the dashboard's
+   * Start & Setup MCP and Install Agents actions exist precisely so a user can
+   * retry an individual step, so aborting the whole chain on the first failure
+   * would just hide the rest of the work.
+   */
+  const setupRepo = async (): Promise<void> => {
+    const MULTI_REPO_LABEL = "Multiple repos";
+    const mode = await vscode.window.showQuickPick?.(
+      [
+        {
+          label: "This repo",
+          description: workspaceRoot,
+          detail: "Set up the folder currently open in this window"
+        },
+        {
+          label: MULTI_REPO_LABEL,
+          description: "Pick a parent folder",
+          detail: "Register and set up every sub-directory as a separate repo"
+        }
+      ],
+      {
+        title: "Copilot Architect: Setup Repo",
+        placeHolder: "What do you want to set up?"
+      }
+    );
+
+    // A host without showQuickPick (or a dismissed picker) falls back to the
+    // single-repo path rather than doing nothing.
+    if (mode === undefined && vscode.window.showQuickPick) return;
+
+    const multiRepo = mode?.label === MULTI_REPO_LABEL;
+    outputChannel.show(true);
+    outputChannel.appendLine(
+      `\n=== Copilot Architect setup (${multiRepo ? "multi-repo" : "single repo"}) ===`
+    );
+
+    const failed: string[] = [];
+    const track = async (label: string, args: string[]): Promise<void> => {
+      if (!(await runSetupStep(label, args))) failed.push(label);
+    };
+
+    let repoRoots: string[] = [workspaceRoot];
+
+    if (multiRepo) {
+      const uris = await vscode.window.showOpenDialog?.({
+        canSelectFolders: true,
+        canSelectFiles: false,
+        openLabel: "Select Repos Folder",
+        title: "Select the folder whose immediate sub-directories are your repositories"
+      });
+      const reposDir = uris?.[0]?.fsPath;
+      if (!reposDir) return;
+
+      const registered = await registerSubRepos(reposDir);
+      if (registered.length === 0) {
+        vscode.window.showErrorMessage(
+          "No repos could be registered. Check the Output channel for details."
+        );
+        return;
+      }
+      repoRoots = registered;
+      vscode.window.showInformationMessage(
+        `Registered ${registered.length} repos — setting each one up, please wait…`
+      );
+    }
+
+    // Per-repo steps: artifacts, repo map, symbol graph, readiness assessment.
+    // The graph is what powers graph-signal search ranking and "why relevant"
+    // plan citations. Assessment is per-repo because it reports on one repo's
+    // languages/tests/risks — running it only on a parent container folder in
+    // multi-repo mode would report on a folder that usually isn't a repo.
+    for (const repoRoot of repoRoots) {
+      const name = path.basename(repoRoot);
+      await track(`Initialize artifacts (${name})`, ["init", "--path", repoRoot]);
+      await track(`Analyze repo (${name})`, ["analyze", "--path", repoRoot]);
+      await track(`Build symbol graph (${name})`, ["graph", "--path", repoRoot]);
+      await track(`Repo assessment (${name})`, ["diagnostics", "--path", repoRoot]);
+    }
+
+    // Index: one combined workspace index for multi-repo, per-repo otherwise.
+    if (multiRepo) {
+      await track("Build workspace index", [
+        "workspace",
+        "index",
+        "--path",
+        workspaceRoot
+      ]);
+    } else {
+      await track("Build index", ["index", "--path", workspaceRoot]);
+    }
+
+    await track("Install agents", ["agents", "install", "--path", workspaceRoot]);
+    await track("Configure MCP server", ["mcp", "config", "--path", workspaceRoot]);
+
+    startMcpServer();
+
+    if (multiRepo) {
+      // Surface the registered repos in the Explorer — otherwise the scan only
+      // updates workspace.json and the file tree keeps showing the original repo.
+      addWorkspaceFolders(vscode, repoRoots);
+    }
+
+    state.lastCommand = `setup repo (${multiRepo ? `${repoRoots.length} repos` : "single"})`;
+    state.lastExitCode = failed.length === 0 ? 0 : 1;
+    dashboard.refresh();
+
+    outputChannel.appendLine(
+      failed.length === 0
+        ? "\n=== Setup complete. MCP server started. ==="
+        : `\n=== Setup finished with ${failed.length} failed step(s): ${failed.join(", ")} ===`
+    );
+
+    if (failed.length === 0) {
+      vscode.window.showInformationMessage(
+        `Setup complete for ${multiRepo ? `${repoRoots.length} repos` : "this repo"} — MCP server started. Use @architect to plan a feature.`
+      );
+    } else {
+      vscode.window.showErrorMessage(
+        `Setup finished with ${failed.length} failed step(s): ${failed.join(", ")}. Retry them from the dashboard or check the Output channel.`
+      );
+    }
+  };
+
   for (const command of COPILOT_ARCHITECT_COMMANDS) {
     context.subscriptions.push(
       vscode.commands.registerCommand(command.id, () => runWorkflowCommand(command.id))
@@ -605,62 +895,8 @@ export function activate(
       const reposDir = uris?.[0]?.fsPath;
       if (!reposDir) return;
 
-      let subDirs: string[];
-      try {
-        const entries = await readdir(reposDir, { withFileTypes: true });
-        subDirs = entries
-          .filter((e) => e.isDirectory() && !e.name.startsWith("."))
-          .map((e) => path.join(reposDir, e.name));
-      } catch (err) {
-        vscode.window.showErrorMessage(
-          `Could not read folder: ${err instanceof Error ? err.message : String(err)}`
-        );
-        return;
-      }
-
-      if (subDirs.length === 0) {
-        vscode.window.showInformationMessage(
-          "No sub-directories found in the selected folder."
-        );
-        return;
-      }
-
-      outputChannel.appendLine(
-        `[workspace scan] ${subDirs.length} repo(s) found in ${reposDir}`
-      );
       outputChannel.show(true);
-
-      // 1. Initialize workspace at the workspace root — skip if workspace.json already
-      // exists so that previously registered repos are not lost on a re-scan.
-      const existingWorkspace = await readJsonSafe<unknown>(
-        path.join(workspaceRoot, ".copilot-architect", "workspace.json")
-      );
-      if (!existingWorkspace) {
-        await runner.run({
-          args: ["workspace", "init", "--path", workspaceRoot],
-          cwd: extensionRoot,
-          onOutput: (_s, t) => outputChannel.appendLine(t)
-        });
-      }
-
-      // 2. Register each sub-directory as a named repo. The CLI takes the repo
-      // name and path as positional arguments — passing the name via --name
-      // would set the *workspace* name instead and leave the repo unnamed.
-      const registeredDirs: string[] = [];
-      for (const subDir of subDirs) {
-        const repoName = path.basename(subDir);
-        const result = await runner.run({
-          args: ["workspace", "add", repoName, subDir, "--path", workspaceRoot],
-          cwd: extensionRoot,
-          onOutput: (_s, t) => outputChannel.appendLine(t)
-        });
-        if (result.exitCode === 0) {
-          registeredDirs.push(subDir);
-          outputChannel.appendLine(`✓ registered: ${repoName}`);
-        } else {
-          outputChannel.appendLine(`✗ failed:     ${repoName}`);
-        }
-      }
+      const registeredDirs = await registerSubRepos(reposDir);
 
       if (registeredDirs.length === 0) {
         vscode.window.showErrorMessage(
@@ -708,6 +944,62 @@ export function activate(
           added > 0 ? ` and added to the Explorer` : ""
         }. Use @architect /search or /plan to work across all repos.`
       );
+    }),
+    vscode.commands.registerCommand("copilotArchitect.setupRepo", () => setupRepo()),
+    vscode.commands.registerCommand("copilotArchitect.startAndSetupMcp", async () => {
+      outputChannel.show(true);
+      const configured = await runSetupStep("Configure MCP server", [
+        "mcp",
+        "config",
+        "--path",
+        workspaceRoot
+      ]);
+      startMcpServer();
+      vscode.window.showInformationMessage(
+        configured
+          ? "MCP server configured and started."
+          : "MCP server started, but writing the Copilot Chat config failed — see the Output channel."
+      );
+    }),
+    vscode.commands.registerCommand("copilotArchitect.stopMcp", () => {
+      if (!activeMcpProcess) {
+        vscode.window.showInformationMessage(
+          "No MCP server is running from this window."
+        );
+        state.mcpStatus = "stopped";
+        dashboard.refresh();
+        return;
+      }
+
+      activeMcpProcess.dispose();
+      activeMcpProcess = undefined;
+      state.mcpStatus = "stopped";
+      state.lastCommand = "mcp stop";
+      outputChannel.appendLine("\n[mcp] server stopped.");
+      dashboard.refresh();
+      vscode.window.showInformationMessage("Copilot Architect MCP server stopped.");
+    }),
+    vscode.commands.registerCommand("copilotArchitect.moreActions", async () => {
+      const picked = await vscode.window.showQuickPick?.(
+        COPILOT_ARCHITECT_SECONDARY_ACTIONS.map((action) => ({
+          label: action.label,
+          description: action.description
+        })),
+        {
+          title: "Copilot Architect",
+          placeHolder: "Pick an action"
+        }
+      );
+
+      if (!picked) return;
+
+      const action = COPILOT_ARCHITECT_SECONDARY_ACTIONS.find(
+        (candidate) => candidate.label === picked.label
+      );
+
+      if (action) {
+        await vscode.commands.executeCommand?.(action.id);
+      }
     })
   );
 
@@ -1155,7 +1447,7 @@ export function createDashboardHtml(state: ExtensionState): string {
     "</head>",
     "<body>",
     "<h1>Copilot Architect</h1>",
-    `<div class="actions"><a href="command:copilotArchitect.openRepoInNewWindow">Open Repo</a> <a href="command:copilotArchitect.workspaceScan">Scan &amp; Register Sub-repos</a> <a href="command:copilotArchitect.setupMcp">Setup MCP Server</a>${COPILOT_ARCHITECT_COMMANDS.map(renderCommandLink).join("")}</div>`,
+    `<div class="actions">${DASHBOARD_PRIMARY_ACTIONS.map(renderActionLink).join("")}<a href="command:copilotArchitect.moreActions">More actions…</a></div>`,
     '<div class="grid">',
     ...sections.map(
       (section) => `<section><h2>${section.title}</h2><p>${section.body}</p></section>`
@@ -2705,8 +2997,8 @@ export function getChatHelpText(): string {
   ].join("\n");
 }
 
-function renderCommandLink(command: CopilotArchitectCommand): string {
-  return `<a href="command:${command.id}">${escapeHtml(command.title.replace("Copilot Architect: ", ""))}</a>`;
+function renderActionLink(action: { id: string; label: string }): string {
+  return `<a href="command:${action.id}">${escapeHtml(action.label)}</a>`;
 }
 
 function escapeHtml(value: string): string {

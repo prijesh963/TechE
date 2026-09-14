@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   COPILOT_ARCHITECT_COMMANDS,
+  COPILOT_ARCHITECT_SECONDARY_ACTIONS,
+  DASHBOARD_PRIMARY_ACTIONS,
   DASHBOARD_VIEW_ID,
   activate,
   createCliCommandLine,
@@ -17,6 +19,7 @@ import {
   type DisposableLike,
   type ExtensionContextLike,
   type McpStarter,
+  type QuickPickItemLike,
   type UriLike,
   type VscodeApiLike,
   type WebviewViewProviderLike
@@ -67,6 +70,20 @@ describe("VS Code extension shell", () => {
         })
       );
       expect(manifest.activationEvents).toContain(`onCommand:${command.id}`);
+    }
+
+    // Every command the dashboard links to must be declared, or the link is a
+    // no-op in the real extension host.
+    const dashboardCommandIds = [
+      ...DASHBOARD_PRIMARY_ACTIONS.map((action) => action.id),
+      ...COPILOT_ARCHITECT_SECONDARY_ACTIONS.map((action) => action.id),
+      "copilotArchitect.moreActions"
+    ];
+    for (const commandId of dashboardCommandIds) {
+      expect(contributedCommands).toContainEqual(
+        expect.objectContaining({ command: commandId })
+      );
+      expect(manifest.activationEvents).toContain(`onCommand:${commandId}`);
     }
   });
 
@@ -185,6 +202,239 @@ describe("VS Code extension shell", () => {
     expect(fake.addedFolders.map((folder) => folder.uri.fsPath)).toEqual(
       expect.arrayContaining([repoA, repoB])
     );
+
+    deactivate();
+  });
+
+  it("sets up a single repo end to end and starts the MCP server", async () => {
+    const fake = createFakeVscode();
+    fake.quickPickChoice = "This repo";
+    const cliRequests: CliRunRequest[] = [];
+    const mcpRequests: CliRunRequest[] = [];
+    const runner = {
+      run: async (request: CliRunRequest): Promise<CliRunResult> => {
+        cliRequests.push(request);
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          commandLine: createCliCommandLine(request.args)
+        };
+      }
+    };
+    const mcpStarter: McpStarter = {
+      start: (request) => {
+        mcpRequests.push(request);
+        return { dispose: () => undefined };
+      }
+    };
+    const context: ExtensionContextLike = {
+      subscriptions: [],
+      extensionPath: "/workspace/ext-root/packages/vscode-extension"
+    };
+
+    const api = activate(context, fake.vscode, { runner, mcpStarter });
+    await fake.commands.get("copilotArchitect.setupRepo")?.();
+
+    // init → analyze → graph → diagnostics → index → agents install → mcp config
+    expect(cliRequests.map((request) => request.args)).toEqual([
+      ["init", "--path", "/workspace/repo"],
+      ["analyze", "--path", "/workspace/repo"],
+      ["graph", "--path", "/workspace/repo"],
+      ["diagnostics", "--path", "/workspace/repo"],
+      ["index", "--path", "/workspace/repo"],
+      ["agents", "install", "--path", "/workspace/repo"],
+      ["mcp", "config", "--path", "/workspace/repo"]
+    ]);
+    expect(mcpRequests[0]?.args).toEqual(["mcp", "--path", "/workspace/repo"]);
+    expect(api.getState().mcpStatus).toBe("running");
+
+    deactivate();
+  });
+
+  it("sets up every sub-repo when the multi-repo mode is chosen", async () => {
+    const reposDir = await mkdtemp(path.join(tmpdir(), "copilot-ext-setup-multi-"));
+    const repoA = path.join(reposDir, "service-a");
+    const repoB = path.join(reposDir, "service-b");
+    await mkdir(repoA, { recursive: true });
+    await mkdir(repoB, { recursive: true });
+
+    const fake = createFakeVscode();
+    fake.quickPickChoice = "Multiple repos";
+    fake.openDialogResult = [{ fsPath: reposDir, toString: () => reposDir }];
+    const cliRequests: CliRunRequest[] = [];
+    const runner = {
+      run: async (request: CliRunRequest): Promise<CliRunResult> => {
+        cliRequests.push(request);
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          commandLine: createCliCommandLine(request.args)
+        };
+      }
+    };
+    const context: ExtensionContextLike = {
+      subscriptions: [],
+      extensionPath: "/workspace/ext-root/packages/vscode-extension"
+    };
+
+    activate(context, fake.vscode, { runner });
+    await fake.commands.get("copilotArchitect.setupRepo")?.();
+
+    const argsList = cliRequests.map((request) => request.args);
+    // Each sub-repo is registered, then initialized/analyzed/graphed in place.
+    expect(argsList).toContainEqual([
+      "workspace",
+      "add",
+      "service-a",
+      repoA,
+      "--path",
+      "/workspace/repo"
+    ]);
+    for (const repo of [repoA, repoB]) {
+      expect(argsList).toContainEqual(["init", "--path", repo]);
+      expect(argsList).toContainEqual(["analyze", "--path", repo]);
+      expect(argsList).toContainEqual(["graph", "--path", repo]);
+      // Assessment is per-repo, not on the parent container folder.
+      expect(argsList).toContainEqual(["diagnostics", "--path", repo]);
+    }
+    expect(argsList).not.toContainEqual(["diagnostics", "--path", "/workspace/repo"]);
+    // One combined workspace index rather than a per-repo index.
+    expect(argsList).toContainEqual([
+      "workspace",
+      "index",
+      "--path",
+      "/workspace/repo"
+    ]);
+    expect(argsList).not.toContainEqual(["index", "--path", "/workspace/repo"]);
+    // Registered repos show up in the Explorer.
+    expect(fake.addedFolders.map((folder) => folder.uri.fsPath)).toEqual(
+      expect.arrayContaining([repoA, repoB])
+    );
+
+    deactivate();
+  });
+
+  it("reports failed setup steps instead of aborting the rest of the chain", async () => {
+    const fake = createFakeVscode();
+    fake.quickPickChoice = "This repo";
+    const cliRequests: CliRunRequest[] = [];
+    const runner = {
+      run: async (request: CliRunRequest): Promise<CliRunResult> => {
+        cliRequests.push(request);
+        return {
+          // Fail the agents step only; later steps must still run.
+          exitCode: request.args[0] === "agents" ? 1 : 0,
+          stdout: "",
+          stderr: "",
+          commandLine: createCliCommandLine(request.args)
+        };
+      }
+    };
+    const context: ExtensionContextLike = {
+      subscriptions: [],
+      extensionPath: "/workspace/ext-root/packages/vscode-extension"
+    };
+
+    const api = activate(context, fake.vscode, { runner });
+    await fake.commands.get("copilotArchitect.setupRepo")?.();
+
+    expect(cliRequests.map((request) => request.args[0])).toContain("mcp");
+    expect(api.getState().lastExitCode).toBe(1);
+
+    deactivate();
+  });
+
+  it("stops the running MCP server and clears the status", async () => {
+    const fake = createFakeVscode();
+    let disposed = 0;
+    const mcpStarter: McpStarter = {
+      start: () => ({ dispose: () => (disposed += 1) })
+    };
+    const context: ExtensionContextLike = {
+      subscriptions: [],
+      extensionPath: "/workspace/ext-root/packages/vscode-extension"
+    };
+
+    const api = activate(context, fake.vscode, {
+      runner: passThroughRunner,
+      mcpStarter
+    });
+    await fake.commands.get("copilotArchitect.startMcp")?.();
+    expect(api.getState().mcpStatus).toBe("running");
+
+    await fake.commands.get("copilotArchitect.stopMcp")?.();
+    expect(disposed).toBe(1);
+    expect(api.getState().mcpStatus).toBe("stopped");
+
+    // Stopping again is a no-op rather than a second dispose on a dead handle.
+    await fake.commands.get("copilotArchitect.stopMcp")?.();
+    expect(disposed).toBe(1);
+
+    deactivate();
+  });
+
+  it("configures and starts MCP in one action", async () => {
+    const fake = createFakeVscode();
+    const cliRequests: CliRunRequest[] = [];
+    const mcpRequests: CliRunRequest[] = [];
+    const runner = {
+      run: async (request: CliRunRequest): Promise<CliRunResult> => {
+        cliRequests.push(request);
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          commandLine: createCliCommandLine(request.args)
+        };
+      }
+    };
+    const mcpStarter: McpStarter = {
+      start: (request) => {
+        mcpRequests.push(request);
+        return { dispose: () => undefined };
+      }
+    };
+    const context: ExtensionContextLike = {
+      subscriptions: [],
+      extensionPath: "/workspace/ext-root/packages/vscode-extension"
+    };
+
+    const api = activate(context, fake.vscode, { runner, mcpStarter });
+    await fake.commands.get("copilotArchitect.startAndSetupMcp")?.();
+
+    expect(cliRequests[0]?.args).toEqual([
+      "mcp",
+      "config",
+      "--path",
+      "/workspace/repo"
+    ]);
+    expect(mcpRequests[0]?.args).toEqual(["mcp", "--path", "/workspace/repo"]);
+    expect(api.getState().mcpStatus).toBe("running");
+
+    deactivate();
+  });
+
+  it("routes the More actions quick pick to the chosen command", async () => {
+    const fake = createFakeVscode();
+    fake.quickPickChoice = "Generate Plan";
+    const context: ExtensionContextLike = {
+      subscriptions: [],
+      extensionPath: "/workspace/ext-root/packages/vscode-extension"
+    };
+
+    activate(context, fake.vscode, { runner: passThroughRunner });
+    await fake.commands.get("copilotArchitect.moreActions")?.();
+
+    expect(fake.quickPickItems[0]?.map((item) => item.label)).toEqual(
+      COPILOT_ARCHITECT_SECONDARY_ACTIONS.map((action) => action.label)
+    );
+    expect(
+      fake.executeCommandCalls.some(
+        (call) => call.command === "copilotArchitect.generatePlan"
+      )
+    ).toBe(true);
 
     deactivate();
   });
@@ -334,7 +584,27 @@ describe("VS Code extension shell", () => {
     expect(html).toContain("Review reports");
     expect(html).toContain("Agent status");
     expect(html).toContain("MCP status");
-    expect(html).toContain("command:copilotArchitect.analyzeRepo");
+  });
+
+  it("renders exactly the five primary actions plus More actions", () => {
+    const html = createDashboardHtml({
+      workspaceRoot: "/workspace/repo",
+      mcpStatus: "stopped"
+    });
+
+    for (const action of DASHBOARD_PRIMARY_ACTIONS) {
+      expect(html).toContain(`command:${action.id}`);
+    }
+    expect(html).toContain("command:copilotArchitect.moreActions");
+
+    // Secondary actions are reachable only through the quick pick, so the
+    // sidebar shows one row of buttons instead of eleven wrapped links.
+    for (const action of COPILOT_ARCHITECT_SECONDARY_ACTIONS) {
+      expect(html).not.toContain(`command:${action.id}`);
+    }
+    expect(html.match(/<a href="command:/g)).toHaveLength(
+      DASHBOARD_PRIMARY_ACTIONS.length + 1
+    );
   });
 });
 
@@ -346,6 +616,9 @@ interface FakeVscode {
   openDialogResult: UriLike[] | undefined;
   executeCommandCalls: Array<{ command: string; args: unknown[] }>;
   addedFolders: Array<{ uri: UriLike; name?: string }>;
+  /** Label the fake quick pick resolves to; undefined mimics a dismissed picker. */
+  quickPickChoice: string | undefined;
+  quickPickItems: QuickPickItemLike[][];
 }
 
 function createFakeVscode(): FakeVscode {
@@ -357,6 +630,8 @@ function createFakeVscode(): FakeVscode {
     openDialogResult: undefined,
     executeCommandCalls: [],
     addedFolders: [],
+    quickPickChoice: undefined,
+    quickPickItems: [],
     vscode: {
       commands: {
         registerCommand: (command, callback): DisposableLike => {
@@ -378,6 +653,10 @@ function createFakeVscode(): FakeVscode {
         showErrorMessage: () => undefined,
         showInputBox: async () => fake.input,
         showOpenDialog: async () => fake.openDialogResult,
+        showQuickPick: async (items: QuickPickItemLike[]) => {
+          fake.quickPickItems.push(items);
+          return items.find((item) => item.label === fake.quickPickChoice);
+        },
         registerWebviewViewProvider: (
           viewId: string,
           provider: WebviewViewProviderLike

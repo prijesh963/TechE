@@ -30,7 +30,11 @@
     "onCommand:copilotArchitect.generateInstructions",
     "onCommand:copilotArchitect.openRepoInNewWindow",
     "onCommand:copilotArchitect.workspaceScan",
-    "onCommand:copilotArchitect.setupMcp"
+    "onCommand:copilotArchitect.setupMcp",
+    "onCommand:copilotArchitect.setupRepo",
+    "onCommand:copilotArchitect.startAndSetupMcp",
+    "onCommand:copilotArchitect.stopMcp",
+    "onCommand:copilotArchitect.moreActions"
   ],
   "contributes": {
     "commands": [
@@ -97,6 +101,26 @@
         "command": "copilotArchitect.setupMcp",
         "title": "Copilot Architect: Setup MCP Server",
         "icon": "$(plug)"
+      },
+      {
+        "command": "copilotArchitect.setupRepo",
+        "title": "Copilot Architect: Setup Repo",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "copilotArchitect.startAndSetupMcp",
+        "title": "Copilot Architect: Start & Setup MCP",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "copilotArchitect.stopMcp",
+        "title": "Copilot Architect: Stop MCP",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "copilotArchitect.moreActions",
+        "title": "Copilot Architect: More Actions",
+        "icon": "$(ellipsis)"
       }
     ],
     "viewsContainers": {
