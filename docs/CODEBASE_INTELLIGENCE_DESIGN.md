@@ -250,3 +250,87 @@ breadth."
   nodes, 98 edges, 0 diagnostics) and against `samples/node-api`, in
   addition to the unit/integration suite in `tests/graph.test.ts` and
   `tests/mcp-server.test.ts`.
+
+## 6. Git-History Signals (`AdvancedAnalysisService`) — Implemented
+
+### Scope for this phase
+
+Independent of #1, per the dependency graph above — no code dependency on
+the symbol graph. Built now so it's ready to feed #2 (hybrid retrieval's
+recency-as-a-ranking-signal) and #3 (intent classification's "recent
+changes" field) the moment they land, rather than being bolted on
+afterward.
+
+Two signals, both derived from one `git log` walk over a bounded lookback
+window, matching the "lightweight addition" framing — not a full git
+mining subsystem:
+
+- **Recency**: when a file was last touched.
+- **Frequency ("hotspot")**: how many commits in the window touched it —
+  a proxy for coupling/importance that a one-shot repo scan cannot see.
+
+### Schema changes
+
+Added to `packages/shared/src/models.ts`:
+
+```ts
+export interface FileChangeActivity {
+  filePath: string;
+  /** Commits touching this file within the lookback window. */
+  commitCount: number;
+  /** ISO timestamp of the most recent commit touching it. */
+  lastChangedAt: string;
+  lastChangedDaysAgo: number;
+}
+```
+
+Added to `AdvancedAnalysis` as `gitActivity: FileChangeActivity[]` —
+additive, so `CURRENT_SCHEMA_VERSION` does not need a bump, matching #1.
+
+### Behavior
+
+`AdvancedAnalysisService.analyze()` gains one more `detect*`-style step,
+`collectGitActivity(repoRoot)`:
+
+1. One `git log -n <maxCommits> --pretty=format:%x00%aI --name-only` call
+   (default `maxCommits = 500`) — a single walk, not one `git log` per
+   file, so cost stays bounded regardless of repo size.
+2. Parse into `{ filePath -> { commitCount, lastChangedAt } }`; git's
+   porcelain output already uses `/`-separated paths on every OS, so no
+   extra normalization is needed. Merge commits are excluded by
+   `--name-only`'s default behavior (no incidental double-counting).
+3. Sort by `commitCount` desc, then recency, and cap to the top 50 —
+   consistent with every other "top N" cap already used in this codebase
+   (`relevantFiles`, `likelyFilesToModify`, etc.) rather than returning
+   the whole repo's history.
+4. Never fails the analysis: no `.git` directory, git not installed, or
+   an empty/shallow history all degrade to `gitActivity: []` via the same
+   try/catch-and-return-undefined pattern `ReviewService`'s own git calls
+   already use.
+
+### Feeding into risk scoring
+
+Rather than inventing a new `AdvancedRiskScore` category (which would
+ripple into every consumer that pattern-matches on the category union),
+`gitActivity` strengthens the existing `missing-test` category's reasons
+and score: a source file with no adjacent test **and** a high commit
+count in the window is a stronger signal than either fact alone — a
+file that changes often without test coverage compounds risk. The
+category, its score range, and its shape are unchanged; only the
+`reasons` text and score gain a recency-aware case.
+
+### Compatibility
+
+- Purely additive: one new field, one new interface. No existing shape
+  changes.
+- Every existing test fixture builds repos without `git init` (see
+  `tests/advanced-analysis.test.ts`), so `gitActivity: []` is the
+  observed behavior there — confirms the degrade-gracefully path is
+  exercised by the existing suite, not just a new one.
+
+### Implementation Notes
+
+- `collectGitActivity` reuses the same `execFile`/`promisify` pattern
+  already present in `advanced-analysis-service.ts` — no new dependency.
+- Verified against this repo's own git history (multi-hundred commits)
+  in addition to fixture-repo tests with a handful of commits.

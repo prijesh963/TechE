@@ -201,6 +201,18 @@ export interface AdvancedAnalysis extends GeneratedArtifact {
   testRelationships: TestRelationship[];
   riskScores: AdvancedRiskScore[];
   diagnostics: RepoReadinessDiagnostic[];
+  /** Recency/frequency signal from git history. Empty when the repo has no
+   *  `.git` directory, git is unavailable, or the history is empty. */
+  gitActivity: FileChangeActivity[];
+}
+
+export interface FileChangeActivity {
+  filePath: string;
+  /** Commits touching this file within the lookback window. */
+  commitCount: number;
+  /** ISO timestamp of the most recent commit touching it. */
+  lastChangedAt: string;
+  lastChangedDaysAgo: number;
 }
 
 export interface AdvancedArchitecturePattern {

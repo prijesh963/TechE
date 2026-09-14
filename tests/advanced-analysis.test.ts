@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +11,8 @@ import { runCli } from "../packages/cli/src/index.js";
 import { AdvancedAnalysisService } from "../packages/core/src/index.js";
 import { FeaturePlanningService } from "../packages/planner/src/index.js";
 import { getArtifactDirectoryPath } from "../packages/shared/src/index.js";
+
+const execFileAsync = promisify(execFile);
 
 function createCapture() {
   const stdout: string[] = [];
@@ -249,6 +253,87 @@ describe("Phase 21 advanced intelligence", () => {
       expect.objectContaining({ kind: "express", routePath: "/health" })
     );
   });
+
+  it("returns no git activity when the repo has no .git directory", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "no-git" }),
+      "src/index.ts": "export const value = 1;"
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: repoRoot
+    });
+
+    expect(analysis.gitActivity).toEqual([]);
+  });
+
+  it("ranks git activity by commit frequency and surfaces recency", async () => {
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "git-activity" }),
+      "src/hot.ts": "export const hot = 1;",
+      "src/cold.ts": "export const cold = 1;"
+    });
+    await initializeGitRepo(repoRoot);
+    // Two extra commits touching src/hot.ts, none touching src/cold.ts again.
+    for (let index = 0; index < 2; index += 1) {
+      await writeFile(
+        path.join(repoRoot, "src/hot.ts"),
+        `export const hot = ${index + 2};`,
+        "utf8"
+      );
+      await commitAll(repoRoot, `update hot ${index}`);
+    }
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: repoRoot
+    });
+    const hot = analysis.gitActivity.find(
+      (activity) => activity.filePath === "src/hot.ts"
+    );
+    const cold = analysis.gitActivity.find(
+      (activity) => activity.filePath === "src/cold.ts"
+    );
+
+    expect(hot?.commitCount).toBe(3);
+    expect(cold?.commitCount).toBe(1);
+    expect(hot?.lastChangedDaysAgo).toBe(0);
+    expect(analysis.gitActivity[0]?.filePath).toBe("src/hot.ts");
+  });
+
+  it("flags an untested hotspot in the missing-test risk score's reasons", async () => {
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "hotspot-risk" }),
+      "src/payment-service.ts": "export const process = () => true;"
+    });
+    await initializeGitRepo(repoRoot);
+    for (let index = 0; index < 2; index += 1) {
+      await writeFile(
+        path.join(repoRoot, "src/payment-service.ts"),
+        `export const process = () => ${index + 2};`,
+        "utf8"
+      );
+      await commitAll(repoRoot, `touch payment-service ${index}`);
+    }
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: repoRoot
+    });
+    const missingTestRisk = analysis.riskScores.find(
+      (risk) => risk.category === "missing-test"
+    );
+
+    expect(missingTestRisk?.score).toBe(90);
+    expect(missingTestRisk?.reasons.join(" ")).toContain("src/payment-service.ts");
+    expect(missingTestRisk?.reasons.join(" ")).toContain("untested hotspots");
+  });
 });
 
 async function createRepo(files: Record<string, string>): Promise<string> {
@@ -261,4 +346,35 @@ async function createRepo(files: Record<string, string>): Promise<string> {
   }
 
   return repoRoot;
+}
+
+async function initializeGitRepo(repoRoot: string): Promise<void> {
+  await execFileAsync("git", ["init"], { cwd: repoRoot });
+  await commitAll(repoRoot, "initial");
+}
+
+async function commitAll(repoRoot: string, message: string): Promise<void> {
+  await execFileAsync("git", ["add", "."], { cwd: repoRoot });
+  await execFileAsync(
+    "git",
+    [
+      "-c",
+      "user.name=Copilot Architect",
+      "-c",
+      "user.email=copilot-architect@example.test",
+      "commit",
+      "-m",
+      message
+    ],
+    { cwd: repoRoot }
+  );
+}
+
+async function gitAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["--version"]);
+    return true;
+  } catch {
+    return false;
+  }
 }
