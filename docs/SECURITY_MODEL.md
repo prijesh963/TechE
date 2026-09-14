@@ -20,17 +20,17 @@ The safety policy blocks dangerous commands by default through `CommandRiskAsses
 
 **Blocked by default:**
 
-| Command | Pattern |
-|---|---|
-| `rm -rf` / `rm -rf /` | `\brm\s+-[^\s]*(?:r[^\s]*f\|f[^\s]*r)` |
-| `del /s` (Windows) | `\bdel\s+\/s\b` |
-| `format` disk utility | `^(?:format\|format\.com)(?:\s\|$)` |
-| `diskpart` | `\bdiskpart\b` |
-| `git clean -fdx` | All three flags required |
-| `git reset --hard` | `\bgit\s+reset\s+--hard\b` |
-| `chmod -R 777` | `\bchmod\s+-r\s+777\b` |
-| `sudo rm` | `\bsudo\s+rm\b` |
-| `Remove-Item -Recurse` (PowerShell) | `\bRemove-Item\s+-Recurse\b` |
+| Command                             | Pattern                                |
+| ----------------------------------- | -------------------------------------- |
+| `rm -rf` / `rm -rf /`               | `\brm\s+-[^\s]*(?:r[^\s]*f\|f[^\s]*r)` |
+| `del /s` (Windows)                  | `\bdel\s+\/s\b`                        |
+| `format` disk utility               | `^(?:format\|format\.com)(?:\s\|$)`    |
+| `diskpart`                          | `\bdiskpart\b`                         |
+| `git clean -fdx`                    | All three flags required               |
+| `git reset --hard`                  | `\bgit\s+reset\s+--hard\b`             |
+| `chmod -R 777`                      | `\bchmod\s+-r\s+777\b`                 |
+| `sudo rm`                           | `\bsudo\s+rm\b`                        |
+| `Remove-Item -Recurse` (PowerShell) | `\bRemove-Item\s+-Recurse\b`           |
 
 **Git history mutations** (logged as warnings, not blocked by default unless policy is set):
 
@@ -45,23 +45,23 @@ The safety policy blocks dangerous commands by default through `CommandRiskAsses
 
 All logs, audit entries, validation reports, review reports, and handoff prompts are processed through `SecretRedactionService` before being written to disk. The following patterns are redacted:
 
-| Category | Example |
-|---|---|
-| Env-var assignments | `TOKEN=abc123` → `TOKEN=[REDACTED]` |
-| Extended env-var keywords | `CLIENT_SECRET`, `SIGNING_KEY`, `ENCRYPTION_KEY`, `PRIVATE_KEY`, `AUTH_KEY` |
-| HTTP Bearer tokens | `Authorization: Bearer eyJ…` |
-| GitHub tokens | `ghp_…`, `gho_…`, `ghu_…`, `ghs_…`, `ghr_…` |
-| AWS access key IDs | `AKIAIOSFODNN7EXAMPLE` → `[REDACTED_AWS_KEY_ID]` |
-| AWS secret access keys | 40-char base64 strings after `AWS_SECRET_ACCESS_KEY=` |
-| GCP API keys | `AIza…` (35-char suffix) |
-| Stripe secret keys | `sk_live_…`, `sk_test_…` |
-| Stripe publishable keys | `pk_live_…`, `pk_test_…` |
-| Stripe restricted keys | `rk_live_…`, `rk_test_…` |
-| PEM private key blocks | `-----BEGIN RSA PRIVATE KEY-----` |
-| JWT tokens | Three-part base64url tokens |
-| Database connection strings | `postgres://user:password@host/db` — credentials redacted |
-| npm auth tokens | `_authToken=…`, `npm_token=…` |
-| Slack tokens | `xoxb-…`, `xoxp-…`, `xoxs-…`, `xoxa-…` |
+| Category                    | Example                                                                     |
+| --------------------------- | --------------------------------------------------------------------------- |
+| Env-var assignments         | `TOKEN=abc123` → `TOKEN=[REDACTED]`                                         |
+| Extended env-var keywords   | `CLIENT_SECRET`, `SIGNING_KEY`, `ENCRYPTION_KEY`, `PRIVATE_KEY`, `AUTH_KEY` |
+| HTTP Bearer tokens          | `Authorization: Bearer eyJ…`                                                |
+| GitHub tokens               | `ghp_…`, `gho_…`, `ghu_…`, `ghs_…`, `ghr_…`                                 |
+| AWS access key IDs          | `AKIAIOSFODNN7EXAMPLE` → `[REDACTED_AWS_KEY_ID]`                            |
+| AWS secret access keys      | 40-char base64 strings after `AWS_SECRET_ACCESS_KEY=`                       |
+| GCP API keys                | `AIza…` (35-char suffix)                                                    |
+| Stripe secret keys          | `sk_live_…`, `sk_test_…`                                                    |
+| Stripe publishable keys     | `pk_live_…`, `pk_test_…`                                                    |
+| Stripe restricted keys      | `rk_live_…`, `rk_test_…`                                                    |
+| PEM private key blocks      | `-----BEGIN RSA PRIVATE KEY-----`                                           |
+| JWT tokens                  | Three-part base64url tokens                                                 |
+| Database connection strings | `postgres://user:password@host/db` — credentials redacted                   |
+| npm auth tokens             | `_authToken=…`, `npm_token=…`                                               |
+| Slack tokens                | `xoxb-…`, `xoxp-…`, `xoxs-…`, `xoxa-…`                                      |
 
 Custom secret patterns can be added to `.copilot-architect/policy.json` under `secretRedactionPatterns`.
 
@@ -117,6 +117,7 @@ npm run cli -- cleanup --max-runs 20       # custom run count limit
 ```
 
 Rules:
+
 - Only files under `.copilot-architect/` in the configured directories are eligible.
 - `latest-*` alias files are always preserved.
 - The audit log is never cleaned by default retention.

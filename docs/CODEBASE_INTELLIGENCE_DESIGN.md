@@ -471,11 +471,7 @@ applied to its output afterward.
 
 ```ts
 export type QueryIntentLabel =
-  | "debugging"
-  | "feature"
-  | "refactor"
-  | "test"
-  | "unknown";
+  "debugging" | "feature" | "refactor" | "test" | "unknown";
 
 export interface RelevantFileSummary {
   filePath: string;

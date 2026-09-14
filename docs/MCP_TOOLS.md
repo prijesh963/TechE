@@ -42,33 +42,33 @@ All tools return structured JSON. Missing artifacts return a structured `{ ok: f
 
 ### Read-Only Tools (Default)
 
-| Tool | Arguments | Description |
-|---|---|---|
-| `repo_map` | `startPath?` | Return the full `UniversalRepoMap` for the target repo, running analysis if no cached map exists |
-| `workspace_map` | `startPath?` | Return the workspace-level map; generates per-repo maps and merges them |
-| `detect_languages` | `startPath?` | Detected languages with confidence scores |
-| `detect_frameworks` | `startPath?` | Detected frameworks |
-| `detect_package_managers` | `startPath?` | Detected package managers |
-| `detect_build_commands` | `startPath?` | Build commands from adapters and custom config |
-| `detect_test_commands` | `startPath?` | Test commands from adapters and custom config |
-| `search_repo` | `query`, `startPath?`, `limit?` | Keyword search the local index; auto-indexes if no index exists |
-| `search_across_repos` | `query`, `startPath?`, `limit?` | Search across all workspace repos; results annotated with `repoName` and `repoRole` |
-| `find_similar_feature` | `query`, `startPath?`, `limit?` | Search filtered to non-config source files most relevant to a feature description |
-| `find_impacted_files` | `featureRequest`, `startPath?` | Return files likely affected by the described change |
-| `analyze_impact` | `featureRequest`, `startPath?` | Return full impact analysis including affected languages, modules, and files |
-| `analyze_cross_repo_impact` | `featureRequest`, `startPath?` | Cross-repo impact for multi-repo workspace configs; returns impacted repos and per-repo validation plans |
-| `generate_plan_context` | `featureRequest`, `startPath?` | Return planning context (repo map + search results) without writing any artifacts |
-| `get_validation_commands` | `startPath?` | List safe validation commands from detected and custom config |
-| `get_safety_policy` | `startPath?` | Return the active safety policy; falls back to defaults if no `policy.json` exists |
-| `get_latest_plan` | `startPath?` | Return the contents of `latest-plan.json`; `{ ok: false }` if none exists |
-| `get_latest_validation` | `startPath?` | Return the contents of the latest validation report |
-| `get_latest_review` | `startPath?` | Return the contents of the latest review report |
-| `agent_status` | `startPath?` | Return installed agent status from `.github/agents/` |
+| Tool                        | Arguments                       | Description                                                                                              |
+| --------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `repo_map`                  | `startPath?`                    | Return the full `UniversalRepoMap` for the target repo, running analysis if no cached map exists         |
+| `workspace_map`             | `startPath?`                    | Return the workspace-level map; generates per-repo maps and merges them                                  |
+| `detect_languages`          | `startPath?`                    | Detected languages with confidence scores                                                                |
+| `detect_frameworks`         | `startPath?`                    | Detected frameworks                                                                                      |
+| `detect_package_managers`   | `startPath?`                    | Detected package managers                                                                                |
+| `detect_build_commands`     | `startPath?`                    | Build commands from adapters and custom config                                                           |
+| `detect_test_commands`      | `startPath?`                    | Test commands from adapters and custom config                                                            |
+| `search_repo`               | `query`, `startPath?`, `limit?` | Keyword search the local index; auto-indexes if no index exists                                          |
+| `search_across_repos`       | `query`, `startPath?`, `limit?` | Search across all workspace repos; results annotated with `repoName` and `repoRole`                      |
+| `find_similar_feature`      | `query`, `startPath?`, `limit?` | Search filtered to non-config source files most relevant to a feature description                        |
+| `find_impacted_files`       | `featureRequest`, `startPath?`  | Return files likely affected by the described change                                                     |
+| `analyze_impact`            | `featureRequest`, `startPath?`  | Return full impact analysis including affected languages, modules, and files                             |
+| `analyze_cross_repo_impact` | `featureRequest`, `startPath?`  | Cross-repo impact for multi-repo workspace configs; returns impacted repos and per-repo validation plans |
+| `generate_plan_context`     | `featureRequest`, `startPath?`  | Return planning context (repo map + search results) without writing any artifacts                        |
+| `get_validation_commands`   | `startPath?`                    | List safe validation commands from detected and custom config                                            |
+| `get_safety_policy`         | `startPath?`                    | Return the active safety policy; falls back to defaults if no `policy.json` exists                       |
+| `get_latest_plan`           | `startPath?`                    | Return the contents of `latest-plan.json`; `{ ok: false }` if none exists                                |
+| `get_latest_validation`     | `startPath?`                    | Return the contents of the latest validation report                                                      |
+| `get_latest_review`         | `startPath?`                    | Return the contents of the latest review report                                                          |
+| `agent_status`              | `startPath?`                    | Return installed agent status from `.github/agents/`                                                     |
 
 ### Approval-Gated Tools
 
-| Tool | Arguments | Description |
-|---|---|---|
+| Tool                    | Arguments                                            | Description                                                                                                                    |
+| ----------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `generate_feature_plan` | `featureRequest`, `startPath?`, **`approved: true`** | Write plan artifacts (`latest-plan.json`, `latest-plan.md`) — requires `approved=true`; missing this argument returns an error |
 
 ---

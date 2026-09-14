@@ -498,8 +498,7 @@ async function readExistingDraftPlan(
   );
 
   return (await tryReadJson(latestPlanPath)) as
-    | { status: string; revision: number }
-    | undefined;
+    { status: string; revision: number } | undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

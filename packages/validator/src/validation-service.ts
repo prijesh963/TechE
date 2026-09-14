@@ -685,4 +685,3 @@ function resolveSpawnTarget(cmd: string, args: string[]): [string, string[]] {
   if (npmLike.has(base)) return ["cmd.exe", ["/c", cmd, ...args]];
   return [cmd, args];
 }
-

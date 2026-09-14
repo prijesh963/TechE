@@ -51,7 +51,8 @@ const redactionRules: RedactionRule[] = [
   },
   {
     name: "aws-secret-access-key",
-    pattern: /(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)\s*[=:]\s*[A-Za-z0-9/+=]{40}/gi,
+    pattern:
+      /(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)\s*[=:]\s*[A-Za-z0-9/+=]{40}/gi,
     replacement: "[REDACTED_AWS_SECRET]"
   },
   {
@@ -87,7 +88,8 @@ const redactionRules: RedactionRule[] = [
   {
     name: "db-connection-string",
     pattern: /(?:postgres|mysql|mongodb|redis|mssql|sqlserver):\/\/[^\s@]*:[^\s@]+@/gi,
-    replacement: (_match: string) => _match.replace(/\/\/[^\s@]*:[^\s@]+@/, "//[REDACTED]@")
+    replacement: (_match: string) =>
+      _match.replace(/\/\/[^\s@]*:[^\s@]+@/, "//[REDACTED]@")
   },
   {
     name: "npm-auth-token",

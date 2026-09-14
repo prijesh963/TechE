@@ -1,0 +1,41 @@
+name: Release Check
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "packages/**"
+      - "scripts/**"
+      - "docs/MVP_DEFINITION.md"
+      - "docs/RELEASE_PLAN.md"
+      - ".github/workflows/release-check.yml"
+
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: Check formatting
+        run: npm run format
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+      - name: Version
+        run: npm run cli -- version
+      - name: Doctor
+        run: npm run cli -- doctor
+      - name: Build local package
+        run: npm run package:local

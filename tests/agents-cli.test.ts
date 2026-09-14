@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { AgentService } from "../packages/agents/src/index.js";
 import { runCli } from "../packages/cli/src/index.js";
 
 function createCapture() {
@@ -32,7 +33,9 @@ describe("agents CLI", () => {
     const json = JSON.parse(capture.stdout.join("\n"));
 
     expect(result.exitCode).toBe(0);
-    expect(json.results).toHaveLength(7);
+    // Assert against the actual template roster rather than a hardcoded
+    // count, so this doesn't go stale again as templates are added.
+    expect(json.results).toHaveLength(new AgentService().list().templates.length);
     expect(json.outputDirectory).toBe(path.join(repoRoot, ".github/agents"));
     await access(path.join(repoRoot, ".github/agents/CodeReviewer.agent.md"));
   });

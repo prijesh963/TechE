@@ -144,21 +144,21 @@ Before cutting an internal release:
 
 ## Key Directories
 
-| Path | Purpose |
-|---|---|
-| `packages/cli/src/index.ts` | CLI entry point and command routing |
-| `packages/shared/src/models.ts` | All shared TypeScript domain models |
-| `packages/shared/src/constants.ts` | Version, command names, artifact paths |
-| `packages/core/src/repo-discovery.ts` | Repo analysis and adapter orchestration |
-| `packages/adapters/src/` | Language/framework adapters |
-| `packages/indexer/src/indexing-service.ts` | File indexing and search |
-| `packages/planner/src/feature-planning-service.ts` | Feature plan generation |
-| `packages/validator/src/validation-service.ts` | Safe command execution |
-| `packages/validator/src/safety-policy-service.ts` | Blocked patterns, secret redaction |
-| `packages/validator/src/secret-redaction-service.ts` | Runtime secret scrubbing |
-| `packages/reviewer/src/index.ts` | Review report generation |
-| `packages/agents/src/index.ts` | Agent template generation |
-| `packages/mcp-server/src/tools.ts` | MCP tool definitions |
-| `tests/` | Integration and e2e tests |
-| `samples/` | Representative repos for testing |
-| `docs/` | Product documentation |
+| Path                                                 | Purpose                                 |
+| ---------------------------------------------------- | --------------------------------------- |
+| `packages/cli/src/index.ts`                          | CLI entry point and command routing     |
+| `packages/shared/src/models.ts`                      | All shared TypeScript domain models     |
+| `packages/shared/src/constants.ts`                   | Version, command names, artifact paths  |
+| `packages/core/src/repo-discovery.ts`                | Repo analysis and adapter orchestration |
+| `packages/adapters/src/`                             | Language/framework adapters             |
+| `packages/indexer/src/indexing-service.ts`           | File indexing and search                |
+| `packages/planner/src/feature-planning-service.ts`   | Feature plan generation                 |
+| `packages/validator/src/validation-service.ts`       | Safe command execution                  |
+| `packages/validator/src/safety-policy-service.ts`    | Blocked patterns, secret redaction      |
+| `packages/validator/src/secret-redaction-service.ts` | Runtime secret scrubbing                |
+| `packages/reviewer/src/index.ts`                     | Review report generation                |
+| `packages/agents/src/index.ts`                       | Agent template generation               |
+| `packages/mcp-server/src/tools.ts`                   | MCP tool definitions                    |
+| `tests/`                                             | Integration and e2e tests               |
+| `samples/`                                           | Representative repos for testing        |
+| `docs/`                                              | Product documentation                   |

@@ -751,10 +751,17 @@ export function activate(
         const userPrompt = request.prompt.trim();
         const userTerms = [...new Set(tokenize(userPrompt))];
         const repoResult = await buildRepoContext(workspaceRoot, userPrompt, vscode);
-        let fileCtx = await readFilesForLmContext(workspaceRoot, repoResult.fileAnchors, userTerms);
+        let fileCtx = await readFilesForLmContext(
+          workspaceRoot,
+          repoResult.fileAnchors,
+          userTerms
+        );
         const activeEditor = vscode.window.activeTextEditor;
         if (activeEditor) {
-          const activeRelPath = path.relative(workspaceRoot, activeEditor.document.fileName);
+          const activeRelPath = path.relative(
+            workspaceRoot,
+            activeEditor.document.fileName
+          );
           if (!repoResult.fileAnchors.some((a) => a.relativePath === activeRelPath)) {
             fileCtx += `\n\n=== Currently open in editor: ${activeRelPath} ===\n${activeEditor.document.getText().slice(0, 3_000)}`;
           }
@@ -824,8 +831,13 @@ export function activate(
             repoResult.fileAnchors.map((a) => [a.relativePath, a.anchorLine])
           );
           const merged: FileAnchor[] = [
-            ...planFilePaths.map((p) => ({ relativePath: p, anchorLine: anchorMap.get(p) })),
-            ...repoResult.fileAnchors.filter((a) => !planFilePaths.includes(a.relativePath))
+            ...planFilePaths.map((p) => ({
+              relativePath: p,
+              anchorLine: anchorMap.get(p)
+            })),
+            ...repoResult.fileAnchors.filter(
+              (a) => !planFilePaths.includes(a.relativePath)
+            )
           ];
           if (merged.length > 0) {
             fileContext = await readFilesForLmContext(workspaceRoot, merged, userTerms);
@@ -1584,7 +1596,9 @@ function tokenize(text: string): string[] {
 
 /** Cosine similarity between two numeric vectors. Returns 0 for zero-norm inputs. */
 function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
-  let dot = 0, normA = 0, normB = 0;
+  let dot = 0,
+    normA = 0,
+    normB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     normA += a[i] * a[i];
@@ -1621,7 +1635,10 @@ function extractRelevantSnippets(
     const idx = anchorLine - 1; // convert to 0-based
     const start = Math.max(0, idx - 8);
     const end = Math.min(lines.length - 1, idx + 70);
-    return lines.slice(start, end + 1).join("\n").slice(0, maxChars);
+    return lines
+      .slice(start, end + 1)
+      .join("\n")
+      .slice(0, maxChars);
   }
 
   if (terms.length === 0) return content.slice(0, maxChars);
@@ -1631,7 +1648,11 @@ function extractRelevantSnippets(
   for (let i = 0; i < lines.length; i++) {
     const lower = lines[i].toLowerCase();
     if (terms.some((t) => lower.includes(t))) {
-      for (let j = Math.max(0, i - WINDOW); j <= Math.min(lines.length - 1, i + WINDOW); j++) {
+      for (
+        let j = Math.max(0, i - WINDOW);
+        j <= Math.min(lines.length - 1, i + WINDOW);
+        j++
+      ) {
         included.add(j);
       }
     }
@@ -1658,8 +1679,10 @@ function extractRelevantSnippets(
 function parseRelativeImports(content: string, ext: string): string[] {
   const raw: string[] = [];
   if ([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].includes(ext)) {
-    for (const m of content.matchAll(/\bimport\b[^'"]*?['"](\.[^'"]+)['"]/g)) raw.push(m[1]);
-    for (const m of content.matchAll(/\brequire\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g)) raw.push(m[1]);
+    for (const m of content.matchAll(/\bimport\b[^'"]*?['"](\.[^'"]+)['"]/g))
+      raw.push(m[1]);
+    for (const m of content.matchAll(/\brequire\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g))
+      raw.push(m[1]);
   } else if (ext === ".py") {
     for (const m of content.matchAll(/^from\s+(\.+[^\s]*)\s+import/gm)) raw.push(m[1]);
   }
@@ -1701,7 +1724,12 @@ async function readFilesForLmContext(
     }
 
     const perFileCap = depth === 0 ? 4_000 : 2_000;
-    const excerpt = extractRelevantSnippets(content, requestTerms, perFileCap, anchorLine);
+    const excerpt = extractRelevantSnippets(
+      content,
+      requestTerms,
+      perFileCap,
+      anchorLine
+    );
     const lineHint = anchorLine ? `:${anchorLine}` : "";
     parts.push(`\n=== ${relPath}${lineHint} ===\n${excerpt}`);
     totalChars += excerpt.length;
@@ -1780,7 +1808,11 @@ async function generateHypotheticalSnippet(
   if (!vscodeApi.lm) return "";
   try {
     let models: LanguageModelLike[] = [];
-    for (const selector of [{ vendor: "copilot", family: "gpt-4o" }, { vendor: "copilot" }, {}]) {
+    for (const selector of [
+      { vendor: "copilot", family: "gpt-4o" },
+      { vendor: "copilot" },
+      {}
+    ]) {
       models = await vscodeApi.lm.selectChatModels(selector);
       if (models.length) break;
     }
@@ -1822,7 +1854,11 @@ async function expandQuery(
   if (!vscodeApi.lm) return [userQuery];
   try {
     let models: LanguageModelLike[] = [];
-    for (const selector of [{ vendor: "copilot", family: "gpt-4o" }, { vendor: "copilot" }, {}]) {
+    for (const selector of [
+      { vendor: "copilot", family: "gpt-4o" },
+      { vendor: "copilot" },
+      {}
+    ]) {
       models = await vscodeApi.lm.selectChatModels(selector);
       if (models.length) break;
     }
@@ -1857,7 +1893,11 @@ async function expandQuery(
  * score — so synonyms and paraphrases all contribute.
  */
 function multiQueryRrfScore(
-  docs: Array<{ relativePath: string; symbols: Array<{ name: string; startLine?: number }> ; textPreview?: string }>,
+  docs: Array<{
+    relativePath: string;
+    symbols: Array<{ name: string; startLine?: number }>;
+    textPreview?: string;
+  }>,
   queryVariants: string[]
 ): Map<string, number> {
   const K = 60;
@@ -1926,12 +1966,19 @@ async function runAgenticPlanLoop(
   const tools = [
     {
       name: TOOL_READ_FILE,
-      description: "Read a source file from the repository. Use the exact relative path.",
+      description:
+        "Read a source file from the repository. Use the exact relative path.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative file path, e.g. src/auth/AuthService.ts" },
-          startLine: { type: "number", description: "Optional 1-based line to start reading from" }
+          path: {
+            type: "string",
+            description: "Relative file path, e.g. src/auth/AuthService.ts"
+          },
+          startLine: {
+            type: "number",
+            description: "Optional 1-based line to start reading from"
+          }
         },
         required: ["path"]
       }
@@ -1942,7 +1989,10 @@ async function runAgenticPlanLoop(
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string", description: "Symbol name or short phrase to search for" }
+          query: {
+            type: "string",
+            description: "Symbol name or short phrase to search for"
+          }
         },
         required: ["query"]
       }
@@ -1951,7 +2001,11 @@ async function runAgenticPlanLoop(
 
   let models: LanguageModelLike[] = [];
   try {
-    for (const selector of [{ vendor: "copilot", family: "gpt-4o" }, { vendor: "copilot" }, {}]) {
+    for (const selector of [
+      { vendor: "copilot", family: "gpt-4o" },
+      { vendor: "copilot" },
+      {}
+    ]) {
       models = await vscodeApi.lm.selectChatModels(selector);
       if (models.length) break;
     }
@@ -1969,17 +2023,29 @@ async function runAgenticPlanLoop(
   let accumulatedContext = "";
   for (const anchor of fileAnchors.slice(0, 4)) {
     try {
-      const content = await readFile(path.join(workspaceRoot, anchor.relativePath), "utf8");
-      const excerpt = extractRelevantSnippets(content, tokenize(userPrompt), 3_000, anchor.anchorLine);
+      const content = await readFile(
+        path.join(workspaceRoot, anchor.relativePath),
+        "utf8"
+      );
+      const excerpt = extractRelevantSnippets(
+        content,
+        tokenize(userPrompt),
+        3_000,
+        anchor.anchorLine
+      );
       accumulatedContext += `\n=== ${anchor.relativePath} ===\n${excerpt}`;
-    } catch { /* file unavailable */ }
+    } catch {
+      /* file unavailable */
+    }
   }
 
   const messages: LanguageModelChatMessageLike[] = [
     ...(vscodeApi.LanguageModelChatMessage
-      ? [vscodeApi.LanguageModelChatMessage.User(
-          `${systemCtx}\n\nExisting code context:\n${accumulatedContext}\n\nDeveloper's question: ${userPrompt}`
-        )]
+      ? [
+          vscodeApi.LanguageModelChatMessage.User(
+            `${systemCtx}\n\nExisting code context:\n${accumulatedContext}\n\nDeveloper's question: ${userPrompt}`
+          )
+        ]
       : [{ role: 1, content: `${systemCtx}\n\n${userPrompt}` }])
   ];
 
@@ -2000,7 +2066,10 @@ async function runAgenticPlanLoop(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const c = chunk as any;
           if (c.type === "tool_use" || c.name) {
-            toolCalls.push({ name: c.name ?? c.type, input: c.input ?? c.parameters ?? {} });
+            toolCalls.push({
+              name: c.name ?? c.type,
+              input: c.input ?? c.parameters ?? {}
+            });
           }
         }
       }
@@ -2024,7 +2093,12 @@ async function runAgenticPlanLoop(
           const startLine = Number(call.input.startLine ?? 0) || undefined;
           try {
             const fc = await readFile(path.join(workspaceRoot, relPath), "utf8");
-            const snippet = extractRelevantSnippets(fc, tokenize(userPrompt), 3_000, startLine);
+            const snippet = extractRelevantSnippets(
+              fc,
+              tokenize(userPrompt),
+              3_000,
+              startLine
+            );
             toolResults.push(`readFile("${relPath}"):\n${snippet}`);
           } catch {
             toolResults.push(`readFile("${relPath}"): file not found`);
@@ -2037,7 +2111,9 @@ async function runAgenticPlanLoop(
             .filter((a) => terms.some((t) => tokenize(a.relativePath).includes(t)))
             .slice(0, 3)
             .map((a) => a.relativePath);
-          toolResults.push(`searchSymbol("${q}"): ${hits.length ? hits.join(", ") : "no results"}`);
+          toolResults.push(
+            `searchSymbol("${q}"): ${hits.length ? hits.join(", ") : "no results"}`
+          );
         }
       }
 
@@ -2046,9 +2122,11 @@ async function runAgenticPlanLoop(
         messages.push(vscodeApi.LanguageModelChatMessage.Assistant(assistantText));
       }
       if (toolResults.length && vscodeApi.LanguageModelChatMessage) {
-        messages.push(vscodeApi.LanguageModelChatMessage.User(
-          `Tool results:\n${toolResults.join("\n---\n")}\n\nContinue answering.`
-        ));
+        messages.push(
+          vscodeApi.LanguageModelChatMessage.User(
+            `Tool results:\n${toolResults.join("\n---\n")}\n\nContinue answering.`
+          )
+        );
       }
     }
   } catch {
@@ -2071,8 +2149,12 @@ async function buildRepoContext(
     const map = JSON.parse(await readFile(mapPath, "utf8"));
     const repo = map.repos?.[0];
     if (repo) {
-      const langs = (repo.languages as Array<{ name: string }>)?.map((l) => l.name).join(", ");
-      const fws = (repo.frameworks as Array<{ name: string }>)?.map((f) => f.name).join(", ");
+      const langs = (repo.languages as Array<{ name: string }>)
+        ?.map((l) => l.name)
+        .join(", ");
+      const fws = (repo.frameworks as Array<{ name: string }>)
+        ?.map((f) => f.name)
+        .join(", ");
       const testCmd = (repo.commands?.test as Array<{ command: string }>)?.[0]?.command;
       const entry = (repo.entryPoints as Array<{ filePath: string }>)?.[0]?.filePath;
       if (langs) lines.push(`Languages: ${langs}`);
@@ -2085,10 +2167,20 @@ async function buildRepoContext(
   }
 
   try {
-    const indexPath = path.join(workspaceRoot, ".copilot-architect", "index", "index.json");
+    const indexPath = path.join(
+      workspaceRoot,
+      ".copilot-architect",
+      "index",
+      "index.json"
+    );
     const idx = JSON.parse(await readFile(indexPath, "utf8"));
 
-    type IndexSymbol = { name: string; kind: string; startLine?: number; endLine?: number };
+    type IndexSymbol = {
+      name: string;
+      kind: string;
+      startLine?: number;
+      endLine?: number;
+    };
     type IndexDoc = {
       relativePath: string;
       symbols: IndexSymbol[];
@@ -2100,16 +2192,33 @@ async function buildRepoContext(
     };
     const docs = (idx.documents as IndexDoc[]) ?? [];
 
-    const SOURCE_EXTS = new Set([".py", ".ts", ".js", ".tsx", ".jsx", ".java", ".go", ".rb", ".cs"]);
-    let sourceDocs = docs.filter(
-      (d) => !d.isConfigFile && !d.isDocFile && d.fileSizeBytes > 0 && SOURCE_EXTS.has(d.extension)
+    const SOURCE_EXTS = new Set([
+      ".py",
+      ".ts",
+      ".js",
+      ".tsx",
+      ".jsx",
+      ".java",
+      ".go",
+      ".rb",
+      ".cs"
+    ]);
+    const sourceDocs = docs.filter(
+      (d) =>
+        !d.isConfigFile &&
+        !d.isDocFile &&
+        d.fileSizeBytes > 0 &&
+        SOURCE_EXTS.has(d.extension)
     );
 
     // --- Symbol registry: token → {file, anchorLine} ----------------------------
     // Built from every symbol in the index. Gives us "go-to-definition" resolution
     // without a language server: when a query term matches a symbol name token, we
     // know exactly which file and line to read.
-    const symbolRegistry = new Map<string, { relativePath: string; anchorLine?: number }[]>();
+    const symbolRegistry = new Map<
+      string,
+      { relativePath: string; anchorLine?: number }[]
+    >();
     for (const doc of docs) {
       for (const sym of doc.symbols) {
         for (const tok of tokenize(sym.name)) {
@@ -2125,14 +2234,19 @@ async function buildRepoContext(
     // hydeSnippet: hypothetical code snippet matching the query (HyDE mechanism)
     // Both run in parallel; failures fall back to the single original query.
     const [queryVariants, hydeSnippet] = await Promise.all([
-      request && vscodeApi ? expandQuery(vscodeApi, request, undefined) : Promise.resolve(request ? [request] : []),
-      request && vscodeApi ? generateHypotheticalSnippet(vscodeApi, request, undefined) : Promise.resolve("")
+      request && vscodeApi
+        ? expandQuery(vscodeApi, request, undefined)
+        : Promise.resolve(request ? [request] : []),
+      request && vscodeApi
+        ? generateHypotheticalSnippet(vscodeApi, request, undefined)
+        : Promise.resolve("")
     ]);
 
     // RRF over all query variants gives every synonym/paraphrase a voice.
-    const rrfScores = queryVariants.length > 0
-      ? multiQueryRrfScore(sourceDocs, queryVariants)
-      : new Map<string, number>();
+    const rrfScores =
+      queryVariants.length > 0
+        ? multiQueryRrfScore(sourceDocs, queryVariants)
+        : new Map<string, number>();
 
     // Extra terms from the HyDE snippet boost matching files.
     const hydeTerms = hydeSnippet ? [...new Set(tokenize(hydeSnippet))] : [];
@@ -2189,7 +2303,10 @@ async function buildRepoContext(
               (c) =>
                 `${c.doc.relativePath} ${c.doc.symbols.map((s) => s.name).join(" ")} ${c.doc.textPreview?.slice(0, 300) ?? ""}`
             );
-            const result = await vscodeApi.lm.computeEmbeddings(model, [request, ...docTexts]);
+            const result = await vscodeApi.lm.computeEmbeddings(model, [
+              request,
+              ...docTexts
+            ]);
             const queryEmb = result.values[0].values;
             for (let i = 0; i < candidates.length; i++) {
               const sim = cosineSimilarity(queryEmb, result.values[i + 1].values);
@@ -2213,7 +2330,9 @@ async function buildRepoContext(
       }
     }
 
-    scored.sort((a, b) => b.score - a.score || b.doc.fileSizeBytes - a.doc.fileSizeBytes);
+    scored.sort(
+      (a, b) => b.score - a.score || b.doc.fileSizeBytes - a.doc.fileSizeBytes
+    );
 
     // Top anchor files for disk reading.
     fileAnchors = scored

@@ -5,12 +5,7 @@ export type ConfidenceLevel = "low" | "medium" | "high";
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 
 export type ValidationStatus =
-  | "not-run"
-  | "passed"
-  | "failed"
-  | "blocked"
-  | "timed-out"
-  | "skipped";
+  "not-run" | "passed" | "failed" | "blocked" | "timed-out" | "skipped";
 
 export type PlanStatus = "draft" | "approved" | "in-progress" | "completed";
 
@@ -265,11 +260,7 @@ export interface TestRelationship {
 
 export interface AdvancedRiskScore {
   category:
-    | "security"
-    | "data-migration"
-    | "dependency"
-    | "multi-repo-impact"
-    | "missing-test";
+    "security" | "data-migration" | "dependency" | "multi-repo-impact" | "missing-test";
   level: Exclude<RiskLevel, "blocked">;
   score: number;
   reasons: string[];
@@ -402,11 +393,7 @@ export interface SafetyPolicy extends GeneratedArtifact {
 }
 
 export type RequiredApprovalGate =
-  | "planning"
-  | "handoff"
-  | "validation-risk"
-  | "agent-install"
-  | "policy-change";
+  "planning" | "handoff" | "validation-risk" | "agent-install" | "policy-change";
 
 export interface ArtifactRetentionPolicy {
   enabled: boolean;

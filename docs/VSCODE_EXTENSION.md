@@ -45,16 +45,16 @@ Alternatively, package the extension with `vsce` and install the `.vsix` once it
 
 After loading, the Copilot Architect icon appears in the VS Code activity bar. Click it to open the **Copilot Architect** sidebar panel. The panel shows:
 
-| Section | Content |
-|---|---|
-| Repo summary | Active workspace root path |
-| Languages/frameworks | Populated after `Analyze Repo` runs |
-| Plans | Path to `.copilot-architect/plans/latest-plan.json` |
-| Validation runs | Path to `.copilot-architect/runs/latest-validation.json` |
-| Review reports | Path to `.copilot-architect/reviews/latest-review.json` |
-| Agent status | Path to `.github/agents/` |
-| MCP status | `stopped` / `starting` / `running` |
-| Last command | The most recently run CLI command and its exit code |
+| Section              | Content                                                  |
+| -------------------- | -------------------------------------------------------- |
+| Repo summary         | Active workspace root path                               |
+| Languages/frameworks | Populated after `Analyze Repo` runs                      |
+| Plans                | Path to `.copilot-architect/plans/latest-plan.json`      |
+| Validation runs      | Path to `.copilot-architect/runs/latest-validation.json` |
+| Review reports       | Path to `.copilot-architect/reviews/latest-review.json`  |
+| Agent status         | Path to `.github/agents/`                                |
+| MCP status           | `stopped` / `starting` / `running`                       |
+| Last command         | The most recently run CLI command and its exit code      |
 
 The **Refresh** button (↺) in the panel title bar refreshes the dashboard without running a command.
 
@@ -66,43 +66,43 @@ Open the Command Palette (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Windows/Linu
 
 ### Repo Analysis
 
-| Command | CLI equivalent | What it does |
-|---|---|---|
-| `Copilot Architect: Analyze Repo` | `analyze` | Detects languages, frameworks, entry points, and routes. Writes `.copilot-architect/repo-map.json`. |
-| `Copilot Architect: Build Index` | `index` | Builds a searchable local file index. Writes `.copilot-architect/index/index.json`. |
+| Command                           | CLI equivalent | What it does                                                                                        |
+| --------------------------------- | -------------- | --------------------------------------------------------------------------------------------------- |
+| `Copilot Architect: Analyze Repo` | `analyze`      | Detects languages, frameworks, entry points, and routes. Writes `.copilot-architect/repo-map.json`. |
+| `Copilot Architect: Build Index`  | `index`        | Builds a searchable local file index. Writes `.copilot-architect/index/index.json`.                 |
 
 ### Planning
 
-| Command | CLI equivalent | What it does |
-|---|---|---|
+| Command                            | CLI equivalent     | What it does                                                                                         |
+| ---------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
 | `Copilot Architect: Generate Plan` | `plan "<request>"` | Prompts for a feature description, then generates a plan artifact under `.copilot-architect/plans/`. |
 
 ### Validation and Review
 
-| Command | CLI equivalent | What it does |
-|---|---|---|
-| `Copilot Architect: Validate` | `validate` | Runs build, test, lint, and format commands. Writes a validation report under `.copilot-architect/runs/`. |
-| `Copilot Architect: Review` | `review --plan latest --validation latest` | Generates a review report from the latest git diff. Writes under `.copilot-architect/reviews/`. |
+| Command                       | CLI equivalent                             | What it does                                                                                              |
+| ----------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `Copilot Architect: Validate` | `validate`                                 | Runs build, test, lint, and format commands. Writes a validation report under `.copilot-architect/runs/`. |
+| `Copilot Architect: Review`   | `review --plan latest --validation latest` | Generates a review report from the latest git diff. Writes under `.copilot-architect/reviews/`.           |
 
 ### Agents and Instructions
 
-| Command | CLI equivalent | What it does |
-|---|---|---|
-| `Copilot Architect: Install Agents` | `agents install` | Generates `.github/agents/*.agent.md` Copilot agent files. |
+| Command                                    | CLI equivalent          | What it does                                                 |
+| ------------------------------------------ | ----------------------- | ------------------------------------------------------------ |
+| `Copilot Architect: Install Agents`        | `agents install`        | Generates `.github/agents/*.agent.md` Copilot agent files.   |
 | `Copilot Architect: Generate Instructions` | `instructions generate` | Writes `.github/copilot-instructions.md` from repo analysis. |
 
 ### MCP Server
 
-| Command | CLI equivalent | What it does |
-|---|---|---|
-| `Copilot Architect: Start MCP` | `mcp` | Starts the local MCP stdio server in a VS Code terminal. Copilot Chat can then query repo context through it. |
+| Command                        | CLI equivalent | What it does                                                                                                  |
+| ------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| `Copilot Architect: Start MCP` | `mcp`          | Starts the local MCP stdio server in a VS Code terminal. Copilot Chat can then query repo context through it. |
 
 ### Dashboard
 
-| Command | What it does |
-|---|---|
-| `Copilot Architect: Open Dashboard` | Opens the dashboard as a full editor panel. |
-| `Copilot Architect: Refresh Dashboard` | Refreshes the sidebar dashboard. |
+| Command                                | What it does                                |
+| -------------------------------------- | ------------------------------------------- |
+| `Copilot Architect: Open Dashboard`    | Opens the dashboard as a full editor panel. |
+| `Copilot Architect: Refresh Dashboard` | Refreshes the sidebar dashboard.            |
 
 ---
 
@@ -145,18 +145,18 @@ When GitHub Copilot is installed and signed in, the extension registers a chat p
 
 Type `@architect` followed by a slash command:
 
-| Command | What it does |
-|---|---|
-| `@architect /analyze` | Detect languages, frameworks, and entry points in the current workspace |
-| `@architect /index` | Build a searchable local file index |
-| `@architect /plan <description>` | Generate a feature implementation plan |
-| `@architect /validate` | Run build, test, lint, and format commands |
-| `@architect /review` | Generate a review report from the latest git diff |
-| `@architect /search <query>` | Search the repo index for a keyword or symbol |
-| `@architect /diagnostics` | Report repo readiness and analysis signals |
-| `@architect /agents` | Install custom Copilot agent templates into `.github/agents/` |
-| `@architect /instructions` | Generate `.github/copilot-instructions.md` |
-| `@architect /help` | Show all available commands |
+| Command                          | What it does                                                            |
+| -------------------------------- | ----------------------------------------------------------------------- |
+| `@architect /analyze`            | Detect languages, frameworks, and entry points in the current workspace |
+| `@architect /index`              | Build a searchable local file index                                     |
+| `@architect /plan <description>` | Generate a feature implementation plan                                  |
+| `@architect /validate`           | Run build, test, lint, and format commands                              |
+| `@architect /review`             | Generate a review report from the latest git diff                       |
+| `@architect /search <query>`     | Search the repo index for a keyword or symbol                           |
+| `@architect /diagnostics`        | Report repo readiness and analysis signals                              |
+| `@architect /agents`             | Install custom Copilot agent templates into `.github/agents/`           |
+| `@architect /instructions`       | Generate `.github/copilot-instructions.md`                              |
+| `@architect /help`               | Show all available commands                                             |
 
 ### Plain-text shortcut
 
@@ -223,20 +223,24 @@ All CLI commands write their output to the **Copilot Architect** output channel 
 ## Troubleshooting
 
 **Commands do nothing / fail silently**
+
 - Check the **Copilot Architect** output channel for error details.
 - Run `npm run cli -- doctor` in the integrated terminal to verify the environment.
 - Confirm `npm run build` has been run after any source changes.
 
 **`@architect` does not appear in Copilot Chat**
+
 - Ensure the GitHub Copilot extension is installed and you are signed in.
 - Reload VS Code after loading the extension for the first time (`Cmd+Shift+P` → `Developer: Reload Window`).
 - Confirm VS Code version is 1.90 or newer.
 
 **"Open Repo in New Window" opens but commands fail**
+
 - The new window needs the same Node.js environment. Check `npm run cli -- doctor` in a terminal inside the new window.
 - If the target repo has never been initialized, run `Analyze Repo` first before other commands.
 
 **MCP server does not start**
+
 - Check that port conflicts are not blocking stdio. The MCP server uses stdio, not a TCP port.
 - Use `Copilot Architect: Start MCP` which opens a dedicated VS Code terminal for the process.
 - See [MCP_TOOLS.md](MCP_TOOLS.md) for full MCP setup details.

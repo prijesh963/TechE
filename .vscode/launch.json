@@ -8,9 +8,7 @@
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}/packages/vscode-extension"
       ],
-      "outFiles": [
-        "${workspaceFolder}/packages/vscode-extension/dist/**/*.js"
-      ],
+      "outFiles": ["${workspaceFolder}/packages/vscode-extension/dist/**/*.js"],
       "preLaunchTask": "build"
     }
   ]

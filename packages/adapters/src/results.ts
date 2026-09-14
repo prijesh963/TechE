@@ -233,11 +233,7 @@ function uniqueBy<T>(
 }
 
 type AnyCommand =
-  | BuildCommand
-  | TestCommand
-  | LintCommand
-  | FormatCommand
-  | ValidationCommand;
+  BuildCommand | TestCommand | LintCommand | FormatCommand | ValidationCommand;
 
 function commandKey(command: AnyCommand): string {
   return [command.kind, command.cwd ?? "", command.command, ...command.args].join(

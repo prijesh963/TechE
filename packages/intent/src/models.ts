@@ -2,11 +2,7 @@ import type { SearchAnchor, SearchSignal } from "@copilot-architect/indexer";
 import type { GeneratedArtifact } from "@copilot-architect/shared";
 
 export type QueryIntentLabel =
-  | "debugging"
-  | "feature"
-  | "refactor"
-  | "test"
-  | "unknown";
+  "debugging" | "feature" | "refactor" | "test" | "unknown";
 
 export interface QueryIntentOptions {
   startPath?: string;

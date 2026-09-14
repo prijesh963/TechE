@@ -14,17 +14,18 @@ npm run cli -- agents install
 
 This installs the following files under `.github/agents/` by default:
 
-| File | Agent Name | Purpose |
-|---|---|---|
-| `FeatureArchitect.agent.md` | `@FeatureArchitect` | Analyze repo, find patterns, produce implementation plans — no code edits |
-| `FeatureImplementer.agent.md` | `@FeatureImplementer` | Implement an approved plan with minimal scoped changes and tests |
-| `CodeReviewer.agent.md` | `@CodeReviewer` | Review diff against approved plan and validation evidence |
-| `TestPlanner.agent.md` | `@TestPlanner` | Map features to test coverage strategies |
-| `Debugger.agent.md` | `@Debugger` | Classify validation failures and propose minimal safe fixes |
-| `SecurityReviewer.agent.md` | `@SecurityReviewer` | Review changes for security risks |
-| `PerformanceReviewer.agent.md` | `@PerformanceReviewer` | Identify performance concerns |
+| File                           | Agent Name             | Purpose                                                                   |
+| ------------------------------ | ---------------------- | ------------------------------------------------------------------------- |
+| `FeatureArchitect.agent.md`    | `@FeatureArchitect`    | Analyze repo, find patterns, produce implementation plans — no code edits |
+| `FeatureImplementer.agent.md`  | `@FeatureImplementer`  | Implement an approved plan with minimal scoped changes and tests          |
+| `CodeReviewer.agent.md`        | `@CodeReviewer`        | Review diff against approved plan and validation evidence                 |
+| `TestPlanner.agent.md`         | `@TestPlanner`         | Map features to test coverage strategies                                  |
+| `Debugger.agent.md`            | `@Debugger`            | Classify validation failures and propose minimal safe fixes               |
+| `SecurityReviewer.agent.md`    | `@SecurityReviewer`    | Review changes for security risks                                         |
+| `PerformanceReviewer.agent.md` | `@PerformanceReviewer` | Identify performance concerns                                             |
 
 Each agent file includes:
+
 - YAML frontmatter with `name`, `description`, `model: gpt-4o`, and `tools`
 - `## Purpose` — what the agent is allowed and not allowed to do
 - `## Instructions` — ordered steps the agent follows
@@ -58,17 +59,21 @@ Existing files are **skipped by default**. `--force` and `agents update` overwri
 ### Step-by-step
 
 1. **Analyze** the repo or workspace:
+
    ```bash
    npm run cli -- analyze
    npm run cli -- index
    ```
 
 2. **Generate a feature plan** using `@FeatureArchitect` or directly from CLI:
+
    ```bash
    npm run cli -- plan "Add invoice approval workflow"
    # writes .copilot-architect/plans/latest-plan.md
    ```
+
    In Copilot Chat:
+
    ```text
    @FeatureArchitect Analyze this repo and produce a plan for adding invoice approval.
    Do not edit any code yet.
@@ -77,29 +82,35 @@ Existing files are **skipped by default**. `--force` and `agents update` overwri
 3. **Review and approve** the plan (human checkpoint).
 
 4. **Generate a handoff**:
+
    ```bash
    npm run cli -- handoff --plan latest --approve
    # writes .copilot-architect/handoffs/latest-handoff.md, copies to clipboard
    ```
 
 5. **Implement** using `@FeatureImplementer`:
+
    ```text
    @FeatureImplementer Implement .copilot-architect/handoffs/latest-handoff.md.
    Run validation commands and summarize changed files.
    ```
 
 6. **Validate**:
+
    ```bash
    npm run cli -- validate --test
    npm run cli -- validate --lint
    ```
 
 7. **Review** the implementation:
+
    ```bash
    npm run cli -- review --plan latest --validation latest
    # writes .copilot-architect/reviews/latest-review.md
    ```
+
    In Copilot Chat:
+
    ```text
    @CodeReviewer Review the git diff against .copilot-architect/reviews/latest-review.md
    and the approved plan.
@@ -157,6 +168,7 @@ npm run cli -- instructions validate   # validate generated files
 Generated instructions include: repo architecture summary, detected languages, frameworks, package managers, build/test/lint/format commands, coding conventions, safety rules, planning workflow, approval workflow, validation workflow, and review workflow.
 
 **Generated skills:**
+
 - `.github/skills/feature-planning/SKILL.md`
 - `.github/skills/repo-analysis/SKILL.md`
 - `.github/skills/validation/SKILL.md`
@@ -164,6 +176,7 @@ Generated instructions include: repo architecture summary, detected languages, f
 - `.github/skills/debugging/SKILL.md`
 
 **Generated Copilot Chat prompt files:**
+
 - `.github/prompts/copilot-architect-plan.prompt.md`
 - `.github/prompts/copilot-architect-implement.prompt.md`
 - `.github/prompts/copilot-architect-review.prompt.md`
@@ -174,6 +187,7 @@ Generated instructions include: repo architecture summary, detected languages, f
 ## Example Copilot Chat Prompts
 
 **Planning a feature:**
+
 ```text
 @FeatureArchitect Add [feature] based on this repo.
 Use Copilot Architect repo map, index, MCP tools, and latest generated plan.
@@ -181,23 +195,27 @@ Do not modify code yet. First create a detailed implementation plan.
 ```
 
 **After approval:**
+
 ```text
 @FeatureImplementer Implement the approved plan from .copilot-architect/plans/latest-plan.md.
 Run validation commands and summarize changed files.
 ```
 
 **After implementation:**
+
 ```text
 @CodeReviewer Review the git diff against the approved plan and latest validation report.
 ```
 
 **If validation failed:**
+
 ```text
 @Debugger Validation failed. Use .copilot-architect/runs/latest-validation.json
 and related logs to classify the failure and propose the smallest safe fix.
 ```
 
 **Security review:**
+
 ```text
 @SecurityReviewer Review the changes in the git diff for security risks.
 Reference .copilot-architect/plans/latest-plan.md for expected scope.

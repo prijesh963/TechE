@@ -39,6 +39,7 @@ Frameworks detected where possible: FastAPI, Flask, Django, pytest, unittest.
 Executables allowed in validation: `pytest`, `python`, `python3`, `py`, `poetry`, `pipenv`, `uv`, `ruff`, `mypy`, `flake8`, `black`.
 
 Allowed `python`/`python3`/`py` invocations:
+
 - `python -m pytest`
 - `python -m unittest`
 - `python -m mypy`
@@ -72,17 +73,17 @@ Commands: `gradle test`, `gradle build`, `./gradlew test`, `./gradlew build`.
 
 These executables are recognized as safe by the validation engine even without a dedicated adapter:
 
-| Ecosystem | Executables |
-|---|---|
-| JavaScript/TypeScript | `npm`, `npx`, `pnpm`, `yarn`, `bun`, `deno`, `node`, `tsc`, `biome` |
-| Build | `vite`, `webpack`, `rollup`, `esbuild`, `turbo`, `nx` |
-| Test | `vitest`, `jest`, `mocha`, `jasmine`, `playwright`, `cypress` |
-| Python | `pytest`, `python`, `python3`, `py`, `poetry`, `pipenv`, `uv`, `ruff`, `mypy`, `flake8`, `black` |
-| Java/JVM | `maven`, `mvn`, `mvnw`, `gradle`, `gradlew` |
-| Angular | `ng` |
-| Rust | `cargo`, `rustfmt`, `clippy` |
-| Go | `go` |
-| .NET | `dotnet` (read-only operations only) |
+| Ecosystem             | Executables                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------ |
+| JavaScript/TypeScript | `npm`, `npx`, `pnpm`, `yarn`, `bun`, `deno`, `node`, `tsc`, `biome`                              |
+| Build                 | `vite`, `webpack`, `rollup`, `esbuild`, `turbo`, `nx`                                            |
+| Test                  | `vitest`, `jest`, `mocha`, `jasmine`, `playwright`, `cypress`                                    |
+| Python                | `pytest`, `python`, `python3`, `py`, `poetry`, `pipenv`, `uv`, `ruff`, `mypy`, `flake8`, `black` |
+| Java/JVM              | `maven`, `mvn`, `mvnw`, `gradle`, `gradlew`                                                      |
+| Angular               | `ng`                                                                                             |
+| Rust                  | `cargo`, `rustfmt`, `clippy`                                                                     |
+| Go                    | `go`                                                                                             |
+| .NET                  | `dotnet` (read-only operations only)                                                             |
 
 Custom commands from `.copilot-architect/commands.json` are always allowed regardless of executable name.
 

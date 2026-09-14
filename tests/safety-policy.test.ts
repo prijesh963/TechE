@@ -216,7 +216,11 @@ describe("Safety policy and audit services", () => {
       workspaceBoundaryRequired: false
     } as unknown as Parameters<typeof service.assess>[2];
 
-    for (const args of [["-f", "origin", "main"], ["--force", "origin"], ["--force-with-lease"]]) {
+    for (const args of [
+      ["-f", "origin", "main"],
+      ["--force", "origin"],
+      ["--force-with-lease"]
+    ]) {
       const result = service.assess(
         repoRoot,
         {
