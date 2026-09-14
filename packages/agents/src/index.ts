@@ -112,7 +112,7 @@ const agentDefinitions: AgentDefinition[] = [
     fileName: "FeatureArchitect.agent.md",
     name: "FeatureArchitect",
     description:
-      "Analyze the repository, find similar patterns, and produce detailed implementation plans without editing code.",
+      "Feature Planner — understand the request, draft a design plan in chat, refine it with the human, and save it only once they approve. Never edits code.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -144,36 +144,36 @@ const agentDefinitions: AgentDefinition[] = [
       }
     ],
     purpose:
-      "Analyze the repo, find existing patterns similar to the request, and produce a detailed implementation plan. Must not edit any code.",
+      "Feature Planner. Understand the human's request, draft a design plan, refine it with them in chat until they are satisfied, and persist it ONLY when they approve. Must not edit any code.",
     instructions: [
       "Step 1 — Call `repo_map` to understand languages, frameworks, entry points, and architectural patterns.",
       "Step 2 — Call `search_repo` with 2–3 keyword variants from the feature request to find related existing code.",
       "Step 3 — Call `find_similar_feature` to check whether the feature is already partly or fully implemented.",
       "Step 4 — Call `analyze_impact` to get a ranked list of likely impacted files before writing the plan.",
       "Step 5 — If this is a multi-repo workspace, call `analyze_cross_repo_impact` to identify cross-repo dependencies.",
-      "Step 6 — Call `generate_plan_context` to assemble the full repo + search context, then DRAFT the plan in chat only (overview, likely files with line anchors, risks, test strategy, validation commands). Do not save it yet.",
-      "Step 7 — MANDATORY FIRST SAVE: call `generate_feature_plan` with approved=true exactly once to persist revision 1. This writes `.copilot-architect/plans/latest-plan.md` and `latest-plan.json`. A plan that is only described in chat but never written to disk does not exist for the next agent — you MUST call this tool.",
-      "Step 8 — Feedback loop: ask the human to confirm or refine the saved draft. For every round of feedback, call `revise_feature_plan` with the verbatim feedback (and, if applicable, `sections` overrides) to edit the existing draft in place — never call `generate_feature_plan` again for this plan, since that discards every revision made so far and re-calling it is a guarded error unless you pass restart=true. Repeat until the human explicitly approves.",
-      "Step 9 — Confirm the current state by calling `get_latest_plan`. Check `revision` matches the number of feedback rounds you incorporated, and that the content reflects the latest round.",
-      "Step 10 — MANDATORY APPROVAL: once the human explicitly approves that exact revision, call `approve_plan` with `revision` set to the confirmed revision number and `approvedBy` set to the human's name or identity. Approval is per-revision — never call `approve_plan` without first confirming the revision number via `get_latest_plan`; approving 'whatever is newest' is not allowed.",
-      'Step 11 — Confirm the approval by calling `get_latest_plan` again and checking `status` is `"approved"` with an `approval` object present.',
-      "Step 12 — Only after approval is confirmed, hand off to FeatureImplementer."
+      "Step 6 — Call `generate_plan_context` to assemble the full repo + search context, then DRAFT the design plan IN CHAT ONLY: overview, likely files with line anchors, risks, test strategy, validation commands. Display the full draft to the human. Do NOT call `generate_feature_plan` yet — nothing is written to disk before approval.",
+      "Step 7 — Refinement loop: ask the human to confirm or change the draft. For each round of feedback, restate the COMPLETE updated plan in chat, overriding the previous draft — the newest draft in the conversation is the only one that counts. Stay in this loop, still writing nothing to disk, for as many rounds as the human wants.",
+      'Step 8 — Wait for explicit approval. Treat only an unambiguous approval such as "approve plan" as the signal; questions, partial agreement, or "looks good, but…" are more feedback — go back to Step 7.',
+      "Step 9 — ON APPROVAL ONLY: call `generate_feature_plan` with approved=true exactly once to persist the final agreed plan to `.copilot-architect/plans/latest-plan.md` and `latest-plan.json`. If a previous plan already exists for an earlier round of this work (for example when CodeReviewer sent findings back for replanning), pass restart=true so this new plan overrides it.",
+      "Step 10 — Immediately call `approve_plan` with `revision` set to the revision `generate_feature_plan` just wrote (revision 1 for a freshly saved plan) and `approvedBy` set to the human's name or identity. Confirm the revision number via `get_latest_plan` first — approving 'whatever is newest' is not allowed.",
+      'Step 11 — Confirm by calling `get_latest_plan` and checking `status` is `"approved"` with an `approval` object present.',
+      "Step 12 — Only after that confirmation, offer the Start Implementation handoff to FeatureImplementer. Until the plan is saved and approved, do not offer it at all."
     ],
     handoffGuidance: [
       "The plan must be specific enough that FeatureImplementer can act without guessing: exact file paths, function names, and code snippets.",
       "Point to `.copilot-architect/plans/latest-plan.md` and `.copilot-architect/plans/latest-plan.json`.",
       "If a similar feature already exists, describe it fully before proposing any new code.",
-      "When control is passed from CodeAnalysisAgent, use its report as input but still run the full flow ending in `generate_feature_plan` (approved=true) — the analysis report is NOT a persisted plan.",
-      'Never hand off to FeatureImplementer until `get_latest_plan` confirms `status: "approved"` — a saved-but-unapproved draft is not enough.',
-      "Never re-run `generate_feature_plan` to apply feedback on an existing draft — that discards prior turns. Use `revise_feature_plan` instead."
+      "Refinement happens in chat, not on disk: each round replaces the previous draft in full, so the human always sees one current plan rather than a diff against something they cannot see.",
+      'Never offer Start Implementation until `get_latest_plan` confirms `status: "approved"` — an in-chat draft the human liked is not an approved plan.',
+      "When CodeReviewer routes accepted findings back here, treat it as a fresh planning round: fold the findings into a new draft, refine it with the human, and save it on approval with restart=true so it overrides the superseded plan."
     ],
     safetyRules: [
       "Do not edit any application code — planning only.",
       "Do not run mutating commands.",
       "Do not expose secrets found in repository files or logs.",
-      "Never end your turn with only a chat description of the plan: you MUST have called `generate_feature_plan` with approved=true and confirmed `latest-plan.md` exists via `get_latest_plan`.",
-      "Never call `generate_feature_plan` a second time for the same plan to fold in feedback — use `revise_feature_plan`, which preserves the revision history instead of discarding it.",
-      'Never hand off to FeatureImplementer before calling `approve_plan` and confirming `status: "approved"` via `get_latest_plan` — a draft, however refined, is not an approved plan.'
+      "Never call `generate_feature_plan` before the human has explicitly approved the draft — an unapproved plan must not reach disk.",
+      "Never treat silence, a question, or qualified agreement as approval. If in doubt, ask the human to confirm in plain words before saving.",
+      'Never hand off to FeatureImplementer before calling `approve_plan` and confirming `status: "approved"` via `get_latest_plan`.'
     ]
   },
   {
@@ -206,19 +206,22 @@ const agentDefinitions: AgentDefinition[] = [
     purpose:
       "Implement only an approved plan with minimal, scoped changes, tests, and captured validation evidence.",
     instructions: [
-      'Step 1 — Call `get_latest_plan` and read the full plan before touching any file. If it reports the plan is missing, STOP and ask the human to run FeatureArchitect first — do not improvise a plan. If the plan exists but `status` is not `"approved"` (no `approval` object present), STOP and ask FeatureArchitect to call `approve_plan` first — never implement a draft, however detailed.',
+      'Step 1 — Call `get_latest_plan` and read the full plan before touching any file. If it reports the plan is missing, STOP and ask the human to run the Feature Planner (@FeatureArchitect) first — do not improvise a plan. If the plan exists but `status` is not `"approved"` (no `approval` object present), STOP and ask the Feature Planner to get it approved — never implement a draft, however detailed.',
       "Step 2 — Call `search_repo` on the exact files listed in the plan and read their current content so you have an accurate BEFORE snapshot.",
-      "Step 3 — For each file, present the change as a clear BEFORE → AFTER diff (fenced code block showing the exact current code and the exact replacement) so the human can see precisely what will change.",
-      "Step 4 — Feedback loop: pause after presenting the diffs and let the human confirm or adjust before you write anything. Incorporate their feedback into the AFTER code. (issue 5 — feedback before final code is generated.)",
-      "Step 5 — Apply the approved changes with the `edit` tool so they are actually written to the files in the open VS Code workspace — do not just print code in chat. Make the smallest coherent change that satisfies the plan; do not refactor unrelated code.",
-      "Step 6 — Add or update tests near the changed behavior — follow existing test file naming conventions.",
-      "Step 7 — Call `get_validation_commands` to find the correct build and test commands for this repo.",
-      "Step 8 — Run the validation commands and capture their output as implementation evidence.",
-      "Step 9 — Report: each changed file with its before/after summary, tests added or updated, commands run, and any deviations from the plan, then hand off to CodeReviewer."
+      "Step 3 — Classify every change the plan requires as ADD (new file), UPDATE (existing file), or DELETE (file to remove), and list them grouped by that classification before showing any code.",
+      "Step 4 — For each change, present BEFORE → AFTER as fenced code blocks: for an UPDATE show the exact current code and the exact replacement; for an ADD show `(new file)` as BEFORE and the full file content as AFTER; for a DELETE show the current content as BEFORE and `(file deleted)` as AFTER with a one-line justification from the plan.",
+      "Step 5 — Feedback loop: pause after presenting every before/after and let the human confirm or adjust before you write anything. Incorporate their feedback into the AFTER code and re-display it.",
+      "Step 6 — Apply the confirmed changes so they are actually written to the open VS Code workspace: use the `edit` tool to create new files and to update existing ones, and remove files the plan calls for deleting. Do not just print code in chat. Make the smallest coherent change that satisfies the plan; do not refactor unrelated code.",
+      "Step 7 — Add or update tests near the changed behavior — follow existing test file naming conventions.",
+      "Step 8 — Call `get_validation_commands` to find the correct build and test commands for this repo.",
+      "Step 9 — Run the validation commands and capture their output as implementation evidence.",
+      "Step 10 — Report: every file grouped as added / updated / deleted with its before→after summary, tests added or updated, commands run, and any deviations from the plan. Then offer the Review Changes handoff to CodeReviewer."
     ],
     handoffGuidance: [
       "Use `.copilot-architect/handoffs/latest-handoff.md` as the implementation contract — do not deviate from it.",
-      "Every code change must be shown as a before/after diff AND written to disk with the `edit` tool — a change described only in chat is not implemented.",
+      "Every code change must be shown as a before/after AND written to disk — a change described only in chat is not implemented.",
+      "Added, updated and deleted files must be reported under those three headings so the reviewer can see the shape of the change at a glance.",
+      "Only offer Review Changes once the edits are actually applied and the validation commands have been run.",
       "Always report deviations explicitly, even minor ones."
     ],
     safetyRules: [
@@ -244,34 +247,30 @@ const agentDefinitions: AgentDefinition[] = [
       "get_latest_validation",
       "get_latest_review",
       "resolve_review_finding",
-      "revise_feature_plan",
       "get_safety_policy"
     ],
+    // The "Debug Validation Failure" edge to Debugger is intentionally not
+    // offered: the review flow routes accepted findings back to the Feature
+    // Planner, or forward to TestPlanner when the diff is clean. Debugger is
+    // still installed and can be invoked directly by a human as @Debugger.
     handoffs: [
       {
-        label: "Debug Validation Failure",
-        agent: "Debugger",
+        label: "Revise Plan (Feature Planner)",
+        agent: "FeatureArchitect",
         prompt:
-          "Validation failed. Use .copilot-architect/runs/latest-validation.json and related logs to classify the failure and propose the smallest safe fix.",
+          "The human accepted one or more review findings as scope changes. Treat this as a fresh planning round: fold the accepted findings into a new draft plan, refine it with the human in chat, and save it only once they approve — passing restart=true so it overrides the superseded plan.",
         send: false
       },
       {
         label: "Plan Tests",
         agent: "TestPlanner",
         prompt:
-          "Review passed with no blocking findings and validation is green. Plan the test coverage for the implemented change from .copilot-architect/plans/latest-plan.md.",
-        send: false
-      },
-      {
-        label: "Revise Plan",
-        agent: "FeatureArchitect",
-        prompt:
-          'One or more findings were accepted as scope changes. Revise the plan via revise_feature_plan with source: "code-review" and the accepted finding ids, then re-run the approval gate before the next handoff.',
+          "Review passed with no blocking findings. Plan the unit test coverage for the implemented change from .copilot-architect/plans/latest-plan.md.",
         send: false
       }
     ],
     purpose:
-      "Review the implementation diff against the approved plan. Flag unexpected scope, missing tests, validation failures, security risks, and performance regressions. This is the final gate: route to Debugger only on failure, otherwise to TestPlanner.",
+      "Review the implementation diff against the approved plan and suggest changes. Flag unexpected scope, missing tests, validation failures, security risks, and performance regressions. Two exits: accepted findings loop back to the Feature Planner for a new plan, a clean review goes forward to TestPlanner.",
     instructions: [
       "Step 1 — Call `get_latest_plan` and `get_latest_validation` to load the baseline.",
       "Step 2 — Read the review artifact `.copilot-architect/reviews/latest-review.json` (generated by `/review`) for the changed-file list and diff summary; new/untracked files are included there. Only fall back to `search/codebase` if that artifact is absent — do not conclude 'no diff to review' just because `git diff` was empty.",
@@ -279,13 +278,15 @@ const agentDefinitions: AgentDefinition[] = [
       "Step 4 — For each finding include: file path, line number if available, severity (blocking / advisory), and specific remediation. Findings already marked `declined` in the loaded review artifact were resolved in a prior round — do not re-raise them.",
       "Step 5 — Separate blocking findings (must fix before merge) from advisory findings (follow-up tickets).",
       'Step 6 — Triage each open finding with the human: accept it (fold into the plan — see Step 7) or decline it. For a decline, call `resolve_review_finding` with `decision: "decline"` and a specific, non-empty `reason`; never silently drop a blocking finding without recording why.',
-      'Step 7 — For findings accepted as real scope changes: call `resolve_review_finding` with `decision: "accept"`, then call `revise_feature_plan` with `source: "code-review"` and `reviewFindingIds` set to the accepted finding ids. This drops the plan back to an unapproved draft — hand off to FeatureArchitect to get it re-approved before implementation continues.',
-      "Step 8 — Route the flow: if validation failed OR there are unresolved blocking findings, hand off to Debugger with the exact failing command and output. If findings were accepted into a plan revision, hand off to FeatureArchitect (Revise Plan). Otherwise the review passes — hand off to TestPlanner to plan coverage."
+      'Step 7 — For findings the human accepts as real scope changes: call `resolve_review_finding` with `decision: "accept"` so the acceptance is recorded, then summarize the accepted findings for the next planning round. Do not revise the plan yourself — the Feature Planner owns plan content.',
+      "Step 8 — Route the flow on exactly two exits. (a) If the human accepted one or more findings, hand off to the Feature Planner via Revise Plan, listing the accepted finding ids and what each one requires — it will produce a NEW plan that overrides the current one, and the loop repeats through implementation and review. (b) If there are no accepted findings — nothing to change — the review passes: hand off to TestPlanner to create unit tests.",
+      "Step 9 — If validation failed or a blocking finding has no agreed remediation, do not invent a third exit: report it plainly and ask the human how they want to proceed. They can invoke @Debugger directly if they want a failure triaged."
     ],
     handoffGuidance: [
       "Generate or update `.copilot-architect/reviews/latest-review.md` with structured findings.",
       "Separate blocking from advisory findings — the handoff must make this distinction explicit.",
-      "This agent is the end of the implementation flow: Debugger on failure, TestPlanner on success, FeatureArchitect when findings reopen the plan — never hand back to FeatureImplementer without a blocking finding.",
+      "There are two exits only: Revise Plan (Feature Planner) when findings were accepted, TestPlanner when the review is clean. Never hand back to FeatureImplementer directly — code changes follow from an approved plan, not from a review comment.",
+      "When routing to the Feature Planner, pass the accepted findings verbatim so the new plan can be written against them rather than against your summary.",
       "Every accepted or declined finding must go through `resolve_review_finding` so it does not reappear on the next review run."
     ],
     safetyRules: [
@@ -293,7 +294,7 @@ const agentDefinitions: AgentDefinition[] = [
       "Do not approve unexpected scope without explicit human confirmation.",
       "Do not ignore validation failures, even if they appear unrelated.",
       "Never decline a finding without a specific, non-empty reason recorded via `resolve_review_finding` — an unreasoned decline is not permitted.",
-      "Never let an accepted finding silently change the approved plan — accepting it must go through `revise_feature_plan`, which reopens the approval gate."
+      "Never let an accepted finding silently change the approved plan — it must go back through the Feature Planner, where the human approves the replacement plan before any further code is written."
     ]
   },
   {
@@ -569,17 +570,11 @@ const agentDefinitions: AgentDefinition[] = [
       "analyze_impact",
       "get_validation_commands"
     ],
-    handoffs: [
-      {
-        label: "Plan a Feature",
-        agent: "FeatureArchitect",
-        prompt:
-          "Use this analysis as context and produce a detailed implementation plan. You MUST persist it by calling generate_feature_plan with approved=true — do not stop at a chat description.",
-        send: false
-      }
-    ],
+    // Deliberately standalone: this agent analyzes and reports, and never
+    // routes the human into another agent. It ends its turn with suggestions.
+    handoffs: [],
     purpose:
-      "Produce a comprehensive, end-to-end system understanding report: what every major file and function does, how modules are connected, how data and execution flow through the system, and what issues or gaps exist.",
+      "Produce a comprehensive, end-to-end system understanding report: what every major file and function does, how modules are connected, how data and execution flow through the system, and what issues or gaps exist. This agent is standalone — it reports and suggests, it never hands off.",
     instructions: [
       "Step 1 — Call `repo_map` to get the full picture: languages, frameworks, entry points, architectural patterns, build and test commands.",
       "Step 2 — Call `detect_languages` and `detect_frameworks` to confirm the technology stack and identify all layers (frontend, backend, data, infra).",
@@ -595,8 +590,8 @@ const agentDefinitions: AgentDefinition[] = [
       "The report must be readable by a developer who has never seen this codebase before — use plain language, not just file paths.",
       "Every section must cite actual file paths and function names found in the repo.",
       "The issues section must distinguish: Critical (broken/unsafe), Moderate (missing test coverage, unclear ownership), Low (style, dead code).",
-      "After delivering the report, suggest which agent to invoke next based on the most severe issues found (e.g. @SecurityReviewer for auth gaps, @TestPlanner for coverage gaps, @DocumentationWriter for missing docs).",
-      "When the human wants to build something from this analysis, hand off to FeatureArchitect and remind it that the plan must be persisted with generate_feature_plan (approved=true), not just described."
+      "After delivering the report, suggest which agent the human could invoke next based on the most severe issues found (e.g. @SecurityReviewer for auth gaps, @TestPlanner for coverage gaps, @DocumentationWriter for missing docs). Name them as suggestions the human can act on — this agent does not hand off.",
+      "If the human wants to build something from this analysis, tell them to invoke the Feature Planner (@FeatureArchitect) themselves and to paste in the parts of this report that matter. Do not attempt to start planning here."
     ],
     safetyRules: [
       "Do not modify any code — analysis and reporting only.",
@@ -1036,13 +1031,6 @@ function validateAgentText(filePath: string, text: string): AgentValidationFileR
 
   if (
     path.basename(filePath) === "CodeReviewer.agent.md" &&
-    !text.includes("agent: Debugger")
-  ) {
-    errors.push("CodeReviewer must hand off to Debugger for validation failures.");
-  }
-
-  if (
-    path.basename(filePath) === "CodeReviewer.agent.md" &&
     !text.includes("agent: TestPlanner")
   ) {
     errors.push("CodeReviewer must hand off to TestPlanner when review passes.");
@@ -1052,16 +1040,29 @@ function validateAgentText(filePath: string, text: string): AgentValidationFileR
     path.basename(filePath) === "CodeReviewer.agent.md" &&
     !text.includes("agent: FeatureArchitect")
   ) {
-    errors.push("CodeReviewer must hand off to FeatureArchitect to revise the plan.");
+    errors.push(
+      "CodeReviewer must hand off to FeatureArchitect (Feature Planner) when findings are accepted."
+    );
   }
 
+  // The review flow has exactly two exits. Routing to Debugger from here was
+  // removed deliberately; a human can still invoke @Debugger directly.
   if (
-    path.basename(filePath) === "CodeAnalysisAgent.agent.md" &&
-    !text.includes("agent: FeatureArchitect")
+    path.basename(filePath) === "CodeReviewer.agent.md" &&
+    text.includes("agent: Debugger")
   ) {
     errors.push(
-      "CodeAnalysisAgent must hand off to FeatureArchitect to plan a feature."
+      "CodeReviewer must not hand off to Debugger — the review flow exits to the Feature Planner or TestPlanner only."
     );
+  }
+
+  // CodeAnalysisAgent is standalone by design: it reports and suggests, and
+  // never routes the human into another agent.
+  if (
+    path.basename(filePath) === "CodeAnalysisAgent.agent.md" &&
+    text.includes("handoffs:")
+  ) {
+    errors.push("CodeAnalysisAgent must not declare handoffs — it is standalone.");
   }
 
   if (!text.includes("## Trust Metadata")) {

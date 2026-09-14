@@ -25,6 +25,61 @@ describe("AgentService", () => {
     ]);
   });
 
+  it("wires the agents into the specified orchestration graph", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-graph-"));
+    await new AgentService().install({ startPath: repoRoot });
+
+    const handoffsOf = async (agent: string): Promise<string[]> => {
+      const text = await readFile(
+        path.join(repoRoot, ".github/agents", `${agent}.agent.md`),
+        "utf8"
+      );
+      return [...text.matchAll(/^ {4}agent: (\w+)$/gm)].map((match) => match[1]);
+    };
+
+    // Planner → Implementer → Reviewer, with the reviewer looping accepted
+    // findings back to the planner or moving forward to unit tests.
+    expect(await handoffsOf("FeatureArchitect")).toEqual(["FeatureImplementer"]);
+    expect(await handoffsOf("FeatureImplementer")).toEqual(["CodeReviewer"]);
+    expect(await handoffsOf("CodeReviewer")).toEqual([
+      "FeatureArchitect",
+      "TestPlanner"
+    ]);
+
+    // Standalone by design: analysis reports and suggests but never routes,
+    // and the flow no longer exits into the debugger.
+    expect(await handoffsOf("CodeAnalysisAgent")).toEqual([]);
+    expect(await handoffsOf("TestPlanner")).toEqual([]);
+    expect(await handoffsOf("Debugger")).toEqual([]);
+  });
+
+  it("rejects an agent file that breaks the orchestration contract", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-contract-"));
+    const service = new AgentService();
+    await service.install({ startPath: repoRoot });
+
+    const analysisPath = path.join(
+      repoRoot,
+      ".github/agents/CodeAnalysisAgent.agent.md"
+    );
+    const original = await readFile(analysisPath, "utf8");
+    // Re-introducing a handoff on the standalone analysis agent must fail
+    // validation rather than silently changing the flow.
+    await writeFile(
+      analysisPath,
+      original.replace(
+        "tools:",
+        "handoffs:\n  - label: Plan a Feature\n    agent: FeatureArchitect\ntools:"
+      ),
+      "utf8"
+    );
+
+    const validation = await service.validate({ startPath: repoRoot });
+
+    expect(validation.ok).toBe(false);
+    expect(JSON.stringify(validation)).toContain("standalone");
+  });
+
   it("installs and validates agent files under .github/agents", async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-install-"));
     const service = new AgentService();

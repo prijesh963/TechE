@@ -129,10 +129,19 @@ Existing files are **skipped by default**. `--force` and `agents update` overwri
 Agents include built-in Copilot Chat handoff buttons:
 
 ```
-@FeatureArchitect → @FeatureImplementer
-@FeatureImplementer → @CodeReviewer
-@CodeReviewer → @Debugger (when validation failed)
+@FeatureArchitect (Feature Planner) → @FeatureImplementer   [only after the plan is approved and saved]
+@FeatureImplementer                 → @CodeReviewer          [after the edits are applied]
+@CodeReviewer                       → @FeatureArchitect      [when findings are accepted — loops for a new plan]
+@CodeReviewer                       → @TestPlanner           [when the review is clean]
 ```
+
+The Feature Planner drafts and refines the plan **in chat only** — nothing is
+written to `.copilot-architect/plans/` until the human explicitly approves it.
+Start Implementation is offered only once the approved plan exists on disk.
+
+`@CodeAnalysisAgent` is standalone: it reports and suggests, and never hands
+off. `@Debugger` is not routed to from the review flow; invoke it directly when
+you want a validation failure triaged.
 
 ---
 
