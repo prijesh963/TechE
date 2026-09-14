@@ -62,6 +62,69 @@ export interface FeaturePlanArtifact extends FeaturePlan {
   readinessDiagnostics: RepoReadinessDiagnostic[];
   relatedEndpoints: PlanEndpointReference[];
   multiRepo?: WorkspacePlanSummary;
+  /** 1 for the initial save; incremented by every `revise_feature_plan` call. */
+  revision: number;
+  /** Artifact id of the revision this one replaces. Absent on revision 1. */
+  supersedes?: string;
+  /** Full history of revisions, oldest first, including the initial save. */
+  revisions: PlanRevisionEntry[];
+}
+
+export interface PlanRevisionEntry {
+  revision: number;
+  at: string;
+  source: "initial" | "human-feedback" | "code-review";
+  /** Verbatim feedback text — never summarised, so it survives re-reading later. */
+  feedback: string;
+  changedSections: string[];
+  reviewFindingIds?: string[];
+}
+
+/**
+ * Shallow, partial overrides accepted by `revisePlan`. Restricted to the
+ * plan's editable content — identity/schema/status fields are never
+ * settable through a revision.
+ */
+export type PlanSectionOverrides = Partial<
+  Pick<
+    FeaturePlanArtifact,
+    | "title"
+    | "summary"
+    | "requestInterpretation"
+    | "assumptions"
+    | "implementationSteps"
+    | "impactAnalysis"
+    | "validationPlan"
+    | "likelyFilesToModify"
+    | "likelyNewFiles"
+    | "frontendImpact"
+    | "backendImpact"
+    | "dataConfigImpact"
+    | "securityConsiderations"
+    | "performanceConsiderations"
+    | "testStrategy"
+    | "openQuestions"
+    | "stackSpecificPlan"
+    | "relatedEndpoints"
+  >
+>;
+
+export interface PlanRevisionOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  /** Defaults to the id of the latest saved plan. */
+  planId?: string;
+  feedback: string;
+  sections?: PlanSectionOverrides;
+  source?: "human-feedback" | "code-review";
+  reviewFindingIds?: string[];
+}
+
+export interface PlanDraftArtifactPaths {
+  draftJsonPath: string;
+  draftMarkdownPath: string;
+  latestJsonPath: string;
+  latestMarkdownPath: string;
 }
 
 export interface PlanEndpointReference {

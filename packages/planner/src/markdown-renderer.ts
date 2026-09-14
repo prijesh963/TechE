@@ -1,11 +1,15 @@
-import type { FeaturePlanArtifact } from "./models.js";
+import type { FeaturePlanArtifact, PlanRevisionEntry } from "./models.js";
 
 export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
   return [
     `# ${plan.title}`,
     "",
     `**Status:** ${plan.status}`,
+    `**Revision:** ${plan.revision}`,
     `**Requires human approval:** ${plan.requiresHumanApproval ? "yes" : "no"}`,
+    "",
+    "## Revision History",
+    renderRevisionHistory(plan.revisions),
     "",
     "## Request Interpretation",
     plan.requestInterpretation,
@@ -163,6 +167,19 @@ export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
     plan.humanApprovalCheckpoint,
     ""
   ].join("\n");
+}
+
+function renderRevisionHistory(revisions: PlanRevisionEntry[]): string {
+  if (revisions.length === 0) {
+    return "- None recorded yet.";
+  }
+
+  return revisions
+    .map(
+      (entry) =>
+        `- rev ${entry.revision} (${entry.source}, ${entry.at}): ${entry.feedback}`
+    )
+    .join("\n");
 }
 
 function renderFileReferences(files: { filePath: string; reason: string }[]): string {

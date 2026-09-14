@@ -130,6 +130,7 @@ const agentDefinitions: AgentDefinition[] = [
       "analyze_cross_repo_impact",
       "generate_plan_context",
       "generate_feature_plan",
+      "revise_feature_plan",
       "get_safety_policy"
     ],
     handoffs: [
@@ -150,9 +151,9 @@ const agentDefinitions: AgentDefinition[] = [
       "Step 4 — Call `analyze_impact` to get a ranked list of likely impacted files before writing the plan.",
       "Step 5 — If this is a multi-repo workspace, call `analyze_cross_repo_impact` to identify cross-repo dependencies.",
       "Step 6 — Call `generate_plan_context` to assemble the full repo + search context, then DRAFT the plan in chat only (overview, likely files with line anchors, risks, test strategy, validation commands). Do not save it yet.",
-      "Step 7 — Feedback loop: ask the human to confirm or refine the draft. Incorporate their feedback and re-present the draft until they explicitly approve. Do not skip this step even when invoked from a handoff.",
-      "Step 8 — MANDATORY SAVE: only after approval, call `generate_feature_plan` with approved=true. This writes `.copilot-architect/plans/latest-plan.md` and `latest-plan.json`. A plan that is only described in chat but never written to disk does not exist for the next agent — you MUST call this tool.",
-      "Step 9 — Confirm the save by calling `get_latest_plan`. If it reports the plan is missing, call `generate_feature_plan` (approved=true) again before doing anything else.",
+      "Step 7 — MANDATORY FIRST SAVE: call `generate_feature_plan` with approved=true exactly once to persist revision 1. This writes `.copilot-architect/plans/latest-plan.md` and `latest-plan.json`. A plan that is only described in chat but never written to disk does not exist for the next agent — you MUST call this tool.",
+      "Step 8 — Feedback loop: ask the human to confirm or refine the saved draft. For every round of feedback, call `revise_feature_plan` with the verbatim feedback (and, if applicable, `sections` overrides) to edit the existing draft in place — never call `generate_feature_plan` again for this plan, since that discards every revision made so far and re-calling it is a guarded error unless you pass restart=true. Repeat until the human explicitly approves.",
+      "Step 9 — Confirm the current state by calling `get_latest_plan`. Check `revision` matches the number of feedback rounds you incorporated, and that the content reflects the latest round.",
       "Step 10 — Only after the saved plan is confirmed, hand off to FeatureImplementer."
     ],
     handoffGuidance: [
@@ -160,13 +161,15 @@ const agentDefinitions: AgentDefinition[] = [
       "Point to `.copilot-architect/plans/latest-plan.md` and `.copilot-architect/plans/latest-plan.json`.",
       "If a similar feature already exists, describe it fully before proposing any new code.",
       "When control is passed from CodeAnalysisAgent, use its report as input but still run the full flow ending in `generate_feature_plan` (approved=true) — the analysis report is NOT a persisted plan.",
-      "Never hand off to FeatureImplementer until `get_latest_plan` confirms the plan is on disk."
+      "Never hand off to FeatureImplementer until `get_latest_plan` confirms the plan is on disk.",
+      "Never re-run `generate_feature_plan` to apply feedback on an existing draft — that discards prior turns. Use `revise_feature_plan` instead."
     ],
     safetyRules: [
       "Do not edit any application code — planning only.",
       "Do not run mutating commands.",
       "Do not expose secrets found in repository files or logs.",
-      "Never end your turn with only a chat description of the plan: you MUST have called `generate_feature_plan` with approved=true and confirmed `latest-plan.md` exists via `get_latest_plan`."
+      "Never end your turn with only a chat description of the plan: you MUST have called `generate_feature_plan` with approved=true and confirmed `latest-plan.md` exists via `get_latest_plan`.",
+      "Never call `generate_feature_plan` a second time for the same plan to fold in feedback — use `revise_feature_plan`, which preserves the revision history instead of discarding it."
     ]
   },
   {
@@ -278,7 +281,8 @@ const agentDefinitions: AgentDefinition[] = [
     id: "test-planner",
     fileName: "TestPlanner.agent.md",
     name: "TestPlanner",
-    description: "Identify the test coverage needed for a feature and attach guidance to the implementation plan.",
+    description:
+      "Identify the test coverage needed for a feature and attach guidance to the implementation plan.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -290,7 +294,8 @@ const agentDefinitions: AgentDefinition[] = [
       "get_latest_plan",
       "get_validation_commands"
     ],
-    purpose: "Identify what test coverage is required for a feature and produce actionable test guidance.",
+    purpose:
+      "Identify what test coverage is required for a feature and produce actionable test guidance.",
     instructions: [
       "Step 1 — Call `repo_map` and `detect_test_commands` to understand the test framework and existing patterns.",
       "Step 2 — Call `search_repo` with 'test', 'spec', or '__tests__' plus the feature keywords to find existing test patterns.",
@@ -313,7 +318,8 @@ const agentDefinitions: AgentDefinition[] = [
     id: "debugger",
     fileName: "Debugger.agent.md",
     name: "Debugger",
-    description: "Analyze build, test, lint, and format failures and propose the smallest safe fix.",
+    description:
+      "Analyze build, test, lint, and format failures and propose the smallest safe fix.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -324,7 +330,8 @@ const agentDefinitions: AgentDefinition[] = [
       "get_latest_validation",
       "get_safety_policy"
     ],
-    purpose: "Classify build/test/lint failures from validation output and propose the smallest correct fix.",
+    purpose:
+      "Classify build/test/lint failures from validation output and propose the smallest correct fix.",
     instructions: [
       "Step 1 — Call `get_latest_validation` to load the failing run: command, exit code, stdout, stderr.",
       "Step 2 — Classify the failure type: compile error | test assertion | lint rule | missing dependency | environment.",
@@ -347,7 +354,8 @@ const agentDefinitions: AgentDefinition[] = [
     id: "security-reviewer",
     fileName: "SecurityReviewer.agent.md",
     name: "SecurityReviewer",
-    description: "Review code changes for authentication, authorization, input validation, and secrets handling.",
+    description:
+      "Review code changes for authentication, authorization, input validation, and secrets handling.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -358,7 +366,8 @@ const agentDefinitions: AgentDefinition[] = [
       "get_latest_review",
       "get_safety_policy"
     ],
-    purpose: "Review changed code for security regressions: auth, input handling, secrets, logging, and data access.",
+    purpose:
+      "Review changed code for security regressions: auth, input handling, secrets, logging, and data access.",
     instructions: [
       "Step 1 — Call `search_repo` with 'auth', 'login', 'token', 'secret', 'password', 'permission', 'role' to map security-sensitive areas.",
       "Step 2 — Read the changed files and compare their auth/authz logic to existing patterns.",
@@ -381,7 +390,8 @@ const agentDefinitions: AgentDefinition[] = [
     id: "performance-reviewer",
     fileName: "PerformanceReviewer.agent.md",
     name: "PerformanceReviewer",
-    description: "Review code changes for performance regressions in loops, queries, rendering, and caching.",
+    description:
+      "Review code changes for performance regressions in loops, queries, rendering, and caching.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -391,7 +401,8 @@ const agentDefinitions: AgentDefinition[] = [
       "get_latest_plan",
       "get_latest_review"
     ],
-    purpose: "Identify plausible performance regressions in changed code without speculative rewrites.",
+    purpose:
+      "Identify plausible performance regressions in changed code without speculative rewrites.",
     instructions: [
       "Step 1 — Call `search_repo` with 'loop', 'query', 'fetch', 'cache', 'render', 'batch' to find performance-sensitive patterns near the change.",
       "Step 2 — Read the changed functions and compare algorithmic complexity to existing equivalent code.",
@@ -413,7 +424,8 @@ const agentDefinitions: AgentDefinition[] = [
     id: "documentation-writer",
     fileName: "DocumentationWriter.agent.md",
     name: "DocumentationWriter",
-    description: "Generate or update README, API docs, inline docstrings, and architecture notes for a feature.",
+    description:
+      "Generate or update README, API docs, inline docstrings, and architecture notes for a feature.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -424,7 +436,8 @@ const agentDefinitions: AgentDefinition[] = [
       "find_impacted_files",
       "get_latest_plan"
     ],
-    purpose: "Produce accurate, repo-aware documentation for new or changed features following the existing style.",
+    purpose:
+      "Produce accurate, repo-aware documentation for new or changed features following the existing style.",
     instructions: [
       "Step 1 — Call `repo_map` to understand the existing README structure, doc folders, and documentation conventions.",
       "Step 2 — Call `get_latest_plan` to understand what was built or changed.",
@@ -447,7 +460,8 @@ const agentDefinitions: AgentDefinition[] = [
     id: "dependency-auditor",
     fileName: "DependencyAuditor.agent.md",
     name: "DependencyAuditor",
-    description: "Audit project dependencies for outdated packages, known CVEs, and licensing issues.",
+    description:
+      "Audit project dependencies for outdated packages, known CVEs, and licensing issues.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -458,7 +472,8 @@ const agentDefinitions: AgentDefinition[] = [
       "search_repo",
       "get_validation_commands"
     ],
-    purpose: "Identify outdated, vulnerable, or non-permissively licensed dependencies across the project.",
+    purpose:
+      "Identify outdated, vulnerable, or non-permissively licensed dependencies across the project.",
     instructions: [
       "Step 1 — Call `detect_package_managers` and `detect_languages` to identify which manifests to audit.",
       "Step 2 — Call `repo_map` and `search_repo` with 'package.json', 'requirements.txt', 'pom.xml', 'Gemfile', 'go.mod' to find all dependency manifests.",
@@ -481,7 +496,8 @@ const agentDefinitions: AgentDefinition[] = [
     id: "api-design-reviewer",
     fileName: "APIDesignReviewer.agent.md",
     name: "APIDesignReviewer",
-    description: "Review REST or GraphQL API design for naming consistency, breaking changes, auth coverage, and contract completeness.",
+    description:
+      "Review REST or GraphQL API design for naming consistency, breaking changes, auth coverage, and contract completeness.",
     model: "gpt-4o",
     tools: [
       "copilotArchitect/*",
@@ -492,7 +508,8 @@ const agentDefinitions: AgentDefinition[] = [
       "get_latest_plan",
       "get_safety_policy"
     ],
-    purpose: "Review proposed API changes for consistency with existing contracts, correct HTTP semantics, versioning, and security coverage.",
+    purpose:
+      "Review proposed API changes for consistency with existing contracts, correct HTTP semantics, versioning, and security coverage.",
     instructions: [
       "Step 1 — Call `search_repo` with 'router', 'controller', 'route', 'endpoint', 'resolver', 'handler' to map the existing API surface.",
       "Step 2 — Call `get_latest_plan` to understand what API additions or changes are proposed.",
@@ -856,8 +873,12 @@ function renderAgent(
       ...(repoContext.frameworks.length > 0
         ? [`- **Frameworks:** ${repoContext.frameworks.join(", ")}`]
         : []),
-      ...(repoContext.testCommand ? [`- **Test command:** \`${repoContext.testCommand}\``] : []),
-      ...(repoContext.buildCommand ? [`- **Build command:** \`${repoContext.buildCommand}\``] : []),
+      ...(repoContext.testCommand
+        ? [`- **Test command:** \`${repoContext.testCommand}\``]
+        : []),
+      ...(repoContext.buildCommand
+        ? [`- **Build command:** \`${repoContext.buildCommand}\``]
+        : []),
       ...(repoContext.entryPoints.length > 0
         ? [`- **Entry points:** ${repoContext.entryPoints.join(", ")}`]
         : []),
@@ -1012,7 +1033,9 @@ function validateAgentText(filePath: string, text: string): AgentValidationFileR
     path.basename(filePath) === "CodeAnalysisAgent.agent.md" &&
     !text.includes("agent: FeatureArchitect")
   ) {
-    errors.push("CodeAnalysisAgent must hand off to FeatureArchitect to plan a feature.");
+    errors.push(
+      "CodeAnalysisAgent must hand off to FeatureArchitect to plan a feature."
+    );
   }
 
   if (!text.includes("## Trust Metadata")) {
@@ -1067,7 +1090,11 @@ function chatPromptExamples(definition: AgentDefinition): string[] {
   };
 
   const example = examples[definition.name];
-  return example ? [`\`${example}\``] : [`\`@${definition.name} Use Copilot Architect MCP tools for this repo-aware workflow.\``];
+  return example
+    ? [`\`${example}\``]
+    : [
+        `\`@${definition.name} Use Copilot Architect MCP tools for this repo-aware workflow.\``
+      ];
 }
 
 function inspectAgentDirectory(directory: string): {

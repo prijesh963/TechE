@@ -242,8 +242,10 @@ export function createCopilotArchitectTools(
     ),
     tool(
       "generate_feature_plan",
-      "Generate a feature plan artifact. Requires approved=true.",
-      approvedRequestSchema,
+      "Generate a feature plan artifact (revision 1). Requires approved=true. " +
+        "Fails if a draft plan already exists — use revise_feature_plan to " +
+        "incorporate feedback into it, or pass restart=true to discard it.",
+      generateFeaturePlanSchema,
       false,
       async (args) => {
         if (args.approved !== true) {
@@ -253,12 +255,42 @@ export function createCopilotArchitectTools(
           };
         }
 
+        const startPath = resolveStartPath(args, options);
+        const existingDraft = await readExistingDraftPlan(startPath);
+
+        if (
+          existingDraft &&
+          existingDraft.status === "draft" &&
+          args.restart !== true
+        ) {
+          return {
+            ok: false,
+            error: `A draft plan already exists at revision ${existingDraft.revision}. Use revise_feature_plan to incorporate feedback, or pass restart=true to discard the draft.`
+          };
+        }
+
         return new FeaturePlanningService().createPlan({
-          startPath: resolveStartPath(args, options),
+          startPath,
           request: stringArg(args, "request"),
           searchLimit: numberArg(args, "limit", 12)
         });
       }
+    ),
+    tool(
+      "revise_feature_plan",
+      "Revise the current draft plan in place with feedback from a conversation " +
+        "turn or a code review, without discarding prior revisions.",
+      reviseFeaturePlanSchema,
+      false,
+      async (args) =>
+        new FeaturePlanningService().revisePlan({
+          startPath: resolveStartPath(args, options),
+          planId: typeof args.planId === "string" ? args.planId : undefined,
+          feedback: stringArg(args, "feedback"),
+          sections: isPlainObject(args.sections) ? args.sections : undefined,
+          source: args.source === "code-review" ? "code-review" : "human-feedback",
+          reviewFindingIds: stringArrayArg(args, "reviewFindingIds")
+        })
     ),
     tool(
       "get_validation_commands",
@@ -364,6 +396,41 @@ function detectedValidationCommands(commands: RepoCommandSet): DetectedCommand[]
     ...commands.format,
     ...commands.validation
   ];
+}
+
+async function readExistingDraftPlan(
+  startPath: string
+): Promise<{ status: string; revision: number } | undefined> {
+  const repoMap = await ensureRepoMap(startPath);
+  const latestPlanPath = path.join(
+    repoMap.workspaceRoot,
+    ".copilot-architect",
+    "plans",
+    "latest-plan.json"
+  );
+
+  return (await tryReadJson(latestPlanPath)) as
+    | { status: string; revision: number }
+    | undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringArrayArg(
+  args: Record<string, unknown>,
+  key: string
+): string[] | undefined {
+  const value = args[key];
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const strings = value.filter((entry): entry is string => typeof entry === "string");
+
+  return strings.length > 0 ? strings : undefined;
 }
 
 async function readOptionalArtifact(
@@ -472,4 +539,18 @@ const requestSchema = {
 const approvedRequestSchema = {
   ...requestSchema,
   approved: z.boolean().optional()
+};
+
+const generateFeaturePlanSchema = {
+  ...approvedRequestSchema,
+  restart: z.boolean().optional()
+};
+
+const reviseFeaturePlanSchema = {
+  ...commonSchema,
+  planId: z.string().optional(),
+  feedback: z.string(),
+  sections: z.record(z.string(), z.unknown()).optional(),
+  source: z.enum(["human-feedback", "code-review"]).optional(),
+  reviewFindingIds: z.array(z.string()).optional()
 };

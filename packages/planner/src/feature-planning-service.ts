@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { AdvancedAnalysisService, RepoDiscoveryService } from "@copilot-architect/core";
@@ -37,9 +37,12 @@ import type {
   FeaturePlanningOptions,
   FeaturePlanningResult,
   PlanArtifactPaths,
+  PlanDraftArtifactPaths,
   PlanEndpointReference,
   PlanFileReference,
   PlanningContextSummary,
+  PlanRevisionEntry,
+  PlanRevisionOptions,
   StackSpecificPlan
 } from "./models.js";
 
@@ -52,22 +55,104 @@ interface PlanningContext {
 export class FeaturePlanningService {
   async createPlan(options: FeaturePlanningOptions): Promise<FeaturePlanningResult> {
     const preview = await this.createPlanPreview(options);
-    const paths = createPlanArtifactPaths(preview.repoRoot, preview.plan.id);
+    const revisionEntry: PlanRevisionEntry = {
+      revision: 1,
+      at: preview.plan.generatedAt,
+      source: "initial",
+      feedback: options.request.trim(),
+      changedSections: []
+    };
+    const plan: FeaturePlanArtifact = {
+      ...preview.plan,
+      revision: 1,
+      revisions: [revisionEntry]
+    };
+    const markdown = renderFeaturePlanMarkdown(plan);
+    const paths = createPlanArtifactPaths(preview.repoRoot, plan.id);
+    const draftPaths = createPlanDraftPaths(preview.repoRoot, plan.id, 1);
 
     await mkdir(getArtifactDirectoryPath(preview.repoRoot, "plans"), {
       recursive: true
     });
-    await writeJsonFile(paths.timestampJsonPath, preview.plan);
-    await writeJsonFile(paths.latestJsonPath, preview.plan);
-    await writeTextFile(paths.timestampMarkdownPath, preview.markdown);
-    await writeTextFile(paths.latestMarkdownPath, preview.markdown);
+    await mkdir(path.dirname(draftPaths.draftJsonPath), { recursive: true });
+    await writeJsonFile(paths.timestampJsonPath, plan);
+    await writeJsonFile(paths.latestJsonPath, plan);
+    await writeJsonFile(draftPaths.draftJsonPath, plan);
+    await writeTextFile(paths.timestampMarkdownPath, markdown);
+    await writeTextFile(paths.latestMarkdownPath, markdown);
+    await writeTextFile(draftPaths.draftMarkdownPath, markdown);
 
     return {
       ...preview,
+      plan,
+      markdown,
       jsonPath: paths.timestampJsonPath,
       markdownPath: paths.timestampMarkdownPath,
       latestJsonPath: paths.latestJsonPath,
       latestMarkdownPath: paths.latestMarkdownPath
+    };
+  }
+
+  /**
+   * Edits the current draft in place instead of regenerating it, so
+   * feedback from earlier conversation turns is never discarded. See
+   * docs/PLAN_LIFECYCLE_DESIGN.md section 1.
+   */
+  async revisePlan(options: PlanRevisionOptions): Promise<FeaturePlanningResult> {
+    const feedback = options.feedback.trim();
+
+    if (!feedback) {
+      throw new Error("feedback is required to revise a plan");
+    }
+
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error(
+        "No draft plan found to revise. Call generate_feature_plan first."
+      );
+    }
+
+    const current = await loadLatestDraftRevision(repoRoot, planId);
+    const nextRevision = current.revision + 1;
+    const changedSections = options.sections ? Object.keys(options.sections) : [];
+    const revisionEntry: PlanRevisionEntry = {
+      revision: nextRevision,
+      at: new Date().toISOString(),
+      source: options.source ?? "human-feedback",
+      feedback,
+      changedSections,
+      reviewFindingIds: options.reviewFindingIds
+    };
+    const plan: FeaturePlanArtifact = {
+      ...current,
+      ...(options.sections ?? {}),
+      revision: nextRevision,
+      supersedes: `${planId}-rev${current.revision}`,
+      revisions: [...current.revisions, revisionEntry]
+    };
+    const markdown = renderFeaturePlanMarkdown(plan);
+    const paths = createPlanArtifactPaths(repoRoot, planId);
+    const draftPaths = createPlanDraftPaths(repoRoot, planId, nextRevision);
+
+    await mkdir(path.dirname(draftPaths.draftJsonPath), { recursive: true });
+    await writeJsonFile(draftPaths.draftJsonPath, plan);
+    await writeJsonFile(paths.latestJsonPath, plan);
+    await writeTextFile(draftPaths.draftMarkdownPath, markdown);
+    await writeTextFile(paths.latestMarkdownPath, markdown);
+
+    return {
+      repoRoot,
+      plan,
+      markdown,
+      jsonPath: draftPaths.draftJsonPath,
+      markdownPath: draftPaths.draftMarkdownPath,
+      latestJsonPath: paths.latestJsonPath,
+      latestMarkdownPath: paths.latestMarkdownPath,
+      searchResults: []
     };
   }
 
@@ -273,7 +358,9 @@ function buildPlan(
     riskScores: advancedAnalysis.riskScores,
     planQuality,
     readinessDiagnostics: advancedAnalysis.diagnostics,
-    relatedEndpoints
+    relatedEndpoints,
+    revision: 1,
+    revisions: []
   };
 }
 
@@ -846,6 +933,67 @@ function createPlanArtifactPaths(repoRoot: string, id: string): PlanArtifactPath
     latestJsonPath: path.join(plansRoot, "latest-plan.json"),
     latestMarkdownPath: path.join(plansRoot, "latest-plan.md")
   };
+}
+
+function createPlanDraftPaths(
+  repoRoot: string,
+  planId: string,
+  revision: number
+): PlanDraftArtifactPaths {
+  const plansRoot = getArtifactDirectoryPath(repoRoot, "plans");
+  const draftDir = path.join(plansRoot, "drafts", planId);
+
+  return {
+    draftJsonPath: path.join(draftDir, `rev-${revision}.json`),
+    draftMarkdownPath: path.join(draftDir, `rev-${revision}.md`),
+    latestJsonPath: path.join(plansRoot, "latest-plan.json"),
+    latestMarkdownPath: path.join(plansRoot, "latest-plan.md")
+  };
+}
+
+async function findLatestDraftPlanId(repoRoot: string): Promise<string | undefined> {
+  const latestPath = path.join(
+    getArtifactDirectoryPath(repoRoot, "plans"),
+    "latest-plan.json"
+  );
+  const plan = await readOptionalJson<FeaturePlanArtifact>(latestPath);
+
+  return plan?.id;
+}
+
+async function loadLatestDraftRevision(
+  repoRoot: string,
+  planId: string
+): Promise<FeaturePlanArtifact> {
+  const draftDir = path.join(
+    getArtifactDirectoryPath(repoRoot, "plans"),
+    "drafts",
+    planId
+  );
+  let entries: string[];
+
+  try {
+    entries = await readdir(draftDir);
+  } catch {
+    throw new Error(
+      `No draft plan found for id "${planId}". Call generate_feature_plan first.`
+    );
+  }
+
+  const revisionNumbers = entries
+    .map((name) => /^rev-(\d+)\.json$/.exec(name))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => Number(match[1]))
+    .sort((left, right) => right - left);
+  const latestRevision = revisionNumbers[0];
+
+  if (latestRevision === undefined) {
+    throw new Error(`No draft revisions found for plan "${planId}".`);
+  }
+
+  return readJsonFile<FeaturePlanArtifact>(
+    path.join(draftDir, `rev-${latestRevision}.json`)
+  );
 }
 
 async function writeTextFile(filePath: string, contents: string): Promise<void> {

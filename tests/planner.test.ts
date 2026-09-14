@@ -82,6 +82,91 @@ describe("FeaturePlanningService", () => {
     expect(markdown).toContain("## Stack-Specific Plan");
   });
 
+  it("revises a draft plan in place without losing prior revisions", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({
+        scripts: { test: "vitest run" },
+        dependencies: { react: "^18.2.0" }
+      }),
+      "src/invoices/InvoiceApproval.tsx":
+        "export function InvoiceApproval() { return 'invoice approval'; }"
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+
+    expect(initial.plan.revision).toBe(1);
+    expect(initial.plan.revisions).toHaveLength(1);
+    expect(initial.plan.revisions[0].source).toBe("initial");
+
+    const revised = await service.revisePlan({
+      startPath: repoRoot,
+      feedback: "Also cover the rejection path, not just approval.",
+      sections: {
+        openQuestions: ["What happens when an approver rejects the invoice?"]
+      }
+    });
+
+    expect(revised.plan.id).toBe(initial.plan.id);
+    expect(revised.plan.revision).toBe(2);
+    expect(revised.plan.supersedes).toBe(`${initial.plan.id}-rev1`);
+    expect(revised.plan.revisions).toHaveLength(2);
+    expect(revised.plan.revisions[1]).toMatchObject({
+      revision: 2,
+      source: "human-feedback",
+      feedback: "Also cover the rejection path, not just approval.",
+      changedSections: ["openQuestions"]
+    });
+    expect(revised.plan.openQuestions).toEqual([
+      "What happens when an approver rejects the invoice?"
+    ]);
+    // Fields not covered by `sections` survive from the previous revision.
+    expect(revised.plan.impactedFrameworks).toContain("React");
+
+    const latestJson = JSON.parse(
+      await readFile(revised.latestJsonPath, "utf8")
+    ) as FeaturePlanArtifact;
+    expect(latestJson.revision).toBe(2);
+
+    const draftDir = path.join(
+      getArtifactDirectoryPath(repoRoot, "plans"),
+      "drafts",
+      initial.plan.id
+    );
+    expect(existsSync(path.join(draftDir, "rev-1.json"))).toBe(true);
+    expect(existsSync(path.join(draftDir, "rev-2.json"))).toBe(true);
+
+    const secondRevision = await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Findings from code review: add an audit log entry.",
+      source: "code-review",
+      reviewFindingIds: ["finding-1"]
+    });
+
+    expect(secondRevision.plan.revision).toBe(3);
+    expect(secondRevision.plan.revisions[2]).toMatchObject({
+      revision: 3,
+      source: "code-review",
+      reviewFindingIds: ["finding-1"]
+    });
+  });
+
+  it("rejects revising a plan when no draft exists", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "no-plan-yet" })
+    });
+
+    await expect(
+      new FeaturePlanningService().revisePlan({
+        startPath: repoRoot,
+        feedback: "This should fail, there is no plan yet."
+      })
+    ).rejects.toThrow(/No draft plan found/);
+  });
+
   it("uses optional workspace config, custom commands, and instruction files", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({
