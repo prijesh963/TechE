@@ -366,6 +366,30 @@ export interface DashboardArtifacts {
   latestReview?: { summary?: string; generatedAt?: string; findingCount?: number };
   agentCount?: number;
   repoCount?: number;
+  contextInsights?: ContextInsights;
+}
+
+/**
+ * How much repo content the latest plan narrowed the agent's context down to,
+ * derived from two artifacts already on disk: every indexed file (the context
+ * an agent has to fall back on without a plan) versus the files that plan
+ * actually selected.
+ *
+ * Token counts are a chars÷4 estimate — the same directional estimator
+ * `packages/measurement` uses (see docs/benchmarks/AFTER.md). It is not a real
+ * tokenizer and not a Copilot billing figure.
+ */
+export interface ContextInsights {
+  /** Files in the index, and their combined size as estimated tokens. */
+  repoFileCount: number;
+  repoEstimatedTokens: number;
+  /** Files the latest plan selected, and their combined size as estimated tokens. */
+  selectedFileCount: number;
+  selectedEstimatedTokens: number;
+  /** Rounded to one decimal place; 0 when the index has no measurable content. */
+  reductionPercent: number;
+  /** The request the latest plan was generated for, when recorded. */
+  request?: string;
 }
 
 export interface ActivatedExtensionApi {
@@ -1423,6 +1447,10 @@ export function createDashboardHtml(state: ExtensionState): string {
     {
       title: "MCP status",
       body: state.mcpStatus
+    },
+    {
+      title: "Agent insights",
+      body: escapeHtml(formatAgentInsights(artifacts))
     }
   ];
 
@@ -1490,6 +1518,7 @@ export async function loadDashboardArtifacts(
     task?: string;
     status?: string;
     generatedAt?: string;
+    relevantFiles?: Array<{ filePath?: string }>;
   }>(path.join(root, "plans", "latest-plan.json"));
   if (plan) {
     artifacts.latestPlan = {
@@ -1498,6 +1527,8 @@ export async function loadDashboardArtifacts(
       generatedAt: plan.generatedAt
     };
   }
+
+  artifacts.contextInsights = await loadContextInsights(root, plan);
 
   const validation = await readJsonSafe<{
     status?: string;
@@ -1558,6 +1589,61 @@ async function countAgentFiles(directory: string): Promise<number> {
   }
 }
 
+// Roughly 4 characters per token. Kept in sync with packages/measurement's own
+// CHARS_PER_TOKEN by value rather than by import: the extension ships
+// standalone and deliberately depends on no workspace package at runtime.
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Compares the whole indexed repo against what the latest plan selected, using
+ * file sizes the indexer already recorded — no filesystem walk on refresh.
+ * Returns undefined when there is no index to measure against.
+ */
+async function loadContextInsights(
+  artifactRoot: string,
+  plan: { task?: string; relevantFiles?: Array<{ filePath?: string }> } | undefined
+): Promise<ContextInsights | undefined> {
+  const index = await readJsonSafe<{
+    documents?: Array<{ relativePath?: string; fileSizeBytes?: number }>;
+  }>(path.join(artifactRoot, "index", "index.json"));
+  const documents = index?.documents ?? [];
+
+  if (documents.length === 0) {
+    return undefined;
+  }
+
+  const repoBytes = documents.reduce(
+    (total, doc) => total + (doc.fileSizeBytes ?? 0),
+    0
+  );
+  const selectedPaths = new Set(
+    (plan?.relevantFiles ?? [])
+      .map((file) => file.filePath)
+      .filter((filePath): filePath is string => Boolean(filePath))
+  );
+  const selected = documents.filter(
+    (doc) => doc.relativePath && selectedPaths.has(doc.relativePath)
+  );
+  const selectedBytes = selected.reduce(
+    (total, doc) => total + (doc.fileSizeBytes ?? 0),
+    0
+  );
+  const repoEstimatedTokens = Math.round(repoBytes / CHARS_PER_TOKEN);
+  const selectedEstimatedTokens = Math.round(selectedBytes / CHARS_PER_TOKEN);
+
+  return {
+    repoFileCount: documents.length,
+    repoEstimatedTokens,
+    selectedFileCount: selected.length,
+    selectedEstimatedTokens,
+    reductionPercent:
+      repoEstimatedTokens > 0
+        ? Math.round((1 - selectedEstimatedTokens / repoEstimatedTokens) * 1000) / 10
+        : 0,
+    request: plan?.task
+  };
+}
+
 function formatLanguagesFrameworks(artifacts: DashboardArtifacts | undefined): string {
   const languages = artifacts?.languages ?? [];
   const frameworks = artifacts?.frameworks ?? [];
@@ -1611,6 +1697,39 @@ function formatAgents(artifacts: DashboardArtifacts | undefined): string {
   return count > 0
     ? `${count} agent(s) installed in .github/agents`
     : "No agents installed — run Install Agents.";
+}
+
+export function formatAgentInsights(artifacts: DashboardArtifacts | undefined): string {
+  const insights = artifacts?.contextInsights;
+
+  if (!insights) {
+    return "No index yet — run Setup Repo to measure context usage.";
+  }
+
+  const wholeRepo = `Whole repo: ${insights.repoFileCount} files · ~${formatTokens(insights.repoEstimatedTokens)} tokens`;
+
+  if (insights.selectedFileCount === 0) {
+    return `${wholeRepo}. No plan yet — run Generate Plan to compare.`;
+  }
+
+  const selected = `With plan: ${insights.selectedFileCount} files · ~${formatTokens(insights.selectedEstimatedTokens)} tokens`;
+  const saved = insights.repoEstimatedTokens - insights.selectedEstimatedTokens;
+  const savings = `Sends ${insights.reductionPercent}% less (~${formatTokens(saved)} tokens) per request`;
+  const request = insights.request ? ` for "${truncate(insights.request, 48)}"` : "";
+
+  return [
+    wholeRepo,
+    selected,
+    `${savings}${request}.`,
+    // The comparison is against sending the whole repo, which is the fallback
+    // when an agent has no plan to go on — not a measurement of what Copilot
+    // itself sends, and not a real tokenizer. See docs/benchmarks/AFTER.md.
+    "Estimate only (chars÷4), measured against whole-repo context — not a Copilot bill."
+  ].join(" · ");
+}
+
+function formatTokens(tokens: number): string {
+  return tokens.toLocaleString("en-US");
 }
 
 function formatDate(iso: string | undefined): string {

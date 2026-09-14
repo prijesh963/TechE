@@ -13,6 +13,7 @@ import {
   createCliCommandLine,
   createDashboardHtml,
   deactivate,
+  formatAgentInsights,
   loadDashboardArtifacts,
   type CliRunRequest,
   type CliRunResult,
@@ -533,6 +534,70 @@ describe("VS Code extension shell", () => {
     expect(artifacts.languages).toBeUndefined();
     expect(artifacts.latestPlan).toBeUndefined();
     expect(artifacts.agentCount).toBe(0);
+    expect(artifacts.contextInsights).toBeUndefined();
+  });
+
+  it("measures the latest plan's selection against the whole indexed repo", async () => {
+    const repoRoot = await createInsightsRepo({
+      // 4000 chars indexed, 800 of which the plan selected → 80% smaller.
+      documents: [
+        { relativePath: "src/invoice.ts", fileSizeBytes: 800 },
+        { relativePath: "src/unrelated-a.ts", fileSizeBytes: 1600 },
+        { relativePath: "src/unrelated-b.ts", fileSizeBytes: 1600 }
+      ],
+      plan: {
+        task: "Add invoice approval workflow",
+        relevantFiles: [{ filePath: "src/invoice.ts" }]
+      }
+    });
+
+    const { contextInsights } = await loadDashboardArtifacts(repoRoot);
+
+    expect(contextInsights).toEqual({
+      repoFileCount: 3,
+      repoEstimatedTokens: 1000,
+      selectedFileCount: 1,
+      selectedEstimatedTokens: 200,
+      reductionPercent: 80,
+      request: "Add invoice approval workflow"
+    });
+    expect(formatAgentInsights({ contextInsights })).toContain("Sends 80% less");
+    expect(formatAgentInsights({ contextInsights })).toContain(
+      "Add invoice approval workflow"
+    );
+  });
+
+  it("ignores plan files that are not in the index", async () => {
+    const repoRoot = await createInsightsRepo({
+      documents: [{ relativePath: "src/invoice.ts", fileSizeBytes: 400 }],
+      plan: {
+        task: "Add invoice approval",
+        // A doc file the indexer skipped — it must not inflate the selection.
+        relevantFiles: [{ filePath: "src/invoice.ts" }, { filePath: "notes/design.md" }]
+      }
+    });
+
+    const { contextInsights } = await loadDashboardArtifacts(repoRoot);
+
+    expect(contextInsights?.selectedFileCount).toBe(1);
+    expect(contextInsights?.selectedEstimatedTokens).toBe(100);
+  });
+
+  it("asks for a plan when the repo is indexed but nothing is planned yet", async () => {
+    const repoRoot = await createInsightsRepo({
+      documents: [{ relativePath: "src/invoice.ts", fileSizeBytes: 400 }]
+    });
+
+    const artifacts = await loadDashboardArtifacts(repoRoot);
+
+    expect(artifacts.contextInsights?.selectedFileCount).toBe(0);
+    expect(formatAgentInsights(artifacts)).toContain("No plan yet");
+    expect(formatAgentInsights(artifacts)).toContain("Whole repo: 1 files");
+  });
+
+  it("asks for setup when there is no index to measure against", () => {
+    expect(formatAgentInsights(undefined)).toContain("run Setup Repo");
+    expect(formatAgentInsights({})).toContain("run Setup Repo");
   });
 
   it("renders live artifact values into the dashboard cards", () => {
@@ -584,6 +649,7 @@ describe("VS Code extension shell", () => {
     expect(html).toContain("Review reports");
     expect(html).toContain("Agent status");
     expect(html).toContain("MCP status");
+    expect(html).toContain("Agent insights");
   });
 
   it("renders exactly the five primary actions plus More actions", () => {
@@ -619,6 +685,32 @@ interface FakeVscode {
   /** Label the fake quick pick resolves to; undefined mimics a dismissed picker. */
   quickPickChoice: string | undefined;
   quickPickItems: QuickPickItemLike[][];
+}
+
+/** Writes just the index (and optionally plan) artifacts the insights card reads. */
+async function createInsightsRepo(fixture: {
+  documents: Array<{ relativePath: string; fileSizeBytes: number }>;
+  plan?: { task?: string; relevantFiles?: Array<{ filePath: string }> };
+}): Promise<string> {
+  const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-ext-insights-"));
+  const artifactRoot = path.join(repoRoot, ".copilot-architect");
+  await mkdir(path.join(artifactRoot, "index"), { recursive: true });
+  await writeFile(
+    path.join(artifactRoot, "index", "index.json"),
+    JSON.stringify({ documents: fixture.documents }),
+    "utf8"
+  );
+
+  if (fixture.plan) {
+    await mkdir(path.join(artifactRoot, "plans"), { recursive: true });
+    await writeFile(
+      path.join(artifactRoot, "plans", "latest-plan.json"),
+      JSON.stringify(fixture.plan),
+      "utf8"
+    );
+  }
+
+  return repoRoot;
 }
 
 function createFakeVscode(): FakeVscode {
