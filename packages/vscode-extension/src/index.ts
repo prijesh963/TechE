@@ -1706,26 +1706,31 @@ export function formatAgentInsights(artifacts: DashboardArtifacts | undefined): 
     return "No index yet — run Setup Repo to measure context usage.";
   }
 
-  const wholeRepo = `Whole repo: ${insights.repoFileCount} files · ~${formatTokens(insights.repoEstimatedTokens)} tokens`;
+  const without = `Without Copilot Architect: ${formatFileCount(insights.repoFileCount)} · ~${formatTokens(insights.repoEstimatedTokens)} tokens`;
 
   if (insights.selectedFileCount === 0) {
-    return `${wholeRepo}. No plan yet — run Generate Plan to compare.`;
+    return `${without}. No plan yet — run Generate Plan to compare.`;
   }
 
-  const selected = `With plan: ${insights.selectedFileCount} files · ~${formatTokens(insights.selectedEstimatedTokens)} tokens`;
+  const withArchitect = `With Copilot Architect: ${formatFileCount(insights.selectedFileCount)} · ~${formatTokens(insights.selectedEstimatedTokens)} tokens`;
   const saved = insights.repoEstimatedTokens - insights.selectedEstimatedTokens;
   const savings = `Sends ${insights.reductionPercent}% less (~${formatTokens(saved)} tokens) per request`;
   const request = insights.request ? ` for "${truncate(insights.request, 48)}"` : "";
 
   return [
-    wholeRepo,
-    selected,
+    without,
+    withArchitect,
     `${savings}${request}.`,
-    // The comparison is against sending the whole repo, which is the fallback
-    // when an agent has no plan to go on — not a measurement of what Copilot
-    // itself sends, and not a real tokenizer. See docs/benchmarks/AFTER.md.
+    // "Without" means the whole repo — the fallback when an agent has no plan
+    // to go on. It is not a measurement of what Copilot itself sends (Copilot
+    // does its own retrieval), and chars÷4 is not a real tokenizer, so the
+    // caveat spells out the baseline. See docs/benchmarks/AFTER.md.
     "Estimate only (chars÷4), measured against whole-repo context — not a Copilot bill."
   ].join(" · ");
+}
+
+function formatFileCount(count: number): string {
+  return `${count} ${count === 1 ? "file" : "files"}`;
 }
 
 function formatTokens(tokens: number): string {

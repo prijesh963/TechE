@@ -561,10 +561,14 @@ describe("VS Code extension shell", () => {
       reductionPercent: 80,
       request: "Add invoice approval workflow"
     });
-    expect(formatAgentInsights({ contextInsights })).toContain("Sends 80% less");
-    expect(formatAgentInsights({ contextInsights })).toContain(
-      "Add invoice approval workflow"
-    );
+    const rendered = formatAgentInsights({ contextInsights });
+    expect(rendered).toContain("Without Copilot Architect: 3 files");
+    expect(rendered).toContain("With Copilot Architect: 1 file ");
+    expect(rendered).toContain("Sends 80% less");
+    expect(rendered).toContain("Add invoice approval workflow");
+    // The baseline stays spelled out so "without" is never read as a measured
+    // Copilot figure.
+    expect(rendered).toContain("whole-repo context");
   });
 
   it("ignores plan files that are not in the index", async () => {
@@ -592,7 +596,9 @@ describe("VS Code extension shell", () => {
 
     expect(artifacts.contextInsights?.selectedFileCount).toBe(0);
     expect(formatAgentInsights(artifacts)).toContain("No plan yet");
-    expect(formatAgentInsights(artifacts)).toContain("Whole repo: 1 files");
+    expect(formatAgentInsights(artifacts)).toContain(
+      "Without Copilot Architect: 1 file"
+    );
   });
 
   it("asks for setup when there is no index to measure against", () => {
