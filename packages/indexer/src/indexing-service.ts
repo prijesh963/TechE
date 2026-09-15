@@ -27,7 +27,9 @@ import type {
   IndexResult,
   IndexStats,
   IndexStatus,
+  ListFilesOptions,
   LocalIndex,
+  RepoFileInventory,
   SearchAnchor,
   SearchOptions,
   SearchResponse,
@@ -115,6 +117,63 @@ export class IndexingService {
       query: options.query,
       repoRoot,
       results
+    };
+  }
+
+  /**
+   * Lists what the index actually contains. Search needs a query, and an
+   * agent asked to analyze a whole repo has none to give — guessing English
+   * keywords finds nothing in a codebase whose identifiers are `OrderService`
+   * rather than `main`. This is the enumeration path for that case.
+   */
+  async listFiles(options: ListFilesOptions = {}): Promise<RepoFileInventory> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoRoot = await resolveRepoRoot(startPath, options.strictRoot);
+    const index = await this.readOrCreateIndex(repoRoot, options.strictRoot);
+
+    const languageCounts: Record<string, number> = {};
+    const directoryCounts: Record<string, number> = {};
+    for (const document of index.documents) {
+      languageCounts[document.languageGuess] =
+        (languageCounts[document.languageGuess] ?? 0) + 1;
+      const topLevel = document.relativePath.split("/")[0] ?? ".";
+      const bucket = topLevel === document.relativePath ? "(root)" : topLevel;
+      directoryCounts[bucket] = (directoryCounts[bucket] ?? 0) + 1;
+    }
+
+    const filter = options.filter?.toLowerCase();
+    const matching = filter
+      ? index.documents.filter((document) =>
+          document.relativePath.toLowerCase().includes(filter)
+        )
+      : index.documents;
+
+    // Source first, then tests, then config/docs — a truncated list still
+    // shows the files that explain what the repo does.
+    const ranked = [...matching].sort(
+      (left, right) =>
+        rankForListing(left) - rankForListing(right) ||
+        left.relativePath.localeCompare(right.relativePath)
+    );
+    const files = ranked.slice(0, options.limit ?? DEFAULT_LIST_LIMIT);
+
+    return {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      generatedAt: new Date().toISOString(),
+      repoRoot,
+      totalFiles: index.documents.length,
+      returnedFiles: files.length,
+      languageCounts,
+      directoryCounts,
+      files: files.map((document) => ({
+        relativePath: document.relativePath,
+        languageGuess: document.languageGuess,
+        sizeBytes: document.fileSizeBytes,
+        isTestFile: document.isTestFile,
+        isConfigFile: document.isConfigFile,
+        isDocFile: document.isDocFile,
+        symbols: document.symbols.map((symbol) => symbol.name).slice(0, 20)
+      }))
     };
   }
 
@@ -211,6 +270,15 @@ export class IndexingService {
 
     return (await this.index({ startPath: repoRoot, strictRoot })).index;
   }
+}
+
+const DEFAULT_LIST_LIMIT = 300;
+
+/** Source (0) before tests (1) before config/docs (2). */
+function rankForListing(document: IndexedFile): number {
+  if (document.isTestFile) return 1;
+  if (document.isConfigFile || document.isDocFile) return 2;
+  return 0;
 }
 
 function combineWorkspaceResults(

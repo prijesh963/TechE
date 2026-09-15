@@ -380,35 +380,36 @@ Every mutating action is written to `.copilot-architect/audit/audit.jsonl` with 
 
 Start: `npm run cli -- mcp [--path <repo>]`
 
-| Tool                        | Description                                                                                                                         |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `repo_map`                  | Return the full UniversalRepoMap for the target repo                                                                                |
-| `get_symbol_graph`          | Build (or rebuild) the symbol/dependency graph: file, class, function, and method nodes with imports/calls/extends/implements edges |
-| `workspace_map`             | Return the workspace-level map for multi-repo configs                                                                               |
-| `detect_languages`          | Detected languages with confidence                                                                                                  |
-| `detect_frameworks`         | Detected frameworks                                                                                                                 |
-| `detect_package_managers`   | Detected package managers                                                                                                           |
-| `detect_build_commands`     | Build commands                                                                                                                      |
-| `detect_test_commands`      | Test commands                                                                                                                       |
-| `search_repo`               | Hybrid search the local index (keyword + path/symbol + graph-connected + recency; see `signals` per result)                         |
-| `analyze_query_intent`      | Classify a query's intent (debugging/feature/refactor/test) and resolve likely components, tests, and recent changes                |
-| `search_across_repos`       | Search across all workspace repos                                                                                                   |
-| `find_similar_feature`      | Find files similar to a described feature                                                                                           |
-| `find_impacted_files`       | List files likely affected by a change                                                                                              |
-| `analyze_impact`            | Summarize impact analysis for a feature request                                                                                     |
-| `analyze_cross_repo_impact` | Cross-repo impact for workspace plans                                                                                               |
-| `generate_plan_context`     | Return planning context without writing artifacts                                                                                   |
-| `measure_context_reduction` | Measure a request's naive-whole-repo vs plan.relevantFiles context cost (file counts, bytes, estimated tokens, reduction %)         |
-| `generate_feature_plan`     | Write plan revision 1 (requires `approved=true`; fails over an existing draft unless `restart=true`)                                |
-| `revise_feature_plan`       | Edit the current draft in place with feedback, preserving revision history                                                          |
-| `approve_plan`              | Approve one specific revision (`revision` required) and promote it to latest                                                        |
-| `get_validation_commands`   | List safe validation commands                                                                                                       |
-| `get_safety_policy`         | Return the active safety policy                                                                                                     |
-| `get_latest_plan`           | Return the latest plan artifact                                                                                                     |
-| `get_latest_validation`     | Return the latest validation report                                                                                                 |
-| `get_latest_review`         | Return the latest review report                                                                                                     |
-| `resolve_review_finding`    | Accept or decline one review finding by stable id (`reason` required for both)                                                      |
-| `agent_status`              | Return installed agent status                                                                                                       |
+| Tool                        | Description                                                                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repo_map`                  | Return the full UniversalRepoMap for the target repo                                                                                                  |
+| `get_symbol_graph`          | Build (or rebuild) the symbol/dependency graph: file, class, function, and method nodes with imports/calls/extends/implements edges                   |
+| `workspace_map`             | Return the workspace-level map for multi-repo configs                                                                                                 |
+| `detect_languages`          | Detected languages with confidence                                                                                                                    |
+| `detect_frameworks`         | Detected frameworks                                                                                                                                   |
+| `detect_package_managers`   | Detected package managers                                                                                                                             |
+| `detect_build_commands`     | Build commands                                                                                                                                        |
+| `detect_test_commands`      | Test commands                                                                                                                                         |
+| `list_repo_files`           | Enumerate the indexed files with language, size, symbols and per-language/per-directory counts — use before searching when there is no query to guess |
+| `search_repo`               | Hybrid search the local index (keyword + path/symbol + graph-connected + recency; see `signals` per result)                                           |
+| `analyze_query_intent`      | Classify a query's intent (debugging/feature/refactor/test) and resolve likely components, tests, and recent changes                                  |
+| `search_across_repos`       | Search across all workspace repos                                                                                                                     |
+| `find_similar_feature`      | Find files similar to a described feature                                                                                                             |
+| `find_impacted_files`       | List files likely affected by a change                                                                                                                |
+| `analyze_impact`            | Summarize impact analysis for a feature request                                                                                                       |
+| `analyze_cross_repo_impact` | Cross-repo impact for workspace plans                                                                                                                 |
+| `generate_plan_context`     | Return planning context without writing artifacts                                                                                                     |
+| `measure_context_reduction` | Measure a request's naive-whole-repo vs plan.relevantFiles context cost (file counts, bytes, estimated tokens, reduction %)                           |
+| `generate_feature_plan`     | Write plan revision 1 (requires `approved=true`; fails over an existing draft unless `restart=true`)                                                  |
+| `revise_feature_plan`       | Edit the current draft in place with feedback, preserving revision history                                                                            |
+| `approve_plan`              | Approve one specific revision (`revision` required) and promote it to latest                                                                          |
+| `get_validation_commands`   | List safe validation commands                                                                                                                         |
+| `get_safety_policy`         | Return the active safety policy                                                                                                                       |
+| `get_latest_plan`           | Return the latest plan artifact                                                                                                                       |
+| `get_latest_validation`     | Return the latest validation report                                                                                                                   |
+| `get_latest_review`         | Return the latest review report                                                                                                                       |
+| `resolve_review_finding`    | Accept or decline one review finding by stable id (`reason` required for both)                                                                        |
+| `agent_status`              | Return installed agent status                                                                                                                         |
 
 ---
 

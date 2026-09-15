@@ -157,6 +157,24 @@ export function createCopilotArchitectTools(
       }
     ),
     tool(
+      "list_repo_files",
+      "List what the repo index actually contains: file paths with their " +
+        "language, size, declared symbols, and per-language/per-directory " +
+        "counts. Use this FIRST when asked to analyze, explain or map a repo " +
+        "— search_repo needs a query, and guessed keywords find nothing in a " +
+        "codebase whose identifiers are OrderService rather than 'main'. " +
+        "Optional `filter` narrows by path substring; `limit` caps the list " +
+        "(default 300) while `totalFiles` still reports the true count.",
+      listFilesSchema,
+      true,
+      async (args) =>
+        new IndexingService().listFiles({
+          startPath: resolveStartPath(args, options),
+          filter: optionalStringArg(args, "filter"),
+          limit: numberArg(args, "limit", 300)
+        })
+    ),
+    tool(
       "search_repo",
       "Search the current repo index. Hybrid ranking: keyword match, path/symbol " +
         "match, and — when get_symbol_graph has been run — files connected via " +
@@ -593,6 +611,14 @@ function stringArg(args: Record<string, unknown>, key: string): string {
   return value;
 }
 
+function optionalStringArg(
+  args: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const value = args[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
 function numberArg(
   args: Record<string, unknown>,
   key: string,
@@ -624,6 +650,12 @@ const commonSchema = {
 const searchSchema = {
   ...commonSchema,
   query: z.string(),
+  limit: z.number().positive().optional()
+};
+
+const listFilesSchema = {
+  ...commonSchema,
+  filter: z.string().optional(),
   limit: z.number().positive().optional()
 };
 

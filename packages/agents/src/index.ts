@@ -567,6 +567,7 @@ const agentDefinitions: AgentDefinition[] = [
       "detect_frameworks",
       "detect_build_commands",
       "detect_test_commands",
+      "list_repo_files",
       "search_repo",
       "search_across_repos",
       "find_impacted_files",
@@ -581,7 +582,8 @@ const agentDefinitions: AgentDefinition[] = [
     instructions: [
       "Step 1 — Call `repo_map` to get the full picture: languages, frameworks, entry points, architectural patterns, build and test commands.",
       "Step 2 — Call `detect_languages` and `detect_frameworks` to confirm the technology stack and identify all layers (frontend, backend, data, infra).",
-      "Step 3 — Call `search_repo` with entry-point keywords (e.g. 'main', 'app', 'server', 'index', 'bootstrap', 'start') to locate the top-level execution starting points.",
+      "Step 3 — MANDATORY INVENTORY: call `list_repo_files` to enumerate what the repo actually contains — every indexed path with its language, size and declared symbols, plus per-language and per-directory counts. Do this BEFORE any `search_repo` call and base your report on it. Guessing entry-point keywords ('main', 'app', 'server') finds nothing in a codebase whose identifiers are `OrderService` or `BillingController`, and an empty search result is NOT evidence the repo is empty — it means the guess missed. If `returnedFiles` is lower than `totalFiles` the list was truncated: narrow with `filter` (a path substring) or raise `limit` rather than assuming you have seen everything.",
+      "Step 3a — Now that you know the real file and symbol names, call `search_repo` with terms taken FROM THE INVENTORY (actual class, package or folder names) to read the areas that matter. Never report 'no code found' on the basis of a keyword search alone — re-check against `list_repo_files` first.",
       "Step 4 — Trace execution flow from each entry point: identify the request/event handlers, business logic modules, data access layers, and external integrations they call. Use `search_repo` to read each layer.",
       "Step 5 — Call `search_repo` with 'import', 'require', 'from' to map module dependencies and identify the most heavily imported shared utilities or services.",
       "Step 6 — Call `find_impacted_files` on the core domain concepts (infer from repo_map) to discover which files are central to the system.",
@@ -599,6 +601,8 @@ const agentDefinitions: AgentDefinition[] = [
     safetyRules: [
       "Do not modify any code — analysis and reporting only.",
       "Do not run build or test commands during analysis — read artifacts and index only.",
+      "Never conclude the repo is empty, unreadable, or that 'nothing was found' without having called `list_repo_files` and reported its `totalFiles`. Zero search hits mean the query missed, not that there is no code.",
+      "Never base the report on whichever file happens to be open in the editor — enumerate the repo through `list_repo_files` instead.",
       "Do not expose secrets, tokens, or credentials found in configuration files in the report."
     ]
   }

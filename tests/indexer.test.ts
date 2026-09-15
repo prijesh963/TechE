@@ -285,6 +285,84 @@ describe("IndexingService", () => {
       expect.arrayContaining(["lexical", "structural"])
     );
   });
+
+  it("lists the indexed files so a repo can be enumerated without a query", async () => {
+    // Regression: an agent asked to analyze a Java repo guessed English
+    // entry-point keywords ("main", "app", "server"), matched nothing, and
+    // concluded the repo was empty. Enumeration must not depend on a guess.
+    const repoRoot = await createRepo({
+      "svc-orders/src/OrderService.java":
+        "package com.acme.orders;\npublic class OrderService { public void placeOrder() {} }",
+      "svc-billing/src/BillingService.java":
+        "package com.acme.billing;\npublic class BillingService { public void invoice() {} }",
+      "svc-orders/pom.xml": "<project><artifactId>orders</artifactId></project>",
+      "docs/notes.md": "# Notes"
+    });
+    const service = new IndexingService();
+
+    for (const guess of ["main", "app", "server", "bootstrap"]) {
+      const miss = await service.search({ startPath: repoRoot, query: guess });
+      expect(miss.results).toEqual([]);
+    }
+
+    const inventory = await service.listFiles({ startPath: repoRoot });
+
+    expect(inventory.totalFiles).toBe(4);
+    expect(inventory.returnedFiles).toBe(4);
+    expect(inventory.languageCounts.Java).toBe(2);
+    expect(inventory.directoryCounts["svc-orders"]).toBe(2);
+    expect(inventory.files.map((file) => file.relativePath)).toEqual(
+      expect.arrayContaining([
+        "svc-orders/src/OrderService.java",
+        "svc-billing/src/BillingService.java"
+      ])
+    );
+    // Real symbol names are what make the follow-up search actually work.
+    const orderService = inventory.files.find((file) =>
+      file.relativePath.endsWith("OrderService.java")
+    );
+    expect(orderService?.symbols).toContain("OrderService");
+
+    const hit = await service.search({ startPath: repoRoot, query: "OrderService" });
+    expect(hit.results.length).toBeGreaterThan(0);
+  });
+
+  it("filters, caps, and still reports the true total when truncated", async () => {
+    const repoRoot = await createRepo({
+      "src/a/One.java": "public class One {}",
+      "src/a/Two.java": "public class Two {}",
+      "src/b/Three.java": "public class Three {}"
+    });
+    const service = new IndexingService();
+
+    const filtered = await service.listFiles({ startPath: repoRoot, filter: "src/a" });
+    expect(filtered.files.map((file) => file.relativePath)).toEqual([
+      "src/a/One.java",
+      "src/a/Two.java"
+    ]);
+    // totalFiles stays the repo-wide count so a caller can tell it filtered.
+    expect(filtered.totalFiles).toBe(3);
+
+    const capped = await service.listFiles({ startPath: repoRoot, limit: 1 });
+    expect(capped.returnedFiles).toBe(1);
+    expect(capped.totalFiles).toBe(3);
+  });
+
+  it("ranks source files ahead of tests and config when the list is capped", async () => {
+    const repoRoot = await createRepo({
+      "package.json": "{}",
+      "tests/app.test.ts": "test('x', () => {})",
+      "src/app.ts": "export const app = 1;"
+    });
+
+    const inventory = await new IndexingService().listFiles({
+      startPath: repoRoot,
+      limit: 1
+    });
+
+    // A truncated list must still surface the file that explains the repo.
+    expect(inventory.files[0]?.relativePath).toBe("src/app.ts");
+  });
 });
 
 function requireDocument(index: LocalIndex, relativePath: string) {

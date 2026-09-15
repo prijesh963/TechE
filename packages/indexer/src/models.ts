@@ -111,6 +111,49 @@ export interface IndexResult {
   mode: "full" | "incremental" | "rebuild";
 }
 
+export interface ListFilesOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  /** Case-insensitive substring matched against the relative path. */
+  filter?: string;
+  /** Max files returned. Defaults to 300 — enough to see a repo's shape
+   *  without flooding an agent's context. */
+  limit?: number;
+}
+
+/**
+ * The indexed file inventory. Answers "what is in this repo" without needing
+ * a search term, which keyword search cannot do — an agent asked to analyze a
+ * codebase has no query to guess with, and guessed English keywords
+ * ("main", "app", "server") match nothing in a Java or C# codebase whose
+ * identifiers are `OrderService` or `BillingController`.
+ */
+export interface RepoFileInventory {
+  schemaVersion: string;
+  generatedAt: string;
+  repoRoot: string;
+  /** Total indexed files, before `filter` and `limit` are applied. */
+  totalFiles: number;
+  /** Files actually returned; lower than totalFiles when truncated. */
+  returnedFiles: number;
+  /** Indexed file count per detected language. */
+  languageCounts: Record<string, number>;
+  /** Indexed file count per top-level directory. */
+  directoryCounts: Record<string, number>;
+  files: RepoFileEntry[];
+}
+
+export interface RepoFileEntry {
+  relativePath: string;
+  languageGuess: string;
+  sizeBytes: number;
+  isTestFile: boolean;
+  isConfigFile: boolean;
+  isDocFile: boolean;
+  /** Declared symbol names, so the shape of a file is visible without reading it. */
+  symbols: string[];
+}
+
 export interface SearchOptions {
   startPath?: string;
   strictRoot?: boolean;

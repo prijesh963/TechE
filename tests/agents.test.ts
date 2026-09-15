@@ -25,6 +25,27 @@ describe("AgentService", () => {
     ]);
   });
 
+  it("gives CodeAnalysisAgent a way to enumerate the repo without guessing", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-analysis-"));
+    await new AgentService().install({ startPath: repoRoot });
+    const agent = await readFile(
+      path.join(repoRoot, ".github/agents/CodeAnalysisAgent.agent.md"),
+      "utf8"
+    );
+
+    // Regression: the agent could only reach the index through keyword
+    // search, so on a Java repo it guessed "main"/"app"/"server", matched
+    // nothing, and fell back to whatever file was open in the editor.
+    expect(agent).toContain("list_repo_files");
+    expect(agent).toContain("MANDATORY INVENTORY");
+    expect(agent).toContain("Zero search hits mean the query missed");
+    // The old instruction to guess keywords is gone. The same words now
+    // survive only inside the warning explaining why guessing fails, so
+    // assert on the instruction rather than on the words themselves.
+    expect(agent).not.toContain("Call `search_repo` with entry-point keywords");
+    expect(agent).toContain("terms taken FROM THE INVENTORY");
+  });
+
   it("wires the agents into the specified orchestration graph", async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-graph-"));
     await new AgentService().install({ startPath: repoRoot });
