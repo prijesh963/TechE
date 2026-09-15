@@ -46,6 +46,43 @@ describe("AgentService", () => {
     expect(agent).toContain("terms taken FROM THE INVENTORY");
   });
 
+  it("stops the review agents from searching for keywords they only guessed", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-guessing-"));
+    await new AgentService().install({ startPath: repoRoot });
+
+    const read = (agent: string): Promise<string> =>
+      readFile(path.join(repoRoot, ".github/agents", `${agent}.agent.md`), "utf8");
+
+    // Regression: these six agents reached the index only through hardcoded
+    // keyword guesses. On a Spring repo containing SecurityConfig.java, every
+    // one of SecurityReviewer's seven terms scored zero, so it would report a
+    // clean review of a repo it had never actually looked at.
+    for (const agent of [
+      "TestPlanner",
+      "SecurityReviewer",
+      "PerformanceReviewer",
+      "DocumentationWriter",
+      "DependencyAuditor",
+      "APIDesignReviewer"
+    ]) {
+      const text = await read(agent);
+      expect(text, agent).toContain("list_repo_files");
+      // The inventory has to come before the keyword search, not after it.
+      expect(text.indexOf("list_repo_files"), agent).toBeLessThan(
+        text.lastIndexOf("search_repo")
+      );
+    }
+
+    // Each one must also say what a zero-hit search actually means, so it
+    // reports "nothing found" instead of implying "nothing there".
+    expect(await read("SecurityReviewer")).toContain(
+      "never imply the repo was reviewed and found clean"
+    );
+    expect(await read("DependencyAuditor")).toContain(
+      "an unaudited manifest is an unaudited dependency tree"
+    );
+  });
+
   it("wires the agents into the specified orchestration graph", async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-graph-"));
     await new AgentService().install({ startPath: repoRoot });

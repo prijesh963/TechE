@@ -989,19 +989,60 @@ function isConfigFile(filePath: string): boolean {
     lower.endsWith(".ini") ||
     lower.endsWith(".cfg") ||
     lower.endsWith(".xml") ||
-    lower.includes("config") ||
-    [
-      "dockerfile",
-      "makefile",
-      "package-lock.json",
-      "pnpm-lock.yaml",
-      "yarn.lock",
-      "pom.xml",
-      "build.gradle",
-      "settings.gradle"
-    ].includes(name)
+    hasConfigNaming(lower) ||
+    lower.endsWith(".gradle") ||
+    lower.endsWith(".gradle.kts") ||
+    lower.endsWith(".csproj") ||
+    lower.endsWith(".vbproj") ||
+    lower.endsWith(".fsproj") ||
+    lower.endsWith(".sln") ||
+    // Dependency manifests with no telling extension. Missing these left an
+    // auditor filtering on isConfigFile blind to whole ecosystems.
+    /^requirements(-[\w.]+)?\.txt$/.test(name) ||
+    DEPENDENCY_MANIFESTS.has(name)
   );
 }
+
+/**
+ * "config" as a path segment or a dot-delimited filename token — `vite.config.ts`
+ * and `src/config/app.ts`, but not `SecurityConfig.java`. A plain substring match
+ * swallowed every CamelCase class whose name happened to end in Config, which then
+ * dropped them out of findSimilarFeatures and demoted them in a capped listing.
+ */
+function hasConfigNaming(lowerPath: string): boolean {
+  const segments = lowerPath.split("/");
+  const name = segments.pop() ?? "";
+  if (segments.some((segment) => segment === "config" || segment === "conf")) {
+    return true;
+  }
+  return name.split(".").some((part) => part === "config" || part === "conf");
+}
+
+const DEPENDENCY_MANIFESTS = new Set([
+  "dockerfile",
+  "makefile",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "pom.xml",
+  "build.gradle",
+  "settings.gradle",
+  "gemfile",
+  "gemfile.lock",
+  "go.mod",
+  "go.sum",
+  "cargo.toml",
+  "cargo.lock",
+  "pipfile",
+  "pipfile.lock",
+  "poetry.lock",
+  "composer.json",
+  "composer.lock",
+  "build.sbt",
+  "project.clj",
+  "podfile",
+  "packages.config"
+]);
 
 function isDocFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();

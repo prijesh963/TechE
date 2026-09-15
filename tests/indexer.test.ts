@@ -348,6 +348,64 @@ describe("IndexingService", () => {
     expect(capped.totalFiles).toBe(3);
   });
 
+  it("does not mistake a CamelCase class for a config file", async () => {
+    // `SecurityConfig.java` matched a plain "config" substring check, so the one
+    // file a security review most needs was demoted in the capped listing and
+    // filtered out of findSimilarFeatures entirely.
+    const repoRoot = await createRepo({
+      "src/main/java/com/acme/SecurityConfig.java": "public class SecurityConfig {}",
+      "src/ConfigService.ts": "export class ConfigService {}",
+      "vite.config.ts": "export default {};",
+      "src/config/app.ts": "export const app = 1;"
+    });
+
+    const inventory = await new IndexingService().listFiles({ startPath: repoRoot });
+    const isConfig = (relativePath: string): boolean =>
+      inventory.files.find((file) => file.relativePath === relativePath)
+        ?.isConfigFile ?? false;
+
+    expect(isConfig("src/main/java/com/acme/SecurityConfig.java")).toBe(false);
+    expect(isConfig("src/ConfigService.ts")).toBe(false);
+    // Genuine config keeps its classification.
+    expect(isConfig("vite.config.ts")).toBe(true);
+    expect(isConfig("src/config/app.ts")).toBe(true);
+  });
+
+  it("recognises dependency manifests that have no telling extension", async () => {
+    // An auditor filtering the inventory on isConfigFile was blind to whole
+    // ecosystems: go.mod, Gemfile and requirements.txt matched none of the
+    // extension checks and none of the hardcoded names.
+    const repoRoot = await createRepo({
+      "requirements.txt": "fastapi==0.110.0",
+      "requirements-dev.txt": "pytest==8.0.0",
+      "go.mod": "module example.com/svc",
+      Gemfile: "source 'https://rubygems.org'",
+      "Cargo.toml": "[package]\nname = 'svc'",
+      "api/Api.csproj": "<Project Sdk='Microsoft.NET.Sdk' />",
+      "svc/build.gradle": "dependencies {}",
+      "src/app.py": "def main(): pass"
+    });
+
+    const inventory = await new IndexingService().listFiles({ startPath: repoRoot });
+    const configPaths = inventory.files
+      .filter((file) => file.isConfigFile)
+      .map((file) => file.relativePath);
+
+    expect(configPaths).toEqual(
+      expect.arrayContaining([
+        "requirements.txt",
+        "requirements-dev.txt",
+        "go.mod",
+        "Gemfile",
+        "Cargo.toml",
+        "api/Api.csproj",
+        "svc/build.gradle"
+      ])
+    );
+    // Source is still source — the widening must not swallow the app.
+    expect(configPaths).not.toContain("src/app.py");
+  });
+
   it("ranks source files ahead of tests and config when the list is capped", async () => {
     const repoRoot = await createRepo({
       "package.json": "{}",

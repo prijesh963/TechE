@@ -312,6 +312,7 @@ const agentDefinitions: AgentDefinition[] = [
       "search/codebase",
       "repo_map",
       "detect_test_commands",
+      "list_repo_files",
       "search_repo",
       "find_impacted_files",
       "get_latest_plan",
@@ -321,7 +322,8 @@ const agentDefinitions: AgentDefinition[] = [
       "Identify what test coverage is required for a feature and produce actionable test guidance.",
     instructions: [
       "Step 1 — Call `repo_map` and `detect_test_commands` to understand the test framework and existing patterns.",
-      "Step 2 — Call `search_repo` with 'test', 'spec', or '__tests__' plus the feature keywords to find existing test patterns.",
+      "Step 2 — Call `list_repo_files` to see the real test layout: the inventory marks each entry `isTestFile`, so read that instead of guessing at 'test', 'spec', or '__tests__' — a Maven repo keeps tests under `src/test/java` and a Go repo names them `*_test.go`, and neither answers those guesses reliably.",
+      "Step 2a — Then call `search_repo` with the concrete test file and class names from Step 2 plus the feature keywords to read existing test patterns. If nothing comes back, say the repo has no tests you could find out of `totalFiles` files rather than planning against a framework you never confirmed.",
       "Step 3 — Call `find_impacted_files` to identify which behaviours need test coverage.",
       "Step 4 — Map each impacted behaviour to: unit tests, integration tests, end-to-end tests, and regression tests.",
       "Step 5 — Identify gaps: missing test infrastructure, coverage holes, or missing mock fixtures.",
@@ -384,6 +386,7 @@ const agentDefinitions: AgentDefinition[] = [
       "copilotArchitect/*",
       "search/codebase",
       "repo_map",
+      "list_repo_files",
       "search_repo",
       "get_latest_plan",
       "get_latest_review",
@@ -392,7 +395,8 @@ const agentDefinitions: AgentDefinition[] = [
     purpose:
       "Review changed code for security regressions: auth, input handling, secrets, logging, and data access.",
     instructions: [
-      "Step 1 — Call `search_repo` with 'auth', 'login', 'token', 'secret', 'password', 'permission', 'role' to map security-sensitive areas.",
+      "Step 1 — Call `list_repo_files` FIRST to see what the repo actually contains, and scan the returned paths and symbol names for security-relevant ones — `SecurityConfig`, `JwtFilter`, `*Interceptor`, `*Guard`, credential or crypto helpers. Keyword guesses ('auth', 'login', 'token') silently miss all of these when a codebase names things differently, and a security review that reports nothing because its guesses missed is worse than no review at all.",
+      "Step 1a — Then call `search_repo` with the real names found in Step 1, plus 'auth', 'login', 'token', 'secret', 'password', 'permission', 'role' as supplementary terms. If every search returns nothing, say explicitly that no security-relevant code was identified out of `totalFiles` files — never imply the repo was reviewed and found clean.",
       "Step 2 — Read the changed files and compare their auth/authz logic to existing patterns.",
       "Step 3 — Check for: SQL/command injection, missing input validation, secrets in logs, hardcoded credentials, broken access control.",
       "Step 4 — Check that new endpoints or functions follow the existing auth middleware chain.",
@@ -420,6 +424,7 @@ const agentDefinitions: AgentDefinition[] = [
       "copilotArchitect/*",
       "search/codebase",
       "repo_map",
+      "list_repo_files",
       "search_repo",
       "get_latest_plan",
       "get_latest_review"
@@ -427,7 +432,7 @@ const agentDefinitions: AgentDefinition[] = [
     purpose:
       "Identify plausible performance regressions in changed code without speculative rewrites.",
     instructions: [
-      "Step 1 — Call `search_repo` with 'loop', 'query', 'fetch', 'cache', 'render', 'batch' to find performance-sensitive patterns near the change.",
+      "Step 1 — Call `list_repo_files` FIRST to see the real files and symbol names, then call `search_repo` using those names alongside 'loop', 'query', 'fetch', 'cache', 'render', 'batch'. Those generic terms match nothing in many codebases, so treat zero hits as a missed guess and report what you actually examined out of `totalFiles` rather than implying the repo is free of performance risks.",
       "Step 2 — Read the changed functions and compare algorithmic complexity to existing equivalent code.",
       "Step 3 — Flag: O(n²) loops replacing O(n), N+1 query patterns, missing pagination, synchronous blocking in async paths, large in-memory collections.",
       "Step 4 — For each finding, estimate impact (high/medium/low) and suggest a measurement command or benchmark.",
@@ -455,6 +460,7 @@ const agentDefinitions: AgentDefinition[] = [
       "edit",
       "search/codebase",
       "repo_map",
+      "list_repo_files",
       "search_repo",
       "find_impacted_files",
       "get_latest_plan"
@@ -464,7 +470,7 @@ const agentDefinitions: AgentDefinition[] = [
     instructions: [
       "Step 1 — Call `repo_map` to understand the existing README structure, doc folders, and documentation conventions.",
       "Step 2 — Call `get_latest_plan` to understand what was built or changed.",
-      "Step 3 — Call `search_repo` with 'README', 'docs', 'docstring', 'JSDoc', '\"\"\"' to find existing documentation patterns.",
+      "Step 3 — Call `list_repo_files` to see which files actually exist (its `isDocFile` flag marks the documentation ones), then call `search_repo` with 'README', 'docs', 'docstring', 'JSDoc', '\"\"\"' and any real file names from the inventory. Zero keyword hits mean the guess missed, not that the repo is undocumented.",
       "Step 4 — Match the existing documentation style: naming conventions, heading levels, code example format.",
       "Step 5 — Update or create: README usage sections, JSDoc / docstring comments on exported symbols, API endpoint docs, architecture decision notes.",
       "Step 6 — Do not document internal implementation details — focus on public API, usage examples, and configuration."
@@ -492,6 +498,7 @@ const agentDefinitions: AgentDefinition[] = [
       "repo_map",
       "detect_package_managers",
       "detect_languages",
+      "list_repo_files",
       "search_repo",
       "get_validation_commands"
     ],
@@ -499,7 +506,8 @@ const agentDefinitions: AgentDefinition[] = [
       "Identify outdated, vulnerable, or non-permissively licensed dependencies across the project.",
     instructions: [
       "Step 1 — Call `detect_package_managers` and `detect_languages` to identify which manifests to audit.",
-      "Step 2 — Call `repo_map` and `search_repo` with 'package.json', 'requirements.txt', 'pom.xml', 'Gemfile', 'go.mod' to find all dependency manifests.",
+      "Step 2 — Call `list_repo_files` and pick the manifests out of the returned paths — the inventory marks each entry `isConfigFile` and lists every path, so nested modules (`services/orders/pom.xml`, `apps/web/package.json`) and manifests you would not have guessed (`build.gradle`, `Cargo.toml`, `*.csproj`, `pyproject.toml`) all show up. Searching for manifest filenames finds only the names you already thought of.",
+      "Step 2a — Reconcile the manifests found against what `detect_package_managers` reported in Step 1. If they disagree, audit the union and say which source found what — an unaudited manifest is an unaudited dependency tree.",
       "Step 3 — Read each manifest and list direct dependencies with their declared versions.",
       "Step 4 — Flag: (a) known CVEs based on version ranges, (b) packages with no releases in over 2 years, (c) packages with non-permissive licenses (GPL, AGPL, SSPL) when the project is not open-source.",
       "Step 5 — For each flagged dependency suggest: the latest stable version, whether the upgrade is a drop-in replacement, and any breaking-change migration notes.",
@@ -526,6 +534,7 @@ const agentDefinitions: AgentDefinition[] = [
       "copilotArchitect/*",
       "search/codebase",
       "repo_map",
+      "list_repo_files",
       "search_repo",
       "find_impacted_files",
       "get_latest_plan",
@@ -534,7 +543,7 @@ const agentDefinitions: AgentDefinition[] = [
     purpose:
       "Review proposed API changes for consistency with existing contracts, correct HTTP semantics, versioning, and security coverage.",
     instructions: [
-      "Step 1 — Call `search_repo` with 'router', 'controller', 'route', 'endpoint', 'resolver', 'handler' to map the existing API surface.",
+      "Step 1 — Call `list_repo_files` FIRST and read the returned paths and symbol names for the real API surface — controllers, resolvers, route modules, handler classes — then call `search_repo` with those names plus 'router', 'controller', 'route', 'endpoint', 'resolver', 'handler'. A codebase that names its entry points differently returns nothing for the generic terms, so never conclude there is no API surface from a keyword miss.",
       "Step 2 — Call `get_latest_plan` to understand what API additions or changes are proposed.",
       "Step 3 — Check naming consistency: HTTP verbs (GET=read, POST=create, PUT/PATCH=update, DELETE=remove), URL style (kebab-case vs camelCase), response envelope shape.",
       "Step 4 — Flag breaking changes: removed fields, renamed endpoints, changed status codes, altered request shapes.",
