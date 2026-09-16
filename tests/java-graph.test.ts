@@ -209,6 +209,75 @@ describe("SymbolGraphService (Java)", () => {
 
     expect(classNames).toEqual(["Api", "Client"]);
   });
+
+  it("resolves calls across repos in a multi-repo workspace", async () => {
+    // Regression: the graph scanned the workspace root only, so a repo
+    // registered elsewhere (`../shared-lib`) had no graph at all. Building one
+    // pass over every registered repo also buys real cross-repo edges — Java
+    // resolves by qualified name, so one shared index links the two.
+    const parent = await mkdtemp(path.join(tmpdir(), "copilot-xrepo-"));
+    const write = async (repo: string, files: Record<string, string>) => {
+      for (const [relativePath, contents] of Object.entries(files)) {
+        const fullPath = path.join(parent, repo, relativePath);
+        await mkdir(path.dirname(fullPath), { recursive: true });
+        await writeFile(fullPath, contents, "utf8");
+      }
+    };
+
+    await write("shared-lib", {
+      "src/main/java/com/acme/core/OrderValidator.java":
+        "package com.acme.core;\npublic class OrderValidator {\n" +
+        "  public boolean validate(String id) { return id != null; }\n}"
+    });
+    await write("svc-orders", {
+      "src/main/java/com/acme/orders/OrderService.java":
+        "package com.acme.orders;\nimport com.acme.core.OrderValidator;\n" +
+        "public class OrderService {\n  private OrderValidator validator;\n" +
+        "  public void place(String id) { validator.validate(id); }\n}"
+    });
+    await write("platform", {
+      ".copilot-architect/workspace.json": JSON.stringify({
+        repos: [
+          { name: "shared-lib", path: "../shared-lib" },
+          { name: "svc-orders", path: "../svc-orders" }
+        ]
+      })
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: path.join(parent, "platform"),
+      strictRoot: true
+    });
+
+    expect(graph.repos).toEqual(["shared-lib", "svc-orders"]);
+    // Node ids are prefixed by repo NAME, so they stay stable wherever the
+    // repos are checked out.
+    expect(graph.nodes.map((node) => node.id)).toContain(
+      "shared-lib/src/main/java/com/acme/core/OrderValidator.java"
+    );
+
+    const crossRepo = graph.edges.filter(
+      (edge: SymbolEdge) => edge.from.split("/")[0] !== edge.to.split("/")[0]
+    );
+    expect(crossRepo).toContainEqual({
+      kind: "calls",
+      from: "svc-orders/src/main/java/com/acme/orders/OrderService.java#OrderService.place",
+      to: "shared-lib/src/main/java/com/acme/core/OrderValidator.java#OrderValidator.validate"
+    });
+  });
+
+  it("leaves a plain repo's graph unprefixed", async () => {
+    const repoRoot = await createJavaRepo({
+      "src/main/java/com/acme/Solo.java": "package com.acme;\npublic class Solo {}"
+    });
+
+    const { graph } = await new SymbolGraphService().build({ startPath: repoRoot });
+
+    expect(graph.repos).toBeUndefined();
+    expect(graph.nodes.map((node) => node.id)).toContain(
+      "src/main/java/com/acme/Solo.java"
+    );
+  });
 });
 
 async function createJavaRepo(files: Record<string, string>): Promise<string> {

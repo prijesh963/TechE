@@ -7,9 +7,11 @@ import {
   findRepoRoot,
   getArtifactFilePath,
   isBinaryPath,
+  resolveRegisteredRepos,
   scanRepository,
   writeJsonFile,
-  type DiagnosticMessage
+  type DiagnosticMessage,
+  type ScannedEntry
 } from "@copilot-architect/shared";
 
 import type {
@@ -39,7 +41,7 @@ export class SymbolGraphService {
   async build(options: SymbolGraphOptions = {}): Promise<SymbolGraphResult> {
     const startPath = path.resolve(options.startPath ?? process.cwd());
     const repoRoot = options.strictRoot ? startPath : await findRepoRoot(startPath);
-    const entries = await scanRepository(repoRoot);
+    const { entries, repos } = await scanGraphEntries(repoRoot);
     const knownFiles = new Set(entries.map((entry) => entry.relativePath));
 
     const nodes: SymbolNode[] = [];
@@ -260,6 +262,7 @@ export class SymbolGraphService {
         source: "SymbolGraphService"
       }),
       repoRoot,
+      repos,
       nodes,
       edges,
       diagnostics
@@ -270,6 +273,48 @@ export class SymbolGraphService {
 
     return { repoRoot, graph, jsonPath };
   }
+}
+
+/**
+ * The files to build the graph over: the repo's own when this is a plain repo,
+ * or every registered repo's when `repoRoot` is a workspace root. Scanning the
+ * root alone reached repos nested inside it but silently missed any registered
+ * elsewhere (`../billing-service`), so those repos had no graph at all.
+ *
+ * Merged paths are prefixed with the repo NAME rather than their location on
+ * disk, which keeps ids stable and readable wherever a repo is checked out.
+ * One flat namespace is also what makes cross-repo edges resolve: Java's
+ * qualified-type index spans every repo, so a service calling
+ * `com.acme.OrderService` links to wherever that class is actually declared,
+ * and a relative TS specifier still resolves because both sides shift equally.
+ */
+async function scanGraphEntries(
+  repoRoot: string
+): Promise<{ entries: ScannedEntry[]; repos?: string[] }> {
+  const registered = await resolveRegisteredRepos(repoRoot);
+
+  if (registered.length === 0) {
+    return { entries: await scanRepository(repoRoot) };
+  }
+
+  const entries: ScannedEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const repo of registered) {
+    // One unreadable repo must not fail the whole graph.
+    const scanned = await scanRepository(repo.repoRoot).catch(() => []);
+
+    for (const entry of scanned) {
+      if (seen.has(entry.absolutePath)) continue;
+      seen.add(entry.absolutePath);
+      entries.push({
+        ...entry,
+        relativePath: path.posix.join(repo.name, entry.relativePath)
+      });
+    }
+  }
+
+  return { entries, repos: registered.map((repo) => repo.name) };
 }
 
 const RESOLVABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".d.ts"];

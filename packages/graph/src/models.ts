@@ -13,6 +13,11 @@ export interface SymbolGraphResult {
 
 export interface SymbolGraph extends GeneratedArtifact {
   repoRoot: string;
+  /**
+   * Present only when the graph spans a multi-repo workspace. Node ids are
+   * then prefixed with the repo name, so `svc-orders/src/Main.java#Main`.
+   */
+  repos?: string[];
   nodes: SymbolNode[];
   edges: SymbolEdge[];
   diagnostics: DiagnosticMessage[];
