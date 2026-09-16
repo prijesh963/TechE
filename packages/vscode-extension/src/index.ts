@@ -1082,6 +1082,19 @@ export function activate(
             fileCtx += `\n\n=== Currently open in editor: ${activeRelPath} ===\n${activeEditor.document.getText().slice(0, 3_000)}`;
           }
         }
+        // An empty context used to be invisible: the model received nothing but
+        // the open editor tab and answered as though the repo were empty, which
+        // reads as a wrong answer rather than a missing setup step.
+        let repoCtx = repoResult.contextText;
+        if (!repoCtx.trim() && repoResult.fileAnchors.length === 0) {
+          const diagnosis = await diagnoseEmptyContext(workspaceRoot);
+          stream.markdown(`> ⚠️ ${diagnosis}\n\n`);
+          repoCtx =
+            `NO REPOSITORY CONTEXT IS AVAILABLE. ${diagnosis}\n` +
+            "Tell the user this and name that step. Do not infer what the " +
+            "repository does or does not contain — you have not seen it.";
+        }
+
         const historyCtx = formatChatHistory(context.history);
         if (vscode.lm) {
           stream.progress?.("Generating answer…");
@@ -1089,7 +1102,7 @@ export function activate(
             "question",
             userPrompt,
             "",
-            repoResult.contextText,
+            repoCtx,
             fileCtx,
             historyCtx
           );
@@ -1995,14 +2008,18 @@ function extractFilesFromPlan(markdown: string): string[] {
 
 /**
  * Tokenize text into lowercase terms — splits on non-alphanumeric boundaries
- * AND camelCase/acronym boundaries so "UserService" → ["user", "service"].
- * Matches the same tokenizer used by the BM25 indexer.
+ * AND camelCase/acronym/digit boundaries so "UserService" → ["user", "service"]
+ * and "R2D2Service" → ["r2d2", "service"].
+ * Must stay identical to the BM25 indexer's tokenizer: a query tokenized one
+ * way cannot match a corpus tokenized another.
  */
 function tokenize(text: string): string[] {
   const tokens: string[] = [];
   for (const chunk of text.split(/[^a-zA-Z0-9]+/)) {
     if (!chunk) continue;
-    for (const sub of chunk.split(/(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)) {
+    for (const sub of chunk.split(
+      /(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[0-9])(?=[A-Z][a-z])/
+    )) {
       const lower = sub.toLowerCase();
       if (lower.length >= 2) tokens.push(lower);
     }
@@ -2192,6 +2209,114 @@ function formatChatHistory(history: ChatHistoryTurnLike[] | undefined): string {
     }
   }
   return lines.length > 1 ? lines.join("\n") : "";
+}
+
+interface IndexSymbol {
+  name: string;
+  kind: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+interface IndexDoc {
+  relativePath: string;
+  symbols: IndexSymbol[];
+  textPreview?: string;
+  extension: string;
+  fileSizeBytes: number;
+  isConfigFile: boolean;
+  isDocFile: boolean;
+}
+
+interface RepoMapEntry {
+  name?: string;
+  displayName?: string;
+  languages?: Array<{ name: string }>;
+  frameworks?: Array<{ name: string }>;
+  entryPoints?: Array<{ filePath: string }>;
+  commands?: { test?: Array<{ command: string }> };
+}
+
+/**
+ * Indexed documents for every repo registered in the workspace, with each
+ * `relativePath` rewritten relative to the WORKSPACE root.
+ *
+ * That rewrite is what lets the rest of the pipeline stay unchanged:
+ * readFilesForLmContext resolves anchors with `path.join(workspaceRoot, rel)`,
+ * and a path relative to a sub-repo would silently fail to open. It also makes
+ * paths unambiguous for the model — `svc-orders/src/Main.java` rather than a
+ * bare `src/Main.java` that two repos could both claim.
+ */
+export async function loadWorkspaceIndexDocuments(
+  workspaceRoot: string
+): Promise<IndexDoc[]> {
+  const registered = await getRegisteredRepoRoots(workspaceRoot);
+  // No registration means a plain single repo — read its own index, as before.
+  const repoRoots = registered.length > 0 ? registered : [workspaceRoot];
+  const merged: IndexDoc[] = [];
+  const seen = new Set<string>();
+
+  for (const repoRoot of repoRoots) {
+    let docs: IndexDoc[];
+    try {
+      const raw = await readFile(
+        path.join(repoRoot, ".copilot-architect", "index", "index.json"),
+        "utf8"
+      );
+      docs = (JSON.parse(raw).documents as IndexDoc[]) ?? [];
+    } catch {
+      // One repo missing an index must not blank the whole context.
+      continue;
+    }
+
+    for (const doc of docs) {
+      const absolute = path.join(repoRoot, doc.relativePath);
+      if (seen.has(absolute)) continue;
+      seen.add(absolute);
+      merged.push({ ...doc, relativePath: path.relative(workspaceRoot, absolute) });
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Why a context came back empty, in terms the user can act on. Distinguishes
+ * "never indexed" (a setup step is missing) from "indexed but nothing matched"
+ * (the question found nothing) — collapsing those two is what made a missing
+ * index look like an empty repository.
+ */
+export async function diagnoseEmptyContext(workspaceRoot: string): Promise<string> {
+  const registered = await getRegisteredRepoRoots(workspaceRoot);
+  const repoRoots = registered.length > 0 ? registered : [workspaceRoot];
+  const indexed: string[] = [];
+  const missing: string[] = [];
+
+  for (const repoRoot of repoRoots) {
+    try {
+      await readFile(
+        path.join(repoRoot, ".copilot-architect", "index", "index.json"),
+        "utf8"
+      );
+      indexed.push(path.basename(repoRoot));
+    } catch {
+      missing.push(path.basename(repoRoot));
+    }
+  }
+
+  if (indexed.length === 0) {
+    const scope =
+      registered.length > 0
+        ? `none of the ${repoRoots.length} registered repos (${missing.join(", ")}) has an index`
+        : "this workspace has no index";
+    return `No searchable index — ${scope}. Run **Setup Repo** from the Copilot Architect dashboard first.`;
+  }
+
+  const unindexed =
+    missing.length > 0
+      ? ` Note that ${missing.length} registered repo(s) are still unindexed: ${missing.join(", ")}.`
+      : "";
+  return `Searched ${indexed.length} indexed repo(s) and nothing matched this question.${unindexed}`;
 }
 
 interface RepoContextResult {
@@ -2563,50 +2688,35 @@ async function buildRepoContext(
   try {
     const mapPath = path.join(workspaceRoot, ".copilot-architect", "repo-map.json");
     const map = JSON.parse(await readFile(mapPath, "utf8"));
-    const repo = map.repos?.[0];
-    if (repo) {
-      const langs = (repo.languages as Array<{ name: string }>)
-        ?.map((l) => l.name)
-        .join(", ");
-      const fws = (repo.frameworks as Array<{ name: string }>)
-        ?.map((f) => f.name)
-        .join(", ");
-      const testCmd = (repo.commands?.test as Array<{ command: string }>)?.[0]?.command;
-      const entry = (repo.entryPoints as Array<{ filePath: string }>)?.[0]?.filePath;
-      if (langs) lines.push(`Languages: ${langs}`);
-      if (fws) lines.push(`Frameworks: ${fws}`);
-      if (entry) lines.push(`Entry point: ${entry}`);
-      if (testCmd) lines.push(`Test command: ${testCmd}`);
+    const repos = (map.repos as RepoMapEntry[]) ?? [];
+    // Every repo, not just repos[0]: on a multi-repo workspace describing only
+    // the first one told the model the other repos did not exist.
+    const multi = repos.length > 1;
+
+    for (const repo of repos) {
+      const label = multi ? `${repo.displayName ?? repo.name ?? "repo"}: ` : "";
+      const langs = repo.languages?.map((l) => l.name).join(", ");
+      const fws = repo.frameworks?.map((f) => f.name).join(", ");
+      const testCmd = repo.commands?.test?.[0]?.command;
+      const entry = repo.entryPoints?.[0]?.filePath;
+      if (langs) lines.push(`${label}Languages: ${langs}`);
+      if (fws) lines.push(`${label}Frameworks: ${fws}`);
+      if (entry) lines.push(`${label}Entry point: ${entry}`);
+      if (testCmd) lines.push(`${label}Test command: ${testCmd}`);
     }
   } catch {
     /* no repo-map yet */
   }
 
   try {
-    const indexPath = path.join(
-      workspaceRoot,
-      ".copilot-architect",
-      "index",
-      "index.json"
-    );
-    const idx = JSON.parse(await readFile(indexPath, "utf8"));
-
-    type IndexSymbol = {
-      name: string;
-      kind: string;
-      startLine?: number;
-      endLine?: number;
-    };
-    type IndexDoc = {
-      relativePath: string;
-      symbols: IndexSymbol[];
-      textPreview?: string;
-      extension: string;
-      fileSizeBytes: number;
-      isConfigFile: boolean;
-      isDocFile: boolean;
-    };
-    const docs = (idx.documents as IndexDoc[]) ?? [];
+    // Every registered repo, not just the workspace root. A workspace root
+    // holds registration rather than code, so reading only its own index is
+    // what produced "the context is empty" on a perfectly well-indexed
+    // multi-repo workspace.
+    const docs = await loadWorkspaceIndexDocuments(workspaceRoot);
+    if (docs.length === 0) {
+      throw new Error("no indexed documents");
+    }
 
     const SOURCE_EXTS = new Set([
       ".py",

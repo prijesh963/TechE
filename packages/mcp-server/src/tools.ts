@@ -12,10 +12,13 @@ import {
 } from "@copilot-architect/planner";
 import { ReviewService } from "@copilot-architect/reviewer";
 import {
+  CURRENT_SCHEMA_VERSION,
   type DetectedCommand,
   type RepoCommandSet,
+  type RepoMap,
   type UniversalRepoMap,
-  readJsonFile
+  readJsonFile,
+  resolveRegisteredRepos
 } from "@copilot-architect/shared";
 import {
   CommandConfigService,
@@ -468,14 +471,64 @@ function tool(
 }
 
 async function ensureRepoMap(startPath: string): Promise<UniversalRepoMap> {
-  return (await new RepoDiscoveryService().analyze({ startPath })).repoMap;
+  const registered = await resolveRegisteredRepos(startPath);
+
+  if (registered.length === 0) {
+    return (await new RepoDiscoveryService().analyze({ startPath })).repoMap;
+  }
+
+  // A workspace root holds registration, not code. Analyzing it alone handed
+  // every detect_* tool an empty repo map, so each reported that the workspace
+  // had no languages, frameworks or build commands.
+  const repos: RepoMap[] = [];
+
+  for (const repo of registered) {
+    const analyzed = await new RepoDiscoveryService()
+      .analyze({ startPath: repo.repoRoot })
+      // One unanalyzable repo must not blank the whole map.
+      .catch(() => undefined);
+
+    for (const entry of analyzed?.repoMap.repos ?? []) {
+      repos.push({
+        ...entry,
+        displayName: repo.name,
+        // Stamp the repo each command runs in. Without it detect_test_commands
+        // returns a bare `npm test` / `mvn test` list with no way to tell which
+        // repo either belongs to — and running them at the workspace root fails.
+        commands: stampCommandCwd(entry.commands, entry.repoRoot)
+      });
+    }
+  }
+
+  const languages = [
+    ...new Set(repos.flatMap((repo) => repo.languages.map((language) => language.name)))
+  ];
+  const frameworks = [
+    ...new Set(
+      repos.flatMap((repo) => repo.frameworks.map((framework) => framework.name))
+    )
+  ];
+  const projectCount = repos.reduce((total, repo) => total + repo.projects.length, 0);
+
+  return {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    workspaceRoot: startPath,
+    repos,
+    summary: {
+      summary: `Workspace of ${repos.length} repos: ${repos.map((repo) => repo.displayName).join(", ")}`,
+      primaryLanguages: languages,
+      primaryFrameworks: frameworks,
+      projectCount,
+      repoCount: repos.length
+    }
+  };
 }
 
 async function getValidationCommands(startPath: string): Promise<unknown> {
   const repoMap = await ensureRepoMap(startPath);
-  const repo = repoMap.repos[0];
 
-  if (!repo) {
+  if (repoMap.repos.length === 0) {
     return {
       commands: [],
       diagnostics: ["Repo map does not contain any repositories."]
@@ -486,11 +539,50 @@ async function getValidationCommands(startPath: string): Promise<unknown> {
     startPath: repoMap.workspaceRoot,
     allowMissing: true
   });
+  // Every repo, not just repos[0] — a workspace used to report only its first
+  // repo's commands, so the others looked as though they had none.
+  const commands = mergeRepoCommandSets(repoMap.repos);
 
   return {
-    commands: mergeCustomCommandsWithDetected(repo.commands, customConfig.commands),
-    detected: detectedValidationCommands(repo.commands),
-    custom: customConfig.commands.map((customCommand) => customCommand.command)
+    commands: mergeCustomCommandsWithDetected(commands, customConfig.commands),
+    detected: detectedValidationCommands(commands),
+    custom: customConfig.commands.map((customCommand) => customCommand.command),
+    perRepo: repoMap.repos.map((repo) => ({
+      repo: repo.displayName,
+      repoRoot: repo.repoRoot,
+      detected: detectedValidationCommands(repo.commands)
+    }))
+  };
+}
+
+/**
+ * Union of every repo's commands, each stamped with the repo it runs in.
+ * The `cwd` matters: a build command detected in svc-orders would simply fail
+ * if a caller ran it at the workspace root.
+ */
+function mergeRepoCommandSets(repos: RepoMap[]): RepoCommandSet {
+  const merged = repos.map((repo) => stampCommandCwd(repo.commands, repo.repoRoot));
+
+  return {
+    build: merged.flatMap((commands) => commands.build),
+    test: merged.flatMap((commands) => commands.test),
+    lint: merged.flatMap((commands) => commands.lint),
+    format: merged.flatMap((commands) => commands.format),
+    validation: merged.flatMap((commands) => commands.validation)
+  };
+}
+
+/** Records the repo each command must run in, leaving an explicit cwd alone. */
+function stampCommandCwd(commands: RepoCommandSet, repoRoot: string): RepoCommandSet {
+  const stamp = <T extends DetectedCommand>(entries: T[]): T[] =>
+    entries.map((entry) => ({ ...entry, cwd: entry.cwd ?? repoRoot }));
+
+  return {
+    build: stamp(commands.build),
+    test: stamp(commands.test),
+    lint: stamp(commands.lint),
+    format: stamp(commands.format),
+    validation: stamp(commands.validation)
   };
 }
 

@@ -13,6 +13,8 @@ import {
   createCliCommandLine,
   createDashboardHtml,
   deactivate,
+  diagnoseEmptyContext,
+  loadWorkspaceIndexDocuments,
   formatAgentInsights,
   loadDashboardArtifacts,
   type CliRunRequest,
@@ -678,6 +680,46 @@ describe("VS Code extension shell", () => {
       DASHBOARD_PRIMARY_ACTIONS.length + 1
     );
   });
+
+  it("reads the index of every registered repo, not just the workspace root", async () => {
+    // Regression: `@architect Analyze repo and explain more about R2D2` replied
+    // "the provided context is empty — the only file shown is workspace.json".
+    // The Q&A path read workspaceRoot/.copilot-architect/index/index.json only,
+    // which on a multi-repo workspace indexes nothing but registration.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-ws-ctx-"));
+    await writeWorkspace(workspaceRoot, ["svc-orders", "web-ui"]);
+    await writeRepoIndex(workspaceRoot, "svc-orders", [
+      "src/main/java/com/acme/R2D2Service.java"
+    ]);
+    await writeRepoIndex(workspaceRoot, "web-ui", ["src/app/r2d2.component.ts"]);
+
+    const docs = await loadWorkspaceIndexDocuments(workspaceRoot);
+
+    // Paths come back relative to the WORKSPACE root: readFilesForLmContext
+    // resolves them with path.join(workspaceRoot, rel), so a path relative to a
+    // sub-repo would silently fail to open.
+    expect(docs.map((doc) => doc.relativePath).sort()).toEqual([
+      "svc-orders/src/main/java/com/acme/R2D2Service.java",
+      "web-ui/src/app/r2d2.component.ts"
+    ]);
+  });
+
+  it("names why a context is empty instead of implying the repo is", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-ws-empty-"));
+    await writeWorkspace(workspaceRoot, ["svc-orders", "web-ui"]);
+
+    const unindexed = await diagnoseEmptyContext(workspaceRoot);
+    expect(unindexed).toContain("No searchable index");
+    expect(unindexed).toContain("Setup Repo");
+
+    // Once indexed, an empty result is a miss, not a missing setup step — the
+    // two used to be indistinguishable to the user.
+    await writeRepoIndex(workspaceRoot, "svc-orders", ["src/Main.java"]);
+    await writeRepoIndex(workspaceRoot, "web-ui", ["src/app.ts"]);
+    const searched = await diagnoseEmptyContext(workspaceRoot);
+    expect(searched).toContain("nothing matched");
+    expect(searched).not.toContain("No searchable index");
+  });
 });
 
 interface FakeVscode {
@@ -800,4 +842,37 @@ function createFakeVscode(): FakeVscode {
   };
 
   return fake;
+}
+
+async function writeWorkspace(workspaceRoot: string, repos: string[]): Promise<void> {
+  await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+  await writeFile(
+    path.join(workspaceRoot, ".copilot-architect", "workspace.json"),
+    JSON.stringify({ repos: repos.map((name) => ({ name, path: name })) }),
+    "utf8"
+  );
+}
+
+async function writeRepoIndex(
+  workspaceRoot: string,
+  repo: string,
+  relativePaths: string[]
+): Promise<void> {
+  const indexDir = path.join(workspaceRoot, repo, ".copilot-architect", "index");
+  await mkdir(indexDir, { recursive: true });
+  await writeFile(
+    path.join(indexDir, "index.json"),
+    JSON.stringify({
+      documents: relativePaths.map((relativePath) => ({
+        relativePath,
+        symbols: [],
+        textPreview: "",
+        extension: path.extname(relativePath),
+        fileSizeBytes: 10,
+        isConfigFile: false,
+        isDocFile: false
+      }))
+    }),
+    "utf8"
+  );
 }

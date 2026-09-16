@@ -371,6 +371,87 @@ describe("IndexingService", () => {
     expect(isConfig("src/config/app.ts")).toBe(true);
   });
 
+  it("answers for every registered repo, not just the workspace root", async () => {
+    // Regression: `@architect Analyze repo and explain more about R2D2` returned
+    // "the provided context is empty — the only file shown is workspace.json".
+    // The workspace root holds registration, not code, so every read path that
+    // resolved it alone saw an empty repo while both real repos sat indexed.
+    const workspaceRoot = await createRepo({
+      ".copilot-architect/workspace.json": JSON.stringify({
+        schemaVersion: "0.1.0",
+        workspaceName: "acme",
+        repos: [
+          { name: "svc-orders", path: "svc-orders" },
+          { name: "web-ui", path: "web-ui" }
+        ]
+      }),
+      "svc-orders/src/main/java/com/acme/R2D2Service.java":
+        "package com.acme;\npublic class R2D2Service { public void astromech() {} }",
+      "svc-orders/pom.xml": "<project><artifactId>orders</artifactId></project>",
+      "web-ui/src/app/r2d2.component.ts":
+        'export class R2d2Component { droid = "R2D2"; }'
+    });
+    const service = new IndexingService();
+
+    const inventory = await service.listFiles({ startPath: workspaceRoot });
+
+    expect(inventory.totalFiles).toBe(3);
+    expect(inventory.repos?.map((repo) => repo.name)).toEqual(["svc-orders", "web-ui"]);
+    // Every entry says which repo it came from, and its path stays relative to
+    // that repo so a caller can still open it.
+    expect(
+      inventory.files.map((file) => `${file.repoName}::${file.relativePath}`)
+    ).toEqual(
+      expect.arrayContaining([
+        "svc-orders::src/main/java/com/acme/R2D2Service.java",
+        "web-ui::src/app/r2d2.component.ts"
+      ])
+    );
+
+    const found = await service.search({ startPath: workspaceRoot, query: "R2D2" });
+    expect(found.results.map((result) => result.repoName).sort()).toEqual([
+      "svc-orders",
+      "web-ui"
+    ]);
+  });
+
+  it("leaves a single repo on the single-repo path", async () => {
+    // The fan-out must not change behaviour for a workspace that registers only
+    // itself, which is how every ordinary repo is set up.
+    const repoRoot = await createRepo({
+      ".copilot-architect/workspace.json": JSON.stringify({
+        repos: [{ name: "self", path: "." }]
+      }),
+      "src/app.ts": "export const app = 1;"
+    });
+
+    const inventory = await new IndexingService().listFiles({ startPath: repoRoot });
+
+    expect(inventory.repos).toBeUndefined();
+    expect(inventory.files.map((file) => file.repoName)).toEqual([undefined]);
+    expect(inventory.files.map((file) => file.relativePath)).toContain("src/app.ts");
+  });
+
+  it("finds an identifier that carries a digit", async () => {
+    // "R2D2Service" tokenized to one opaque "r2d2service", so searching the
+    // exact name the user asked about could not reach the file defining it.
+    const repoRoot = await createRepo({
+      "src/R2D2Service.java": "public class R2D2Service {}",
+      "src/Utf8Decoder.java": "public class Utf8Decoder {}"
+    });
+    const service = new IndexingService();
+
+    const droid = await service.search({ startPath: repoRoot, query: "R2D2" });
+    expect(droid.results.map((result) => result.relativePath)).toContain(
+      "src/R2D2Service.java"
+    );
+
+    const decoder = await service.search({ startPath: repoRoot, query: "utf8" });
+    expect(decoder.results.map((result) => result.relativePath)).toContain(
+      "src/Utf8Decoder.java"
+    );
+  });
+
   it("recognises dependency manifests that have no telling extension", async () => {
     // An auditor filtering the inventory on isConfigFile was blind to whole
     // ecosystems: go.mod, Gemfile and requirements.txt matched none of the

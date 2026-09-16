@@ -395,6 +395,46 @@ describe("Copilot Architect MCP server", () => {
       impact.data.impactedRepos.map((repo: { name: string }) => repo.name)
     ).toContain("billing-service");
   });
+
+  it("answers the single-repo tools for every registered repo", async () => {
+    // Regression: only workspace_map / search_across_repos understood a
+    // workspace. Every other tool resolved the workspace root, which holds
+    // registration rather than code, so agents were told the repo was empty.
+    const fixture = await createWorkspaceFixture();
+    const { client } = await createConnectedServer(fixture.workspaceRoot);
+    const at = { path: fixture.workspaceRoot };
+
+    const inventory = await callJsonTool(client, "list_repo_files", at);
+    const search = await callJsonTool(client, "search_repo", {
+      ...at,
+      query: "invoice"
+    });
+    const repoMap = await callJsonTool(client, "repo_map", at);
+    const testCommands = await callJsonTool(client, "detect_test_commands", at);
+
+    expect(inventory.data.repos.map((repo: { name: string }) => repo.name)).toEqual([
+      "customer-api",
+      "billing-service"
+    ]);
+    expect(
+      inventory.data.files.map((file: { repoName: string }) => file.repoName)
+    ).toContain("billing-service");
+
+    expect(
+      search.data.results.map((result: { repoName: string }) => result.repoName)
+    ).toContain("billing-service");
+
+    expect(
+      repoMap.data.repos.map((repo: { displayName: string }) => repo.displayName)
+    ).toEqual(["customer-api", "billing-service"]);
+    expect(repoMap.data.summary.repoCount).toBe(2);
+
+    // Every detected command says which repo it runs in — a bare `npm test`
+    // list gives a caller no way to run it in the right place.
+    for (const command of testCommands.data as Array<{ cwd?: string }>) {
+      expect(command.cwd).toBeDefined();
+    }
+  });
 });
 
 async function createConnectedServer(repoRoot: string) {

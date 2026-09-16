@@ -16,6 +16,7 @@ import {
   getArtifactFilePath,
   isBinaryPath,
   readJsonFile,
+  resolveRegisteredRepos,
   scanRepository,
   writeJsonFile
 } from "@copilot-architect/shared";
@@ -29,7 +30,9 @@ import type {
   IndexStatus,
   ListFilesOptions,
   LocalIndex,
+  RepoFileEntry,
   RepoFileInventory,
+  RepoFileInventoryRepo,
   SearchAnchor,
   SearchOptions,
   SearchResponse,
@@ -103,6 +106,22 @@ export class IndexingService {
   async search(options: SearchOptions): Promise<SearchResponse> {
     const startPath = path.resolve(options.startPath ?? process.cwd());
     const repoRoot = await resolveRepoRoot(startPath, options.strictRoot);
+    const fanOut = await resolveRegisteredRepos(repoRoot);
+
+    // A workspace root holds no code of its own — its index covers little more
+    // than workspace.json. Searching it directly is what made every agent
+    // report an empty repo. Answer for the registered repos instead.
+    if (fanOut.length > 0) {
+      return this.searchAcrossFanOut(repoRoot, fanOut, options);
+    }
+
+    return this.searchSingleRepo(repoRoot, options);
+  }
+
+  private async searchSingleRepo(
+    repoRoot: string,
+    options: SearchOptions
+  ): Promise<SearchResponse> {
     const index = await this.readOrCreateIndex(repoRoot, options.strictRoot);
     // Read-only: if a symbol graph has already been built (via `graph` /
     // get_symbol_graph), search gets a free ranking boost. Never builds one
@@ -129,6 +148,19 @@ export class IndexingService {
   async listFiles(options: ListFilesOptions = {}): Promise<RepoFileInventory> {
     const startPath = path.resolve(options.startPath ?? process.cwd());
     const repoRoot = await resolveRepoRoot(startPath, options.strictRoot);
+    const fanOut = await resolveRegisteredRepos(repoRoot);
+
+    if (fanOut.length > 0) {
+      return this.listFilesAcrossFanOut(repoRoot, fanOut, options);
+    }
+
+    return this.listFilesSingleRepo(repoRoot, options);
+  }
+
+  private async listFilesSingleRepo(
+    repoRoot: string,
+    options: ListFilesOptions
+  ): Promise<RepoFileInventory> {
     const index = await this.readOrCreateIndex(repoRoot, options.strictRoot);
 
     const languageCounts: Record<string, number> = {};
@@ -174,6 +206,127 @@ export class IndexingService {
         isDocFile: document.isDocFile,
         symbols: document.symbols.map((symbol) => symbol.name).slice(0, 20)
       }))
+    };
+  }
+
+  /**
+   * Search every registered repo and merge. One repo that has never been
+   * indexed must not blank the whole answer, so a failing repo is skipped
+   * rather than thrown — a partial answer beats "the repo is empty".
+   */
+  private async searchAcrossFanOut(
+    workspaceRoot: string,
+    repos: WorkspaceRepoDescriptor[],
+    options: SearchOptions
+  ): Promise<SearchResponse> {
+    const limit = options.limit ?? 20;
+    const merged: WorkspaceSearchResult[] = [];
+    const seen = new Set<string>();
+
+    for (const repo of repos) {
+      const response = await this.searchSingleRepo(repo.repoRoot, {
+        ...options,
+        startPath: repo.repoRoot,
+        limit
+      }).catch(() => undefined);
+
+      for (const result of response?.results ?? []) {
+        // A repo nested inside the workspace root can be reached twice.
+        if (seen.has(result.filePath)) continue;
+        seen.add(result.filePath);
+        merged.push({
+          ...result,
+          repoName: repo.name,
+          repoRole: repo.role,
+          repoRoot: repo.repoRoot
+        });
+      }
+    }
+
+    merged.sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.repoName.localeCompare(right.repoName) ||
+        left.relativePath.localeCompare(right.relativePath)
+    );
+
+    return {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      generatedAt: new Date().toISOString(),
+      query: options.query,
+      repoRoot: workspaceRoot,
+      results: merged.slice(0, limit)
+    };
+  }
+
+  /** The enumeration counterpart of searchAcrossFanOut. */
+  private async listFilesAcrossFanOut(
+    workspaceRoot: string,
+    repos: WorkspaceRepoDescriptor[],
+    options: ListFilesOptions
+  ): Promise<RepoFileInventory> {
+    const languageCounts: Record<string, number> = {};
+    const directoryCounts: Record<string, number> = {};
+    const repoSummaries: RepoFileInventoryRepo[] = [];
+    const entries: RepoFileEntry[] = [];
+    const seen = new Set<string>();
+    let totalFiles = 0;
+
+    for (const repo of repos) {
+      const inventory = await this.listFilesSingleRepo(repo.repoRoot, {
+        ...options,
+        // Rank and cap once over the merged list, not per repo — otherwise a
+        // repo's best files get cut before they compete with the others.
+        limit: Number.MAX_SAFE_INTEGER
+      }).catch(() => undefined);
+
+      if (!inventory) {
+        repoSummaries.push({ name: repo.name, repoRoot: repo.repoRoot, totalFiles: 0 });
+        continue;
+      }
+
+      totalFiles += inventory.totalFiles;
+      repoSummaries.push({
+        name: repo.name,
+        repoRoot: repo.repoRoot,
+        totalFiles: inventory.totalFiles
+      });
+
+      for (const [language, count] of Object.entries(inventory.languageCounts)) {
+        languageCounts[language] = (languageCounts[language] ?? 0) + count;
+      }
+      // Keyed by repo so two repos that both have a `src/` stay distinguishable.
+      for (const [directory, count] of Object.entries(inventory.directoryCounts)) {
+        const key = `${repo.name}/${directory}`;
+        directoryCounts[key] = (directoryCounts[key] ?? 0) + count;
+      }
+
+      for (const entry of inventory.files) {
+        const key = path.join(repo.repoRoot, entry.relativePath);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        entries.push({ ...entry, repoName: repo.name });
+      }
+    }
+
+    const ranked = entries.sort(
+      (left, right) =>
+        rankEntryForListing(left) - rankEntryForListing(right) ||
+        (left.repoName ?? "").localeCompare(right.repoName ?? "") ||
+        left.relativePath.localeCompare(right.relativePath)
+    );
+    const files = ranked.slice(0, options.limit ?? DEFAULT_LIST_LIMIT);
+
+    return {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      generatedAt: new Date().toISOString(),
+      repoRoot: workspaceRoot,
+      totalFiles,
+      returnedFiles: files.length,
+      languageCounts,
+      directoryCounts,
+      repos: repoSummaries,
+      files
     };
   }
 
@@ -278,6 +431,13 @@ const DEFAULT_LIST_LIMIT = 300;
 function rankForListing(document: IndexedFile): number {
   if (document.isTestFile) return 1;
   if (document.isConfigFile || document.isDocFile) return 2;
+  return 0;
+}
+
+/** Same ordering as rankForListing, over an already-projected entry. */
+function rankEntryForListing(entry: RepoFileEntry): number {
+  if (entry.isTestFile) return 1;
+  if (entry.isConfigFile || entry.isDocFile) return 2;
   return 0;
 }
 
@@ -412,9 +572,14 @@ function tokenize(text: string): string[] {
   const tokens: string[] = [];
   for (const chunk of text.split(/[^a-zA-Z0-9]+/)) {
     if (!chunk) continue;
-    // Split camelCase ("invoiceApproval" → ["invoice","Approval"]) and
-    // split acronym boundaries ("HTTPSClient" → ["HTTPS","Client"])
-    for (const sub of chunk.split(/(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)) {
+    // Split camelCase ("invoiceApproval" → ["invoice","Approval"]),
+    // acronym boundaries ("HTTPSClient" → ["HTTPS","Client"]), and
+    // digit boundaries ("R2D2Service" → ["R2D2","Service"]). Without the
+    // last rule an identifier carrying a digit stays one opaque token, so
+    // searching "R2D2" could not reach R2D2Service at all.
+    for (const sub of chunk.split(
+      /(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[0-9])(?=[A-Z][a-z])/
+    )) {
       const lower = sub.toLowerCase();
       if (lower.length >= 2) tokens.push(lower);
     }

@@ -140,11 +140,25 @@ export interface RepoFileInventory {
   languageCounts: Record<string, number>;
   /** Indexed file count per top-level directory. */
   directoryCounts: Record<string, number>;
+  /**
+   * Present only when the inventory spans a multi-repo workspace. Lets a caller
+   * see it is looking at several repos, and which came back empty — a repo
+   * listed with `totalFiles: 0` has not been indexed yet.
+   */
+  repos?: RepoFileInventoryRepo[];
   files: RepoFileEntry[];
+}
+
+export interface RepoFileInventoryRepo {
+  name: string;
+  repoRoot: string;
+  totalFiles: number;
 }
 
 export interface RepoFileEntry {
   relativePath: string;
+  /** Set only on a multi-repo inventory; `relativePath` is relative to it. */
+  repoName?: string;
   languageGuess: string;
   sizeBytes: number;
   isTestFile: boolean;
