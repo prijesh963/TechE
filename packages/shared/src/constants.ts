@@ -11,7 +11,8 @@ export const ARTIFACT_FILE_NAMES = {
   workspace: "workspace.json",
   commands: "commands.json",
   policy: "policy.json",
-  graph: "graph.json"
+  graph: "graph.json",
+  graphWorkspace: "graph-workspace.json"
 } as const;
 
 export const ARTIFACT_DIRECTORY_NAMES = {

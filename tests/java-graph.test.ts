@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -264,6 +264,52 @@ describe("SymbolGraphService (Java)", () => {
       from: "svc-orders/src/main/java/com/acme/orders/OrderService.java#OrderService.place",
       to: "shared-lib/src/main/java/com/acme/core/OrderValidator.java#OrderValidator.validate"
     });
+  });
+
+  it("records whether the repos share any code", async () => {
+    // The marker is what lets Setup Repo skip a workspace graph that would find
+    // nothing. It is written separately from the graph so reading it never
+    // means parsing a file that can run to tens of megabytes.
+    const parent = await mkdtemp(path.join(tmpdir(), "copilot-xrepo-state-"));
+    const write = async (repo: string, files: Record<string, string>) => {
+      for (const [relativePath, contents] of Object.entries(files)) {
+        const fullPath = path.join(parent, repo, relativePath);
+        await mkdir(path.dirname(fullPath), { recursive: true });
+        await writeFile(fullPath, contents, "utf8");
+      }
+    };
+
+    await write("lib-a", {
+      "src/main/java/com/acme/Alpha.java": "package com.acme;\npublic class Alpha {}"
+    });
+    await write("lib-b", {
+      "src/main/java/com/acme/Beta.java": "package com.acme;\npublic class Beta {}"
+    });
+    await write("platform", {
+      ".copilot-architect/workspace.json": JSON.stringify({
+        repos: [
+          { name: "lib-a", path: "../lib-a" },
+          { name: "lib-b", path: "../lib-b" }
+        ]
+      })
+    });
+
+    const workspaceRoot = path.join(parent, "platform");
+    await new SymbolGraphService().build({
+      startPath: workspaceRoot,
+      strictRoot: true
+    });
+
+    const state = JSON.parse(
+      await readFile(
+        path.join(workspaceRoot, ".copilot-architect", "graph-workspace.json"),
+        "utf8"
+      )
+    );
+
+    expect(state.repos).toEqual(["lib-a", "lib-b"]);
+    // Two unrelated repos: nothing connects them.
+    expect(state.crossRepoEdgeCount).toBe(0);
   });
 
   it("leaves a plain repo's graph unprefixed", async () => {

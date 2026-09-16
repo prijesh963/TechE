@@ -15,6 +15,7 @@ import {
   deactivate,
   diagnoseEmptyContext,
   loadWorkspaceIndexDocuments,
+  shouldBuildWorkspaceGraph,
   formatAgentInsights,
   loadDashboardArtifacts,
   type CliRunRequest,
@@ -719,6 +720,36 @@ describe("VS Code extension shell", () => {
     const searched = await diagnoseEmptyContext(workspaceRoot);
     expect(searched).toContain("nothing matched");
     expect(searched).not.toContain("No searchable index");
+  });
+
+  it("stops rebuilding a workspace graph for repos that share no code", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-ws-graph-"));
+    const marker = async (state: Record<string, unknown>) => {
+      await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+      await writeFile(
+        path.join(workspaceRoot, ".copilot-architect", "graph-workspace.json"),
+        JSON.stringify(state),
+        "utf8"
+      );
+    };
+
+    // Never built — nothing is known yet, so build it.
+    expect(await shouldBuildWorkspaceGraph(workspaceRoot, ["a", "b"])).toBe(true);
+
+    // Learned that these repos share no code: a rebuild would parse every file
+    // again to find the same nothing.
+    await marker({ repos: ["a", "b"], crossRepoEdgeCount: 0 });
+    expect(await shouldBuildWorkspaceGraph(workspaceRoot, ["a", "b"])).toBe(false);
+    // Order must not matter.
+    expect(await shouldBuildWorkspaceGraph(workspaceRoot, ["b", "a"])).toBe(false);
+
+    // A new repo can introduce the first shared dependency, so re-check.
+    expect(await shouldBuildWorkspaceGraph(workspaceRoot, ["a", "b", "c"])).toBe(true);
+    expect(await shouldBuildWorkspaceGraph(workspaceRoot, ["a"])).toBe(true);
+
+    // Repos that DO share code keep their graph current.
+    await marker({ repos: ["a", "b"], crossRepoEdgeCount: 4 });
+    expect(await shouldBuildWorkspaceGraph(workspaceRoot, ["a", "b"])).toBe(true);
   });
 });
 

@@ -250,13 +250,100 @@ export class IndexingService {
         left.relativePath.localeCompare(right.relativePath)
     );
 
+    // Reserve a small slice of the budget for files in OTHER repos that the
+    // query never matched but the workspace graph connects to one that did —
+    // a shared library a service actually calls. Purely additive: with no
+    // workspace graph, or none of its edges crossing a repo boundary, nothing
+    // is found and the full limit goes to the ranked results as before.
+    const crossRepoBudget = Math.min(3, Math.max(1, Math.floor(limit / 5)));
+    const primary = merged.slice(0, limit);
+    const crossRepo = await this.expandAcrossRepos(
+      workspaceRoot,
+      repos,
+      primary,
+      crossRepoBudget
+    );
+
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
       query: options.query,
       repoRoot: workspaceRoot,
-      results: merged.slice(0, limit)
+      results: [...primary.slice(0, limit - crossRepo.length), ...crossRepo]
     };
+  }
+
+  /**
+   * Files in a different repo than the seeds, reached through the workspace
+   * graph. This is where a shared library earns its place: nothing in
+   * `shared-lib` matches a query about placing an order, but
+   * `OrderService.place` calls `OrderValidator.validate`, and that edge is
+   * the only thing that can surface it.
+   *
+   * Returns [] whenever the workspace graph is absent or single-repo, so a
+   * workspace whose repos share no code behaves exactly as it does without
+   * this pass.
+   */
+  private async expandAcrossRepos(
+    workspaceRoot: string,
+    repos: WorkspaceRepoDescriptor[],
+    seeds: WorkspaceSearchResult[],
+    budget: number
+  ): Promise<WorkspaceSearchResult[]> {
+    if (budget <= 0 || seeds.length === 0) return [];
+
+    const graph = await tryReadGraph(workspaceRoot);
+    // Only a workspace-level graph carries repo-prefixed node ids.
+    if (!graph?.repos?.length) return [];
+
+    const adjacency = buildFileAdjacency(graph);
+    const reposByName = new Map(repos.map((repo) => [repo.name, repo]));
+    const seedPaths = new Set(
+      seeds.map((seed) => `${seed.repoName}/${seed.relativePath}`)
+    );
+    const picked: Array<{ repo: WorkspaceRepoDescriptor; relativePath: string }> = [];
+    const seen = new Set<string>();
+
+    for (const seed of seeds) {
+      for (const neighbor of adjacency.get(`${seed.repoName}/${seed.relativePath}`) ??
+        []) {
+        if (seedPaths.has(neighbor) || seen.has(neighbor)) continue;
+
+        const boundary = neighbor.indexOf("/");
+        const repoName = neighbor.slice(0, boundary);
+        // Same-repo neighbours are already handled by each repo's own graph
+        // signal during ranking — only the boundary is new here.
+        if (boundary === -1 || repoName === seed.repoName) continue;
+
+        const repo = reposByName.get(repoName);
+        if (!repo) continue;
+
+        seen.add(neighbor);
+        picked.push({ repo, relativePath: neighbor.slice(boundary + 1) });
+        if (picked.length >= budget) break;
+      }
+      if (picked.length >= budget) break;
+    }
+
+    const results: WorkspaceSearchResult[] = [];
+
+    for (const { repo, relativePath } of picked) {
+      const index = await tryReadIndex(getIndexPath(repo.repoRoot));
+      const document = index?.documents.find(
+        (candidate) => candidate.relativePath === relativePath
+      );
+      // A graph node with no indexed document is a file the index skipped.
+      if (!document) continue;
+
+      results.push({
+        ...graphOnlyResult(document),
+        repoName: repo.name,
+        repoRole: repo.role,
+        repoRoot: repo.repoRoot
+      });
+    }
+
+    return results;
   }
 
   /** The enumeration counterpart of searchAcrossFanOut. */
@@ -878,6 +965,29 @@ function pickSeedFiles(rankedLists: RankedItem[][], perListCount: number): strin
   }
 
   return [...seeds];
+}
+
+/**
+ * Projects an indexed document into a result for a file the query never
+ * matched — surfaced only because the graph connects it to one that did.
+ * `score` is 0 and `matchedFields` empty by design: claiming a keyword score
+ * for a file that matched no keyword would misrepresent why it is here.
+ */
+function graphOnlyResult(document: IndexedFile): SearchResult {
+  return {
+    filePath: document.filePath,
+    relativePath: document.relativePath,
+    score: 0,
+    languageGuess: document.languageGuess,
+    textPreview: document.textPreview,
+    matchedFields: [],
+    symbols: document.symbols,
+    imports: document.imports,
+    isTestFile: document.isTestFile,
+    isConfigFile: document.isConfigFile,
+    isDocFile: document.isDocFile,
+    signals: ["graph"]
+  };
 }
 
 /** Undirected file-level adjacency collapsed from the graph's symbol-level

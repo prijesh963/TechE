@@ -17,6 +17,7 @@ import {
 import type {
   SymbolEdge,
   SymbolGraph,
+  WorkspaceGraphState,
   SymbolGraphOptions,
   SymbolGraphResult,
   SymbolNode
@@ -271,6 +272,19 @@ export class SymbolGraphService {
     const jsonPath = getArtifactFilePath(repoRoot, "graph");
     await writeJsonFile(jsonPath, graph);
 
+    if (repos) {
+      // Record what this build learned, so a workspace whose repos share no
+      // code can stop paying for a workspace-wide graph on every setup. Kept
+      // as its own small file: deciding whether to rebuild must not mean
+      // reading a graph that can run to tens of megabytes.
+      await writeJsonFile(getArtifactFilePath(repoRoot, "graphWorkspace"), {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        generatedAt: graph.generatedAt,
+        repos,
+        crossRepoEdgeCount: countCrossRepoEdges(edges)
+      } satisfies WorkspaceGraphState);
+    }
+
     return { repoRoot, graph, jsonPath };
   }
 }
@@ -315,6 +329,23 @@ async function scanGraphEntries(
   }
 
   return { entries, repos: registered.map((repo) => repo.name) };
+}
+
+/**
+ * Edges whose two ends live in different repos. Zero means the repos share no
+ * code, which is the fact worth remembering: nothing downstream can gain from
+ * a workspace-wide graph in that case.
+ */
+function countCrossRepoEdges(edges: SymbolEdge[]): number {
+  let count = 0;
+
+  for (const edge of edges) {
+    const from = edge.from.slice(0, edge.from.indexOf("/"));
+    const to = edge.to.slice(0, edge.to.indexOf("/"));
+    if (from && to && from !== to) count += 1;
+  }
+
+  return count;
 }
 
 const RESOLVABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".d.ts"];

@@ -812,6 +812,21 @@ export function activate(
         "--path",
         workspaceRoot
       ]);
+
+      // A workspace-wide graph is what lets search surface a shared library a
+      // service actually calls. It only pays off when the repos share code, so
+      // the first build records what it found and a workspace that shares none
+      // stops rebuilding it — see shouldBuildWorkspaceGraph.
+      const repoNames = repoRoots.map((repoRoot) => path.basename(repoRoot));
+      if (await shouldBuildWorkspaceGraph(workspaceRoot, repoNames)) {
+        await track("Build workspace symbol graph", ["graph", "--path", workspaceRoot]);
+      } else {
+        outputChannel.appendLine(
+          "Skipped workspace symbol graph: the last build found no code shared " +
+            "between these repos. Delete .copilot-architect/graph-workspace.json " +
+            "to force a rebuild."
+        );
+      }
     } else {
       await track("Build index", ["index", "--path", workspaceRoot]);
     }
@@ -2317,6 +2332,45 @@ export async function diagnoseEmptyContext(workspaceRoot: string): Promise<strin
       ? ` Note that ${missing.length} registered repo(s) are still unindexed: ${missing.join(", ")}.`
       : "";
   return `Searched ${indexed.length} indexed repo(s) and nothing matched this question.${unindexed}`;
+}
+
+/**
+ * Whether a workspace-wide symbol graph is worth building this run.
+ *
+ * It is, unless a previous build already established that these exact repos
+ * share no code — a graph over them would find nothing to connect, and on a
+ * large workspace that is a full extra parse of every file for no gain.
+ *
+ * Rebuilds whenever the registered repo set changes, since a new repo can
+ * introduce the first shared dependency. A cross-repo dependency added to an
+ * UNCHANGED set of repos is the gap in this heuristic: deleting
+ * graph-workspace.json forces the rebuild that picks it up.
+ */
+export async function shouldBuildWorkspaceGraph(
+  workspaceRoot: string,
+  repoNames: string[]
+): Promise<boolean> {
+  let state: { repos?: string[]; crossRepoEdgeCount?: number };
+
+  try {
+    state = JSON.parse(
+      await readFile(
+        path.join(workspaceRoot, ".copilot-architect", "graph-workspace.json"),
+        "utf8"
+      )
+    );
+  } catch {
+    // Never built, or the marker was deleted to force a rebuild.
+    return true;
+  }
+
+  if (state.crossRepoEdgeCount !== 0) return true;
+
+  const learned = [...(state.repos ?? [])].sort();
+  const current = [...repoNames].sort();
+  return learned.length !== current.length
+    ? true
+    : learned.some((name, position) => name !== current[position]);
 }
 
 interface RepoContextResult {

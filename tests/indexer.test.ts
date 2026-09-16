@@ -371,6 +371,64 @@ describe("IndexingService", () => {
     expect(isConfig("src/config/app.ts")).toBe(true);
   });
 
+  it("surfaces a shared library the query never mentions", async () => {
+    // The payoff of a workspace-wide graph: nothing in shared-lib matches a
+    // query about placing an order, but OrderService.place calls
+    // Thruster.calibrate, and that edge is the only thing that can surface it.
+    const parent = await mkdtemp(path.join(tmpdir(), "copilot-xrepo-search-"));
+    const write = async (repo: string, files: Record<string, string>) => {
+      for (const [relativePath, contents] of Object.entries(files)) {
+        const fullPath = path.join(parent, repo, relativePath);
+        await mkdir(path.dirname(fullPath), { recursive: true });
+        await writeFile(fullPath, contents, "utf8");
+      }
+    };
+
+    await write("shared-lib", {
+      "src/main/java/com/acme/core/Thruster.java":
+        "package com.acme.core;\npublic class Thruster {\n" +
+        "  public boolean calibrate(String id) { return id != null; }\n}"
+    });
+    await write("svc-orders", {
+      "src/main/java/com/acme/orders/OrderService.java":
+        "package com.acme.orders;\nimport com.acme.core.Thruster;\n" +
+        "public class OrderService {\n  private Thruster thruster;\n" +
+        "  public void placeOrder(String id) { thruster.calibrate(id); }\n}"
+    });
+    await write("platform", {
+      ".copilot-architect/workspace.json": JSON.stringify({
+        repos: [
+          { name: "shared-lib", path: "../shared-lib" },
+          { name: "svc-orders", path: "../svc-orders" }
+        ]
+      })
+    });
+
+    const workspaceRoot = path.join(parent, "platform");
+    const service = new IndexingService();
+    const search = async () =>
+      (await service.search({ startPath: workspaceRoot, query: "placeOrder" })).results;
+
+    // Without a workspace graph the pass is inert — this is exactly how a
+    // workspace whose repos share no code behaves, and it must stay that way.
+    const before = await search();
+    expect(before.map((result) => result.repoName)).toEqual(["svc-orders"]);
+
+    await new SymbolGraphService().build({
+      startPath: workspaceRoot,
+      strictRoot: true
+    });
+
+    const after = await search();
+    const shared = after.find((result) => result.repoName === "shared-lib");
+    expect(shared?.relativePath).toBe("src/main/java/com/acme/core/Thruster.java");
+    // Only the graph found it, and it claims no keyword score it did not earn.
+    expect(shared?.signals).toEqual(["graph"]);
+    expect(shared?.matchedFields).toEqual([]);
+    // The lexical hit is still there and still first.
+    expect(after[0]?.repoName).toBe("svc-orders");
+  });
+
   it("answers for every registered repo, not just the workspace root", async () => {
     // Regression: `@architect Analyze repo and explain more about R2D2` returned
     // "the provided context is empty — the only file shown is workspace.json".

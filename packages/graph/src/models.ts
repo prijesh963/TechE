@@ -23,6 +23,18 @@ export interface SymbolGraph extends GeneratedArtifact {
   diagnostics: DiagnosticMessage[];
 }
 
+/**
+ * What a workspace-wide graph build learned, written beside the graph so a
+ * caller can decide whether rebuilding is worth it without reading the graph.
+ * `crossRepoEdgeCount: 0` means the registered repos share no code.
+ */
+export interface WorkspaceGraphState {
+  schemaVersion: string;
+  generatedAt: string;
+  repos: string[];
+  crossRepoEdgeCount: number;
+}
+
 export type SymbolNodeKind = "file" | "class" | "function" | "interface" | "method";
 
 export interface SymbolNode {
