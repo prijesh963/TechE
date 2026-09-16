@@ -83,6 +83,33 @@ describe("AgentService", () => {
     );
   });
 
+  it("rebuilds the call graph wherever the repo changes under it", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-refresh-"));
+    await new AgentService().install({ startPath: repoRoot });
+    const read = (agent: string): Promise<string> =>
+      readFile(path.join(repoRoot, ".github/agents", `${agent}.agent.md`), "utf8");
+
+    // The file index refreshes itself on read; the call graph cannot, so the
+    // three points that change code — the two writing agents, plus the review
+    // loop before it re-plans — have to ask for it explicitly. Without this the
+    // second round of the loop plans against pre-implementation call edges.
+    for (const agent of ["FeatureImplementer", "DocumentationWriter", "CodeReviewer"]) {
+      const text = await read(agent);
+      expect(text, agent).toContain("get_symbol_graph");
+    }
+
+    // Granted the tool, not just told to use it.
+    expect(await read("FeatureImplementer")).toContain("  - get_symbol_graph");
+    expect(await read("DocumentationWriter")).toContain("  - get_symbol_graph");
+    expect(await read("CodeReviewer")).toContain("  - get_symbol_graph");
+
+    // The reviewer must refresh BEFORE routing, not after.
+    const reviewer = await read("CodeReviewer");
+    expect(reviewer.indexOf("get_symbol_graph")).toBeLessThan(
+      reviewer.indexOf("Route the flow on exactly two exits")
+    );
+  });
+
   it("wires the agents into the specified orchestration graph", async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-agents-graph-"));
     await new AgentService().install({ startPath: repoRoot });

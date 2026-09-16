@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -8,7 +8,11 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { SymbolGraphService } from "../packages/graph/src/index.js";
-import { IndexingService, type LocalIndex } from "../packages/indexer/src/index.js";
+import {
+  IndexingService,
+  resetIndexFreshnessCache,
+  type LocalIndex
+} from "../packages/indexer/src/index.js";
 import { runCli } from "../packages/cli/src/index.js";
 import { getArtifactDirectoryPath } from "../packages/shared/src/index.js";
 
@@ -369,6 +373,80 @@ describe("IndexingService", () => {
     // Genuine config keeps its classification.
     expect(isConfig("vite.config.ts")).toBe(true);
     expect(isConfig("src/config/app.ts")).toBe(true);
+  });
+
+  it("refreshes itself when the repo changed under it", async () => {
+    // Regression: search read the index file if it existed and never checked
+    // whether it was current, so for a whole working session every agent saw
+    // the repo as it was at the last explicit index run — a renamed class was
+    // still reported by its old name, and a new file was invisible.
+    const repoRoot = await createRepo({
+      "src/legacy.ts": "export class LegacyBilling {}"
+    });
+    const service = new IndexingService();
+    const find = async (query: string): Promise<string[]> =>
+      (await service.search({ startPath: repoRoot, query })).results.map(
+        (result) => result.relativePath
+      );
+
+    await service.index({ startPath: repoRoot });
+    expect(await find("LegacyBilling")).toContain("src/legacy.ts");
+
+    await writeFile(
+      path.join(repoRoot, "src/legacy.ts"),
+      "export class InvoiceEngine {}",
+      "utf8"
+    );
+    await writeFile(
+      path.join(repoRoot, "src/payments.ts"),
+      "export class PaymentGateway {}",
+      "utf8"
+    );
+    // The freshness verdict is briefly cached so one agent turn does not repeat
+    // the stat walk; drop it to assert the refresh itself rather than the cache.
+    resetIndexFreshnessCache();
+
+    // No index() call in between — the refresh has to happen on the read path.
+    expect(await find("InvoiceEngine")).toContain("src/legacy.ts");
+    expect(await find("PaymentGateway")).toContain("src/payments.ts");
+  });
+
+  it("notices a deletion, which lowers no file's timestamp", async () => {
+    const repoRoot = await createRepo({
+      "src/a.ts": "export class Alpha {}",
+      "src/b.ts": "export class Bravo {}"
+    });
+    const service = new IndexingService();
+
+    await service.index({ startPath: repoRoot });
+    await rm(path.join(repoRoot, "src/b.ts"));
+    resetIndexFreshnessCache();
+
+    const found = await service.search({ startPath: repoRoot, query: "Bravo" });
+    expect(found.results.map((result) => result.relativePath)).not.toContain(
+      "src/b.ts"
+    );
+  });
+
+  it("does not rebuild again while its freshness verdict is warm", async () => {
+    // A stale verdict cached moments ago must not survive the rebuild it
+    // triggered, or every call in a burst would rebuild the index.
+    const repoRoot = await createRepo({ "src/app.ts": "export const app = 1;" });
+    const service = new IndexingService();
+
+    await service.index({ startPath: repoRoot });
+    await writeFile(
+      path.join(repoRoot, "src/next.ts"),
+      "export const next = 2;",
+      "utf8"
+    );
+    resetIndexFreshnessCache();
+
+    await service.search({ startPath: repoRoot, query: "next" });
+    const rebuiltAt = (await service.status(repoRoot)).lastIndexedAt;
+    await service.search({ startPath: repoRoot, query: "next" });
+
+    expect((await service.status(repoRoot)).lastIndexedAt).toBe(rebuiltAt);
   });
 
   it("surfaces a shared library the query never mentions", async () => {

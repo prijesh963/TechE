@@ -189,6 +189,7 @@ const agentDefinitions: AgentDefinition[] = [
       "edit",
       "search/codebase",
       "repo_map",
+      "get_symbol_graph",
       "search_repo",
       "find_impacted_files",
       "get_latest_plan",
@@ -217,7 +218,8 @@ const agentDefinitions: AgentDefinition[] = [
       "Step 7 — Add or update tests near the changed behavior — follow existing test file naming conventions.",
       "Step 8 — Call `get_validation_commands` to find the correct build and test commands for this repo.",
       "Step 9 — Run the validation commands and capture their output as implementation evidence.",
-      "Step 10 — Report: every file grouped as added / updated / deleted with its before→after summary, tests added or updated, commands run, and any deviations from the plan. Then offer the Review Changes handoff to CodeReviewer."
+      "Step 10 — Call `get_symbol_graph` once the edits are written. The file index refreshes itself, but the call graph does not: until it is rebuilt it still describes the code you just replaced, and everything downstream — the reviewer, the re-planning loop, every later search — reasons from those stale call edges.",
+      "Step 11 — Report: every file grouped as added / updated / deleted with its before→after summary, tests added or updated, commands run, and any deviations from the plan. Then offer the Review Changes handoff to CodeReviewer."
     ],
     handoffGuidance: [
       "Use `.copilot-architect/handoffs/latest-handoff.md` as the implementation contract — do not deviate from it.",
@@ -244,6 +246,7 @@ const agentDefinitions: AgentDefinition[] = [
       "copilotArchitect/*",
       "search/codebase",
       "repo_map",
+      "get_symbol_graph",
       "search_repo",
       "get_latest_plan",
       "get_latest_validation",
@@ -282,6 +285,7 @@ const agentDefinitions: AgentDefinition[] = [
       "Step 5 — Separate blocking findings (must fix before merge) from advisory findings (follow-up tickets).",
       'Step 6 — Triage each open finding with the human: accept it (fold into the plan — see Step 7) or decline it. For a decline, call `resolve_review_finding` with `decision: "decline"` and a specific, non-empty `reason`; never silently drop a blocking finding without recording why.',
       'Step 7 — For findings the human accepts as real scope changes: call `resolve_review_finding` with `decision: "accept"` so the acceptance is recorded, then summarize the accepted findings for the next planning round. Do not revise the plan yourself — the Feature Planner owns plan content.',
+      "Step 7a — Before routing back for re-planning, call `get_symbol_graph`. Round two of this loop plans against the implemented code, and a graph still describing the pre-implementation call edges is what makes a second round drift further from the repo instead of closer.",
       "Step 8 — Route the flow on exactly two exits. (a) If the human accepted one or more findings, hand off to the Feature Planner via Revise Plan, listing the accepted finding ids and what each one requires — it will produce a NEW plan that overrides the current one, and the loop repeats through implementation and review. (b) If there are no accepted findings — nothing to change — the review passes: hand off to TestPlanner to create unit tests.",
       "Step 9 — If validation failed or a blocking finding has no agreed remediation, do not invent a third exit: report it plainly and ask the human how they want to proceed. They can invoke @Debugger directly if they want a failure triaged."
     ],
@@ -461,6 +465,7 @@ const agentDefinitions: AgentDefinition[] = [
       "search/codebase",
       "repo_map",
       "list_repo_files",
+      "get_symbol_graph",
       "search_repo",
       "find_impacted_files",
       "get_latest_plan"
@@ -473,7 +478,8 @@ const agentDefinitions: AgentDefinition[] = [
       "Step 3 — Call `list_repo_files` to see which files actually exist (its `isDocFile` flag marks the documentation ones), then call `search_repo` with 'README', 'docs', 'docstring', 'JSDoc', '\"\"\"' and any real file names from the inventory. Zero keyword hits mean the guess missed, not that the repo is undocumented.",
       "Step 4 — Match the existing documentation style: naming conventions, heading levels, code example format.",
       "Step 5 — Update or create: README usage sections, JSDoc / docstring comments on exported symbols, API endpoint docs, architecture decision notes.",
-      "Step 6 — Do not document internal implementation details — focus on public API, usage examples, and configuration."
+      "Step 6 — Do not document internal implementation details — focus on public API, usage examples, and configuration.",
+      "Step 7 — Call `get_symbol_graph` after writing any file. Doc comments change the symbols the graph carries, and it has no self-refresh."
     ],
     handoffGuidance: [
       "List every file that was created or modified with a one-line summary of what changed.",

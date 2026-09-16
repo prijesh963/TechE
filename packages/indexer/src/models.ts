@@ -24,6 +24,19 @@ export interface LocalIndex {
    * when the repo has no `.git` directory or git is unavailable.
    */
   gitActivity?: FileChangeActivity[];
+  /**
+   * Fingerprint of the file scan this index was built from, used to tell
+   * cheaply whether the index still describes what is on disk. Optional for
+   * backward compatibility: an index written before this field is treated as
+   * stale once, which repopulates it.
+   */
+  scanSignature?: ScanSignature;
+}
+
+/** How many files the scan saw, and the newest mtime among them. */
+export interface ScanSignature {
+  fileCount: number;
+  maxModifiedTimeMs: number;
 }
 
 /** Token frequency map for one document field (token -> occurrence count). */

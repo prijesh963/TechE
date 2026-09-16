@@ -38,6 +38,7 @@ import type {
   SearchResponse,
   SearchResult,
   SearchSignal,
+  ScanSignature,
   SearchStats,
   SimilarFeatureOptions,
   TokenCounts,
@@ -71,7 +72,7 @@ export class IndexingService {
     const statusPath = getStatusPath(repoRoot);
     const existingIndex =
       options.rebuild === true ? undefined : await tryReadIndex(indexPath);
-    const documents = await scanDocuments(repoRoot, existingIndex, {
+    const { documents, scanSignature } = await scanDocuments(repoRoot, existingIndex, {
       maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
     });
     // One `git log` walk per index build, not per search — recency doesn't
@@ -86,13 +87,18 @@ export class IndexingService {
       documents,
       stats: createStats(documents),
       searchStats: computeSearchStats(documents),
-      gitActivity
+      gitActivity,
+      scanSignature
     };
     const mode = options.rebuild ? "rebuild" : existingIndex ? "incremental" : "full";
 
     await mkdir(getArtifactDirectoryPath(repoRoot, "index"), { recursive: true });
     await writeJsonFile(indexPath, index);
     await writeJsonFile(statusPath, createStatus(repoRoot, index));
+    // This index is current by construction. Without recording that, a "stale"
+    // verdict cached moments ago would survive the rebuild it just triggered
+    // and make the next call rebuild all over again.
+    markIndexFresh(repoRoot);
 
     return {
       repoRoot,
@@ -498,18 +504,85 @@ export class IndexingService {
     };
   }
 
+  /**
+   * The index every read path funnels through, refreshed when it no longer
+   * describes what is on disk.
+   *
+   * Reading a stale index is silent and produces confident wrong answers —
+   * an agent describes a class that was renamed an hour ago, or cannot see a
+   * file added this session. Putting the check here rather than in each
+   * caller means every agent, MCP tool and the chat participant inherit it,
+   * and none of them can forget to ask. The refresh is incremental, so an
+   * unchanged file is reused without being re-parsed.
+   */
   private async readOrCreateIndex(
     repoRoot: string,
     strictRoot?: boolean
   ): Promise<LocalIndex> {
     const index = await tryReadIndex(getIndexPath(repoRoot));
 
-    if (index) {
+    if (index && !(await isIndexStale(repoRoot, index))) {
       return index;
     }
 
     return (await this.index({ startPath: repoRoot, strictRoot })).index;
   }
+}
+
+/**
+ * How long a freshness verdict is trusted before the filesystem is checked
+ * again. An agent turn fires many tool calls in quick succession; without this
+ * each one would repeat the stat walk to reach the same answer. Short enough
+ * that an edit made while reading a reply is picked up by the next question.
+ */
+const STALENESS_CACHE_MS = 5_000;
+
+const stalenessChecks = new Map<string, { checkedAtMs: number; stale: boolean }>();
+
+/**
+ * Whether the index no longer matches what is on disk, by comparing the scan
+ * fingerprint recorded at build time against the filesystem now.
+ *
+ * Deliberately conservative in one direction: if the repo cannot be scanned,
+ * the index is treated as fresh rather than rebuilt, so a transient read error
+ * degrades to the old behaviour instead of triggering a rebuild storm.
+ */
+async function isIndexStale(repoRoot: string, index: LocalIndex): Promise<boolean> {
+  // An index written before fingerprints existed is refreshed once, which
+  // records one and puts it on the cheap path from then on.
+  if (!index.scanSignature) return true;
+
+  const cached = stalenessChecks.get(repoRoot);
+  if (cached && Date.now() - cached.checkedAtMs < STALENESS_CACHE_MS) {
+    return cached.stale;
+  }
+
+  const entries = await scanRepository(repoRoot).catch(() => undefined);
+  if (!entries) return false;
+
+  const current = computeScanSignature(entries);
+  const stale =
+    current.fileCount !== index.scanSignature.fileCount ||
+    current.maxModifiedTimeMs > index.scanSignature.maxModifiedTimeMs;
+
+  stalenessChecks.set(repoRoot, { checkedAtMs: Date.now(), stale });
+  return stale;
+}
+
+function markIndexFresh(repoRoot: string): void {
+  stalenessChecks.set(repoRoot, { checkedAtMs: Date.now(), stale: false });
+}
+
+/**
+ * Forgets cached freshness verdicts, so the next read re-checks the filesystem
+ * immediately instead of trusting a verdict up to STALENESS_CACHE_MS old.
+ *
+ * Worth calling after something changes the repo wholesale behind the index's
+ * back — a branch switch or a pull — where waiting out the window means
+ * answering from the branch you just left.
+ */
+export function resetIndexFreshnessCache(): void {
+  stalenessChecks.clear();
 }
 
 const DEFAULT_LIST_LIMIT = 300;
@@ -555,7 +628,7 @@ async function scanDocuments(
   repoRoot: string,
   existingIndex: LocalIndex | undefined,
   options: { maxFileBytes: number }
-): Promise<IndexedFile[]> {
+): Promise<{ documents: IndexedFile[]; scanSignature: ScanSignature }> {
   const existingByPath = new Map(
     existingIndex?.documents.map((document) => [document.relativePath, document]) ?? []
   );
@@ -569,9 +642,34 @@ async function scanDocuments(
     }
   }
 
-  return documents.sort((left, right) =>
-    left.relativePath.localeCompare(right.relativePath)
-  );
+  return {
+    documents: documents.sort((left, right) =>
+      left.relativePath.localeCompare(right.relativePath)
+    ),
+    // Computed over every scanned entry, not just the indexed ones, so a
+    // change to a file the index skips still registers as a change.
+    scanSignature: computeScanSignature(entries)
+  };
+}
+
+/**
+ * A cheap fingerprint of what is on disk: how many files the scan saw and the
+ * newest mtime among them. Comparing it costs a stat walk (~30ms on a few
+ * hundred files) and no file reads, which is what makes a freshness check
+ * affordable on every query.
+ *
+ * The count is what catches deletions — removing a file lowers no mtime.
+ */
+function computeScanSignature(entries: ScannedEntry[]): ScanSignature {
+  let maxModifiedTimeMs = 0;
+
+  for (const entry of entries) {
+    if (entry.modifiedTimeMs > maxModifiedTimeMs) {
+      maxModifiedTimeMs = entry.modifiedTimeMs;
+    }
+  }
+
+  return { fileCount: entries.length, maxModifiedTimeMs };
 }
 
 async function indexEntry(
