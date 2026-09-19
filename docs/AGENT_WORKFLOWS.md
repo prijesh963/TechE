@@ -43,7 +43,28 @@ either way.
 
 Produces a plan with the current contents of every file it proposes to change,
 the decisions made so far in this session, the validation commands to run, and
-what it could not see. Your corrections outrank its first proposal — say what
+what it could not see.
+
+Search finds what is _related_; the plan needs what has to _change_. Those are
+different questions — a test that mentions the subject and a README describing
+it both rank highly and need no edit, and no ranking will ever surface a file
+that does not exist yet. So retrieval proposes candidates and the model
+selects from them, giving each file a reason and a kind:
+
+```text
+- **update** `src/billing/InvoiceService.ts` — holds the invoice lifecycle this hooks into _(lines 40–80 of 210)_
+- **add** `src/billing/ApprovalPolicy.ts` — new rules deciding who may approve _(new file)_
+```
+
+A path that the index has never seen is dropped rather than planned against:
+a file nobody has read cannot be snapshotted, and implementation would patch
+blind. A path that escapes the repository is refused at plan time, not at
+write time — you should never be shown a plan proposing to write outside your
+repo, even one that would later be blocked.
+
+Where no language model is available it falls back to the top search matches
+and says so, in those words, rather than presenting them as a judged
+selection. Your corrections outrank its first proposal — say what
 is wrong and it redrafts, versioned, so you can point at which version was
 approved.
 

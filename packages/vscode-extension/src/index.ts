@@ -7,7 +7,11 @@ import { fileURLToPath } from "node:url";
 
 import { renderRolePrompt } from "@copilot-architect/agents";
 import { GroundingService, summarizeGrounding } from "@copilot-architect/grounding";
-import { IndexingService, tokenize } from "@copilot-architect/indexer";
+import {
+  IndexingService,
+  tokenize,
+  type SearchResult
+} from "@copilot-architect/indexer";
 import {
   buildPlannedChange,
   createPlanContract,
@@ -17,8 +21,12 @@ import {
   plannedPaths,
   verifyPlanFreshness,
   type ApplyChangeInput,
+  DEFAULT_MAX_CHANGES,
+  parseSelectedChanges,
+  selectByRelevance,
   type PlanContract,
-  type PlannedChange
+  type PlannedChange,
+  type SelectedChange
 } from "@copilot-architect/planner";
 import {
   SessionService,
@@ -2020,6 +2028,13 @@ const CHAT_PHASES: Record<string, SessionPhase | undefined> = {
 };
 
 /**
+ * How many search hits to offer the selection step. Wider than the plan will
+ * use: retrieval is local and free, and the model can only reject a file it
+ * was shown.
+ */
+const PLAN_CANDIDATE_LIMIT = 16;
+
+/**
  * Proposing decisions for the developer to confirm.
  *
  * The session model rests on recorded decisions — they are what stops
@@ -2221,8 +2236,12 @@ async function runPlanPhase(
   stream.progress?.("Finding the files this touches…");
   const session = await ensureSession(sessions, workspaceRoot, prompt, "plan");
 
-  const response = await new IndexingService()
-    .search({ startPath: workspaceRoot, query: prompt, limit: 8 })
+  const indexing = new IndexingService();
+  // Wider than the plan will use: these are candidates to choose from, and
+  // retrieval is local and cheap. Narrowing happens in the selection step,
+  // where a reason can be given for each file.
+  const response = await indexing
+    .search({ startPath: workspaceRoot, query: prompt, limit: PLAN_CANDIDATE_LIMIT })
     .catch(() => undefined);
   const results = response?.results ?? [];
 
@@ -2233,17 +2252,41 @@ async function runPlanPhase(
     return;
   }
 
+  stream.progress?.("Working out which of them have to change…");
+  const { selection, selectedByModel } = await selectPlanChanges(
+    vscode,
+    indexing,
+    workspaceRoot,
+    prompt,
+    results,
+    token
+  );
+
+  if (selection.length === 0) {
+    stream.markdown(
+      `I found ${results.length} related file(s) but could not judge which of them need changing, so I will not guess at a plan.\n\n${await buildReceipts(workspaceRoot)}`
+    );
+    return;
+  }
+
+  const anchors = new Map(
+    results.map((result) => [
+      path.relative(workspaceRoot, result.filePath),
+      result.anchor?.line
+    ])
+  );
+
   // Snapshots are read from disk by buildPlannedChange — never written by the
   // model, which paraphrases existing code and corrupts the patch.
   const changes: PlannedChange[] = [];
-  for (const result of results) {
+  for (const choice of selection) {
     changes.push(
       await buildPlannedChange({
         repoRoot: workspaceRoot,
-        relativePath: path.relative(workspaceRoot, result.filePath),
-        kind: "update",
-        rationale: `Matched on ${result.signals.join(", ")}`,
-        anchorLine: result.anchor?.line
+        relativePath: choice.relativePath,
+        kind: choice.kind,
+        rationale: choice.rationale,
+        anchorLine: anchors.get(choice.relativePath)
       })
     );
   }
@@ -2261,10 +2304,22 @@ async function runPlanPhase(
   stream.markdown(renderDecisions(sessions, withDraft));
   stream.markdown("\n**Files this would touch**\n");
   for (const change of changes) {
-    const quoted = change.before
-      ? `lines ${change.before.startLine}–${change.before.endLine} of ${change.before.fileLines}`
-      : "no snapshot — file could not be read";
-    stream.markdown(`- \`${change.relativePath}\` — ${quoted}\n`);
+    const quoted =
+      change.kind === "add"
+        ? "new file"
+        : change.before
+          ? `lines ${change.before.startLine}–${change.before.endLine} of ${change.before.fileLines}`
+          : "no snapshot — file could not be read";
+    stream.markdown(
+      `- **${change.kind}** \`${change.relativePath}\` — ${change.rationale} _(${quoted})_\n`
+    );
+  }
+
+  if (!selectedByModel) {
+    // The fallback is a worse plan and is not presented as a considered one.
+    stream.markdown(
+      `\n_These are the top ${changes.length} search matches, not a judged selection: no language model was available to work out which files actually need changing. Expect files here that do not need editing, and files missing that do._\n`
+    );
   }
   stream.progress?.("Looking for choices worth confirming…");
   const recorded = sessions.activeDecisions(withDraft);
@@ -3131,6 +3186,118 @@ export function parseProposedDecisions(text: string): ProposedDecision[] {
   }
 
   return proposals;
+}
+
+/**
+ * Turns search candidates into a judged file selection.
+ *
+ * Search answers "what is related"; a plan needs "what has to change". A test
+ * that mentions the term and a README describing the feature both rank
+ * highly and need no edit, and no amount of ranking will ever surface a file
+ * that does not exist yet — which is most of what a new feature needs.
+ *
+ * `selectedByModel` is false when this fell back to relevance, and the caller
+ * says so. A worse plan presented as a considered one is the failure this
+ * whole design exists to avoid.
+ */
+async function selectPlanChanges(
+  vscode: VscodeApiLike,
+  indexing: IndexingService,
+  workspaceRoot: string,
+  request: string,
+  results: SearchResult[],
+  token: unknown
+): Promise<{ selection: SelectedChange[]; selectedByModel: boolean }> {
+  const candidates = results.map((result) =>
+    path.relative(workspaceRoot, result.filePath)
+  );
+  const signalsFor = new Map(
+    results.map((result) => [
+      path.relative(workspaceRoot, result.filePath),
+      result.signals
+    ])
+  );
+  const fallback = () => ({
+    selection: selectByRelevance(candidates, (file) => signalsFor.get(file) ?? []),
+    selectedByModel: false
+  });
+
+  const inventory = await indexing
+    .listFiles({ startPath: workspaceRoot, limit: Number.MAX_SAFE_INTEGER })
+    .catch(() => undefined);
+
+  // Without the inventory there is no way to tell an invented path from a
+  // real one, and an `add` from an `update`. Relevance is the honest answer.
+  if (!inventory || inventory.totalFiles === 0) {
+    return fallback();
+  }
+
+  const indexedPaths = new Set(
+    inventory.files.map((file) =>
+      file.repoName ? `${file.repoName}/${file.relativePath}` : file.relativePath
+    )
+  );
+
+  const listing = results
+    .map((result, index) => {
+      const file = candidates[index];
+      const tags = [
+        result.isTestFile ? "test" : "",
+        result.isConfigFile ? "config" : "",
+        result.isDocFile ? "docs" : ""
+      ].filter(Boolean);
+      const symbols = result.symbols
+        .slice(0, 4)
+        .map((symbol) => symbol.name)
+        .join(", ");
+      return [
+        file,
+        tags.length > 0 ? ` [${tags.join(", ")}]` : "",
+        symbols ? ` — declares ${symbols}` : ""
+      ].join("");
+    })
+    .join("\n");
+
+  const text = await requestLmText(
+    vscode,
+    [
+      "A developer asked for this change:",
+      request,
+      "",
+      "A search of their repository found these related files:",
+      listing,
+      "",
+      "Decide which files actually have to change, and how. Being related is",
+      "not a reason to change: leave out a test, doc or config that merely",
+      "mentions the subject. Include a new file where the feature needs one.",
+      "",
+      "One per line, pipe-separated, nothing else — no prose, no numbering:",
+      "kind | repo-relative path | why this file changes",
+      "",
+      "kind is one of: add, update, delete",
+      "Use a path from the list above for update and delete.",
+      "For add, give the path the new file should have.",
+      `At most ${DEFAULT_MAX_CHANGES} files.`,
+      "",
+      "Example:",
+      "update | src/billing/InvoiceService.ts | holds the invoice lifecycle this hooks into",
+      "add | src/billing/ApprovalPolicy.ts | new rules deciding who may approve",
+      "",
+      "If none of these files need to change, answer with nothing at all."
+    ].join("\n"),
+    token
+  );
+
+  if (text === undefined) {
+    return fallback();
+  }
+
+  const selection = parseSelectedChanges(text, { candidates, indexedPaths });
+
+  // Nothing survived validation. That is not the same as "nothing needs
+  // changing" — it usually means the answer was malformed — so relevance is
+  // the honest fallback rather than an empty plan.
+  return selection.length > 0 ? { selection, selectedByModel: true } : fallback();
 }
 
 /**

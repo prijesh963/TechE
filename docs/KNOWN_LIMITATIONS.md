@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–10 merged. The redesign is complete; what is below is
+**Status:** Phases 0–11 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -49,15 +49,29 @@ survives rather than being offered for replacement. Detecting it properly
 means comparing meaning, not text, which is a larger piece of work than the
 id plumbing.
 
-### 1.4 `/create-plan` picks files by search relevance alone
+### 1.4 A selected file is not checked against what it claims
 
-**Phase 4a.** Every change is marked `update`; nothing reasons about additions
-or deletions, and nothing asks the model which files genuinely need changing.
+**Phase 11.** The selection validates that a path exists, stays inside the
+repo, and carries a reason. It does not check that the reason is true — a
+model can name a real file with a plausible-sounding rationale that has
+nothing to do with the request.
 
-**Cost:** plans name plausible files rather than correct ones. This is the
-planning intelligence, and it needs the model in the loop.
+**Cost:** a wrong file in a plan now arrives with a confident explanation
+attached, which is harder to spot than "Matched on lexical, structural" was.
+Grounding verifies claims in an answer; it does not yet run over a plan's
+rationales.
 
-### 1.5 `/implement` regenerates whole files, with no dry run
+### 1.5 Nothing bounds how much of a file an `add` implies
+
+**Phase 11.** An added file has no snapshot, which is correct — there is
+nothing to quote. But it also means implementation writes it from the
+rationale alone, with no size, shape or interface agreed at plan time.
+
+**Cost:** the developer approves "new rules deciding who may approve" without
+seeing what that will be. For an update the plan shows the code; for an add it
+shows a sentence.
+
+### 1.6 `/implement` regenerates whole files, with no dry run
 
 **Phase 4b.** The model is asked for complete replacement contents from the
 before-snapshot. There is no preview before writing.
@@ -66,7 +80,7 @@ before-snapshot. There is no preview before writing.
 safer, but needs the model to emit reliable diffs. Approval already gates the
 write, so a preview is a safety improvement rather than a missing gate.
 
-### 1.6 The CLI shell-outs are still subprocesses
+### 1.7 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

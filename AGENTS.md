@@ -118,7 +118,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               42 files, 318 tests
+├── tests/               43 files, 330 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -166,6 +166,8 @@ the other. If a shell needs repo intelligence, it imports the service.
    The dashboard's Current work card shows the live session, read through
    `peek` so a repaint never parks it.
 10. Plan contract carrying each changed file's content and hash at plan time.
+    Files are selected by the model from search candidates — with a reason and
+    an add/update/delete kind each — not by search relevance alone.
 11. Grounding: claims verified against the index, unverified ones flagged.
 12. Safe validation runner with timeouts, retries and streaming.
 13. Safety policy engine with blocked patterns and approval gates.
@@ -283,7 +285,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 318 tests must pass before merging.
+Use Vitest. All 330 tests must pass before merging.
 
 Cover:
 
@@ -296,6 +298,7 @@ Cover:
 - decision proposal parsing, confirmation wiring and supersession
 - dashboard session rendering, including the idle and moved-branch states
 - plan contract (freshness, approval gating, path constraints)
+- change selection (invented paths, add-of-existing, traversal, caps)
 - grounding (claim extraction, verification, honest "not checked")
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)
