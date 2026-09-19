@@ -6,3 +6,4 @@ export * from "./workspace-planning-service.js";
 export * from "./plan-contract.js";
 export * from "./plan-execution.js";
 export * from "./change-selection.js";
+export * from "./file-edits.js";

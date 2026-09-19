@@ -20,6 +20,9 @@ import {
   checkOutlines,
   compareAgainstPlan,
   plannedPaths,
+  applyFileEdits,
+  describeRefusals,
+  parseFileEdits,
   previewWrites,
   summarizeOutlineChecks,
   summarizeWrites,
@@ -2690,39 +2693,49 @@ async function runImplementPhase(
 
   stream.progress?.("Writing the changes…");
   const changes: ApplyChangeInput[] = [];
+  const editRefusals = new Map<string, string>();
+
   for (const change of plan.changes) {
     if (change.kind === "delete") {
       changes.push({ relativePath: change.relativePath, kind: "delete" });
       continue;
     }
 
-    const afterText = await requestLmText(
-      vscode,
-      [
-        renderRolePrompt("implement"),
-        "",
-        `Rewrite this file to satisfy: ${plan.request}`,
-        `Reason this file is in scope: ${change.rationale}`,
-        "",
-        "Return ONLY the complete new file contents. No explanation, no fences.",
-        "",
-        change.before
-          ? `Current contents (lines ${change.before.startLine}-${change.before.endLine} of ${change.before.fileLines}):\n${change.before.text}`
-          : describeNewFile(change)
-      ].join("\n"),
-      token
-    );
+    if (change.kind === "add") {
+      const afterText = await requestLmText(
+        vscode,
+        [
+          renderRolePrompt("implement"),
+          "",
+          `Write this file to satisfy: ${plan.request}`,
+          `Reason this file is in scope: ${change.rationale}`,
+          "",
+          "Return ONLY the complete file contents. No explanation, no fences.",
+          "",
+          describeNewFile(change)
+        ].join("\n"),
+        token
+      );
 
-    if (!afterText?.trim()) {
-      // Recorded as refused by applyPlanChanges rather than written as empty.
-      changes.push({ relativePath: change.relativePath, kind: change.kind });
+      changes.push({
+        relativePath: change.relativePath,
+        kind: "add",
+        // Refused by applyPlanChanges rather than written as an empty file.
+        ...(afterText?.trim() ? { afterText: unfence(afterText) } : {})
+      });
       continue;
+    }
+
+    const edited = await editExistingFile(vscode, plan, change, workspaceRoot, token);
+
+    if (edited.reason) {
+      editRefusals.set(change.relativePath, edited.reason);
     }
 
     changes.push({
       relativePath: change.relativePath,
-      kind: change.kind,
-      afterText: unfence(afterText)
+      kind: "update",
+      ...(edited.text !== undefined ? { afterText: edited.text } : {})
     });
   }
 
@@ -2744,6 +2757,16 @@ async function runImplementPhase(
   // buttons: the action belongs next to the thing it acts on.
   for (const preview of previews) {
     stream.markdown(`${summarizeWrites([preview])}\n`);
+
+    const refusal = editRefusals.get(preview.relativePath);
+    if (refusal) {
+      // Named precisely rather than reported as a generic failure: which edit
+      // did not apply, and why, is the difference between a developer who can
+      // correct the plan and one who can only re-run it and hope.
+      stream.markdown(`  ↳ _not edited: ${refusal}_\n`);
+      continue;
+    }
+
     stream.button?.({
       command: SHOW_DIFF_COMMAND,
       title: `Show diff: ${truncate(preview.relativePath, 44)}`,
@@ -3614,6 +3637,79 @@ async function selectPlanChanges(
     selection: verifySelectedChanges(selection, symbolsByFile),
     selectedByModel: true
   };
+}
+
+/**
+ * Edits an existing file by quoting what to replace.
+ *
+ * Reads the file from disk rather than working from the plan's excerpt: the
+ * excerpt is a window for the model to reason in, and an edit has to apply to
+ * the whole file. Freshness was already checked against the plan's hash
+ * before this ran, so what is read here is what the plan quoted.
+ *
+ * Every failure path leaves the file untouched and says which edit failed and
+ * why. Producing a half-edited file, or falling back to rewriting it whole,
+ * would both hide exactly the information the developer needs to correct the
+ * plan.
+ */
+async function editExistingFile(
+  vscode: VscodeApiLike,
+  plan: PlanContract,
+  change: PlannedChange,
+  workspaceRoot: string,
+  token: unknown
+): Promise<{ text?: string; reason?: string }> {
+  let original: string;
+  try {
+    original = await readFile(path.join(workspaceRoot, change.relativePath), "utf8");
+  } catch {
+    return { reason: "the file could not be read" };
+  }
+
+  const response = await requestLmText(
+    vscode,
+    [
+      renderRolePrompt("implement"),
+      "",
+      `Edit this file to satisfy: ${plan.request}`,
+      `Reason this file is in scope: ${change.rationale}`,
+      "",
+      "Return only search/replace blocks, in this exact form:",
+      "",
+      "<<<<<<< SEARCH",
+      "the existing lines to replace, copied exactly",
+      "=======",
+      "what they become",
+      ">>>>>>> REPLACE",
+      "",
+      "Rules that decide whether your edit can be applied at all:",
+      "- Copy the searched text character for character from the file below.",
+      "- Include enough surrounding lines to make it unique in the file. An",
+      "  edit matching twice is ambiguous and will be refused.",
+      "- One block per change. Leave everything else alone.",
+      "- To delete code, leave the replacement side empty.",
+      "",
+      change.before
+        ? `The file (lines ${change.before.startLine}-${change.before.endLine} of ${change.before.fileLines}):\n${change.before.text}`
+        : "The file could not be quoted when the plan was built."
+    ].join("\n"),
+    token
+  );
+
+  if (response === undefined) {
+    return { reason: "no language model was available" };
+  }
+
+  const edits = parseFileEdits(response);
+
+  if (edits.length === 0) {
+    return { reason: "no usable edits were produced" };
+  }
+
+  const result = applyFileEdits(original, edits);
+  const refusal = describeRefusals(result.refused);
+
+  return refusal ? { reason: refusal } : { text: result.text };
 }
 
 /**

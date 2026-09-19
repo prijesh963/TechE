@@ -156,8 +156,27 @@ Applies the approved plan and nothing beyond it. The plan carries each file's
 content hash from plan time, so implementation can tell cheaply whether a file
 moved underneath it and stop rather than overwrite work it never saw.
 
-It generates the changes, then stops and shows you what they come to before
-anything reaches your working tree:
+An existing file is changed by editing it, not by rewriting it. The model
+quotes the lines it wants to replace and what they become; everything else
+stays byte-for-byte as it was. A new file is still written whole, because
+there is nothing to quote.
+
+Nothing is guessed at. An edit whose quoted text is not in the file, or
+appears twice, is refused with that reason — and if any edit in a file is
+refused, none are applied, because a file with three of four edits applied is
+in a state nobody designed:
+
+```text
+- **update** `src/billing/Ledger.ts` — 180 lines
+  ↳ _not edited: "this.ledger.record(invoice);" — appears 2 times, so the edit is ambiguous_
+```
+
+This is what makes quoting safer than a patch file. A unified diff carries
+line numbers a model gets wrong, and applying one fuzzily is how a change
+lands in the wrong place. Quoted text can be _checked_ before it is applied.
+
+It then stops and shows you what the changes come to before anything reaches
+your working tree:
 
 ```text
 ## Plan v1 — ready to write

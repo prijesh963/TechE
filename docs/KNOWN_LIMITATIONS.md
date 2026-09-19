@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–17 merged. The redesign is complete; what is below is
+**Status:** Phases 0–18 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -116,17 +116,30 @@ before the write was agreed, and would leave stale content behind for every
 run that was never applied — so this is a deliberate trade rather than an
 oversight.
 
-### 1.10 Whole files are still regenerated
+### 1.10 The model edits from an excerpt, not the whole file
 
-**Phase 4b, unchanged by Phase 16.** The model is still asked for complete
-replacement contents. Phase 16 made the resulting failure visible rather than
-removing it.
+**Phase 18.** An edit is applied to the file on disk, but the model is shown
+only the plan's excerpt — a window around the anchor the index resolved. It
+can only quote text it can see, so a change needed outside that window cannot
+be proposed at all.
 
-**Cost:** wasteful on a large file, and every untouched line is a line the
-model could paraphrase. A patch-based approach needs reliably applicable
-diffs, which is a larger piece of work than this one.
+**Cost:** the edit either fails to be produced or comes back as an edit to
+something irrelevant nearby. Search/replace responses are small, so a wider
+excerpt is now affordable in a way it was not under whole-file rewriting —
+this is a tuning decision that wants real usage behind it.
 
-### 1.11 The CLI shell-outs are still subprocesses
+### 1.11 A refused edit costs a whole round trip
+
+**Phase 18.** When an edit does not match, or matches twice, the file is left
+untouched and the developer is told which edit failed. Nothing retries with
+that information.
+
+**Cost:** an ambiguous edit is exactly the case a model could fix if told —
+"include more surrounding lines" is mechanical advice. One automatic retry
+would close most of these, at the cost of a second model call whenever the
+first was sloppy.
+
+### 1.12 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —
