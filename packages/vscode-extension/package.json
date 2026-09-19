@@ -26,7 +26,6 @@
     "onCommand:copilotArchitect.validate",
     "onCommand:copilotArchitect.review",
     "onCommand:copilotArchitect.startMcp",
-    "onCommand:copilotArchitect.installAgents",
     "onCommand:copilotArchitect.generateInstructions",
     "onCommand:copilotArchitect.openRepoInNewWindow",
     "onCommand:copilotArchitect.workspaceScan",
@@ -78,11 +77,6 @@
         "command": "copilotArchitect.startMcp",
         "title": "Copilot Architect: Start MCP",
         "icon": "$(server-process)"
-      },
-      {
-        "command": "copilotArchitect.installAgents",
-        "title": "Copilot Architect: Install Agents",
-        "icon": "$(hubot)"
       },
       {
         "command": "copilotArchitect.generateInstructions",
@@ -199,6 +193,8 @@
     }
   },
   "dependencies": {
+    "@copilot-architect/agents": "0.1.0",
+    "@copilot-architect/graph": "0.1.0",
     "@copilot-architect/indexer": "0.1.0",
     "@copilot-architect/planner": "0.1.0",
     "@copilot-architect/session": "0.1.0"

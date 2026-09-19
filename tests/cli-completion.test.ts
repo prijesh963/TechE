@@ -106,26 +106,14 @@ describe("Phase 12 CLI completion", () => {
     expect(validateCapture.stdout.join("\n")).toContain("Status: ok");
   });
 
-  it("runs agents and instructions command families", async () => {
+  it("runs the instructions command family", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ name: "agents-instructions" })
     });
-    const agentsList = createCapture();
-    const agentsInstall = createCapture();
-    const agentsValidate = createCapture();
     const instructionsPreview = createCapture();
     const instructionsGenerate = createCapture();
     const instructionsValidate = createCapture();
 
-    expect((await runCli(["agents", "list"], agentsList.io)).exitCode).toBe(0);
-    expect(
-      (await runCli(["agents", "install", "--path", repoRoot], agentsInstall.io))
-        .exitCode
-    ).toBe(0);
-    expect(
-      (await runCli(["agents", "validate", "--path", repoRoot], agentsValidate.io))
-        .exitCode
-    ).toBe(0);
     expect(
       (await runCli(["instructions", "preview"], instructionsPreview.io)).exitCode
     ).toBe(0);
@@ -145,8 +133,6 @@ describe("Phase 12 CLI completion", () => {
         )
       ).exitCode
     ).toBe(0);
-    expect(agentsList.stdout.join("\n")).toContain("Templates:");
-    expect(agentsValidate.stdout.join("\n")).toContain("Status: ok");
     expect(instructionsPreview.stdout.join("\n")).toContain("Copilot Architect");
     expect(instructionsValidate.stdout.join("\n")).toContain("Status: ok");
   });

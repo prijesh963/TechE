@@ -5,12 +5,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
-  AgentService,
-  type AgentInstallSummary,
-  type AgentListResult,
-  type AgentValidationResult
-} from "@copilot-architect/agents";
-import {
   AdvancedAnalysisService,
   RepoDiscoveryService,
   WorkspaceService,
@@ -124,7 +118,6 @@ const commandDescriptions = {
   cleanup: "Apply local artifact retention cleanup.",
   review: "Generate a review report from diff and validation evidence.",
   handoff: "Generate an implementation handoff prompt.",
-  agents: "Manage custom Copilot agent templates and installs.",
   instructions: "Generate Copilot instructions and AGENTS.md suggestions.",
   workspace: "Inspect or manage multi-repo workspace context.",
   mcp: "Start the local MCP server or write Copilot Chat MCP config.",
@@ -161,8 +154,6 @@ const commandUsage = {
     "npm run cli -- review [--path <repo>] [--plan latest|<file>] [--validation latest|<file>] [--json]",
   handoff:
     "npm run cli -- handoff --approve [--plan latest|<file>] [--target <agent>] [--path <repo>] [--no-clipboard] [--json]",
-  agents:
-    "npm run cli -- agents <install|list|validate|update|doctor> [--path <repo>] [--output <dir|json>] [--dry-run] [--force] [--json]",
   instructions:
     "npm run cli -- instructions <generate|preview|validate> [--path <repo>] [--output <file>] [--json]",
   workspace:
@@ -781,18 +772,6 @@ export async function runCli(
       const result = await new HandoffService().generate(options);
       stdout(options.json ? JSON.stringify(result, null, 2) : getHandoffText(result));
       return { exitCode: 0 };
-    } catch (error) {
-      stderr(error instanceof Error ? error.message : String(error));
-      return { exitCode: 1 };
-    }
-  }
-
-  if (rawCommand === "agents") {
-    try {
-      const options = parseAgentsArgs(commandArgs);
-      const result = await runAgentsCommand(options);
-      stdout(options.json ? JSON.stringify(result.payload, null, 2) : result.text);
-      return { exitCode: result.exitCode };
     } catch (error) {
       stderr(error instanceof Error ? error.message : String(error));
       return { exitCode: 1 };
@@ -2125,15 +2104,6 @@ interface HandoffCliOptions {
   json: boolean;
 }
 
-interface AgentsCliOptions {
-  subcommand: "install" | "list" | "validate" | "update" | "doctor";
-  startPath?: string;
-  outputPath?: string;
-  dryRun?: boolean;
-  force?: boolean;
-  json: boolean;
-}
-
 interface InstructionsCliOptions {
   subcommand: "generate" | "preview" | "validate";
   startPath?: string;
@@ -2365,66 +2335,6 @@ function parseHandoffArgs(args: string[]): HandoffCliOptions {
   return options;
 }
 
-function parseAgentsArgs(args: string[]): AgentsCliOptions {
-  const [subcommand, ...rest] = args;
-
-  if (
-    subcommand !== "install" &&
-    subcommand !== "list" &&
-    subcommand !== "validate" &&
-    subcommand !== "update" &&
-    subcommand !== "doctor"
-  ) {
-    throw new Error(
-      "Expected agents subcommand: install, list, validate, update, or doctor"
-    );
-  }
-
-  const options: AgentsCliOptions = { subcommand, json: false };
-
-  for (let index = 0; index < rest.length; index += 1) {
-    const arg = rest[index];
-
-    if (arg === "--json") {
-      options.json = true;
-      continue;
-    }
-
-    if (arg === "--dry-run") {
-      options.dryRun = true;
-      continue;
-    }
-
-    if (arg === "--force") {
-      options.force = true;
-      continue;
-    }
-
-    if (arg === "--path") {
-      options.startPath = requiredValue(rest, index, "--path");
-      index += 1;
-      continue;
-    }
-
-    if (arg === "--output") {
-      const output = requiredValue(rest, index, "--output");
-
-      if (output === "json") {
-        options.json = true;
-      } else {
-        options.outputPath = output;
-      }
-
-      index += 1;
-      continue;
-    }
-
-    throw new Error(`Unknown agents argument: ${arg}`);
-  }
-
-  return options;
-}
-
 function parseInstructionsArgs(args: string[]): InstructionsCliOptions {
   const [subcommand, ...rest] = args;
 
@@ -2590,64 +2500,6 @@ function parseStatusArgs(args: string[]): StatusCliOptions {
   }
 
   return options;
-}
-
-async function runAgentsCommand(
-  options: AgentsCliOptions
-): Promise<CliCommandExecutionResult> {
-  const service = new AgentService();
-
-  if (options.subcommand === "install") {
-    const result = await service.install({
-      startPath: options.startPath,
-      outputPath: options.outputPath,
-      dryRun: options.dryRun,
-      force: options.force
-    });
-    return {
-      exitCode: result.results.some((entry) => entry.status === "failed") ? 1 : 0,
-      payload: result,
-      text: getAgentInstallText(result)
-    };
-  }
-
-  if (options.subcommand === "update") {
-    const result = await service.update({
-      startPath: options.startPath,
-      outputPath: options.outputPath,
-      dryRun: options.dryRun,
-      force: options.force
-    });
-    return {
-      exitCode: result.results.some((entry) => entry.status === "failed") ? 1 : 0,
-      payload: result,
-      text: getAgentInstallText(result)
-    };
-  }
-
-  if (options.subcommand === "list") {
-    const result = service.list();
-    return { exitCode: 0, payload: result, text: getAgentListText(result) };
-  }
-
-  if (options.subcommand === "validate") {
-    const result = await service.validate({
-      startPath: options.startPath,
-      outputPath: options.outputPath
-    });
-    return {
-      exitCode: result.ok ? 0 : 1,
-      payload: result,
-      text: getAgentValidateText(result)
-    };
-  }
-
-  const result = service.doctor({ startPath: options.startPath });
-  return {
-    exitCode: 0,
-    payload: result,
-    text: getDiagnosticReportText("agents doctor", result)
-  };
 }
 
 async function runInstructionsCommand(
@@ -2862,58 +2714,6 @@ function getHandoffText(result: HandoffGenerationResult): string {
   ].join("\n");
 }
 
-function getAgentInstallText(result: AgentInstallSummary): string {
-  const counts = {
-    installed: result.results.filter((entry) => entry.status === "installed").length,
-    updated: result.results.filter((entry) => entry.status === "updated").length,
-    skipped: result.results.filter((entry) => entry.status === "skipped").length,
-    failed: result.results.filter((entry) => entry.status === "failed").length
-  };
-
-  return [
-    `${PROJECT_NAME}: agents install`,
-    "",
-    `Output: ${result.outputDirectory}`,
-    `Dry run: ${result.dryRun ? "yes" : "no"}`,
-    `Installed: ${counts.installed}`,
-    `Updated: ${counts.updated}`,
-    `Skipped: ${counts.skipped}`,
-    `Failed: ${counts.failed}`,
-    ...result.results.flatMap((entry) => [
-      "",
-      `${entry.status}: ${entry.agentId}`,
-      `  ${entry.installPath ?? "not written"}`,
-      ...(entry.backupPath ? [`  backup: ${entry.backupPath}`] : []),
-      ...entry.messages.map((message) => `  - ${message}`)
-    ])
-  ].join("\n");
-}
-
-function getAgentListText(result: AgentListResult): string {
-  return [
-    `${PROJECT_NAME}: agents list`,
-    "",
-    `Templates: ${result.templates.length}`,
-    ...result.templates.map((template) => `- ${template.name} (${template.target})`)
-  ].join("\n");
-}
-
-function getAgentValidateText(result: AgentValidationResult): string {
-  return [
-    `${PROJECT_NAME}: agents validate`,
-    "",
-    `Status: ${result.ok ? "ok" : "error"}`,
-    `Checked: ${result.checkedPath}`,
-    ...result.messages.map((message) => `- ${message}`),
-    ...result.files.flatMap((file) => [
-      "",
-      `${file.ok ? "ok" : "error"}: ${file.filePath}`,
-      ...file.errors.map((error) => `  - ${error}`),
-      ...file.warnings.map((warning) => `  - warning: ${warning}`)
-    ])
-  ].join("\n");
-}
-
 function getInstructionPreviewText(result: InstructionPreviewResult): string {
   return [`${PROJECT_NAME}: instructions preview`, "", result.markdown].join("\n");
 }
@@ -3051,18 +2851,6 @@ function getWorkspaceValidatePlanText(result: {
   ].join("\n");
 }
 
-function getDiagnosticReportText(label: string, report: DiagnosticReport): string {
-  return [
-    `${PROJECT_NAME}: ${label}`,
-    "",
-    `Status: ${report.status}`,
-    report.summary,
-    ...report.checks.map(
-      (check) => `- ${check.name}: ${check.status} - ${check.message}`
-    )
-  ].join("\n");
-}
-
 async function validateWorkspacePlan(options: WorkspaceCliOptions): Promise<{
   ok: boolean;
   planPath: string;
@@ -3134,7 +2922,6 @@ interface StatusControls {
     dryRunDefault: boolean;
     directories: string[];
   };
-  adminAgentTemplatePaths: string[];
 }
 
 interface StatusResult {
@@ -3297,8 +3084,7 @@ async function getStatusControls(
           "reviews",
           "diagnostics"
         ]
-      },
-      adminAgentTemplatePaths: policy.adminAgentTemplatePaths ?? []
+      }
     };
   } catch (error) {
     return {
@@ -3315,8 +3101,7 @@ async function getStatusControls(
         maxRuns: 50,
         dryRunDefault: true,
         directories: ["plans", "handoffs", "runs", "reviews", "diagnostics"]
-      },
-      adminAgentTemplatePaths: []
+      }
     };
   }
 }

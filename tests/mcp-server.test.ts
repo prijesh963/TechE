@@ -354,22 +354,6 @@ describe("Copilot Architect MCP server", () => {
     await access(result.configPath);
   });
 
-  it("reports installed agents and MCP readiness through agent_status", async () => {
-    const repoRoot = await createRepo({
-      "package.json": JSON.stringify({ name: "agent-status" })
-    });
-    await new CopilotChatMcpConfigService().write({ startPath: repoRoot });
-    const { client } = await createConnectedServer(repoRoot);
-
-    const status = await callJsonTool(client, "agent_status", { path: repoRoot });
-
-    expect(status.ok).toBe(true);
-    expect(status.data.summary).toContain("@FeatureArchitect");
-    expect(status.data.checks.map((check: { name: string }) => check.name)).toContain(
-      "mcp-config"
-    );
-  });
-
   it("supports multi-repo workspace map, search, and cross-repo impact tools", async () => {
     const fixture = await createWorkspaceFixture();
     const { client } = await createConnectedServer(fixture.workspaceRoot);

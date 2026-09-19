@@ -42,7 +42,6 @@ export const CLI_COMMANDS = [
   "cleanup",
   "review",
   "handoff",
-  "agents",
   "instructions",
   "workspace",
   "mcp",

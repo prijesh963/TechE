@@ -1,6 +1,5 @@
 import path from "node:path";
 
-import { AgentService } from "@copilot-architect/agents";
 import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core";
 import { SymbolGraphService } from "@copilot-architect/graph";
 import {
@@ -454,14 +453,6 @@ export function createCopilotArchitectTools(
           planRevision:
             typeof args.planRevision === "number" ? args.planRevision : undefined
         })
-    ),
-    tool(
-      "agent_status",
-      "Report Copilot Architect custom agent and MCP readiness.",
-      commonSchema,
-      true,
-      async (args) =>
-        new AgentService().doctor({ startPath: resolveStartPath(args, options) })
     )
   ];
 }

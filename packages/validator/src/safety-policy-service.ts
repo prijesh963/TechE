@@ -133,7 +133,6 @@ export class SafetyPolicyService {
     }
 
     validateArtifactRetention(policy, errors, warnings);
-    validateAdminTemplatePaths(policy, errors);
     validateTrustMetadata(policy, errors, warnings);
 
     return {
@@ -181,7 +180,6 @@ export function createDefaultSafetyPolicy(): SafetyPolicy {
       directories: ["plans", "handoffs", "runs", "reviews", "diagnostics"],
       dryRunDefault: true
     },
-    adminAgentTemplatePaths: ["templates/agents", ".copilot-architect/agent-templates"],
     trustMetadata
   };
 }
@@ -290,19 +288,6 @@ function validateArtifactRetention(
 
   if (typeof retention.dryRunDefault !== "boolean") {
     errors.push("policy.artifactRetention.dryRunDefault must be a boolean.");
-  }
-}
-
-function validateAdminTemplatePaths(policy: SafetyPolicy, errors: string[]): void {
-  if (!Array.isArray(policy.adminAgentTemplatePaths)) {
-    errors.push("policy.adminAgentTemplatePaths must be an array.");
-    return;
-  }
-
-  for (const templatePath of policy.adminAgentTemplatePaths) {
-    if (typeof templatePath !== "string" || templatePath.trim().length === 0) {
-      errors.push("policy.adminAgentTemplatePaths cannot contain empty entries.");
-    }
   }
 }
 

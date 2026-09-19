@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–4b merged. Phases 5–8 outstanding.
+**Status:** Phases 0–5 merged. Phases 6–8 outstanding.
 
 ---
 
@@ -224,6 +224,23 @@ Rule it states was violated until Phase 3. Phase 8 owns this.
 
 `FeaturePlanningService` still produces the pre-redesign shape alongside the
 new `PlanContract`. Deliberate during migration; Phase 8 cleans it up.
+
+---
+
+### 6.4 Seven specialist role instruction sets were dropped
+
+**Phase 5.** `TestPlanner`, `Debugger`, `SecurityReviewer`, `PerformanceReviewer`,
+`DocumentationWriter`, `DependencyAuditor` and `APIDesignReviewer` had no phase
+to map onto in a four-command design, so their accumulated instructions went
+with the `.agent.md` machinery.
+
+**Cost:** real knowledge lost — the security role's "zero keyword hits means
+your guesses missed, not that the repo is clean" is the kind of thing that took
+a live failure to learn. They are recoverable from git history.
+
+**Shape of the fix:** they are natural **aspects of the review phase** rather
+than separate agents. `/review` could run security, performance and API-design
+checks as passes over the same diff.
 
 ---
 

@@ -3,6 +3,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import { renderRolePrompt } from "@copilot-architect/agents";
+import { SymbolGraphService } from "@copilot-architect/graph";
 import { IndexingService, tokenize } from "@copilot-architect/indexer";
 import {
   buildPlannedChange,
@@ -80,11 +82,6 @@ export const COPILOT_ARCHITECT_COMMANDS: CopilotArchitectCommand[] = [
     startsMcp: true
   },
   {
-    id: "copilotArchitect.installAgents",
-    title: "Copilot Architect: Install Agents",
-    cliArgs: ["agents", "install"]
-  },
-  {
     id: "copilotArchitect.generateInstructions",
     title: "Copilot Architect: Generate Instructions",
     cliArgs: ["instructions", "generate"]
@@ -100,7 +97,6 @@ export const DASHBOARD_PRIMARY_ACTIONS: { id: string; label: string }[] = [
   { id: "copilotArchitect.setupRepo", label: "Setup Repo" },
   { id: "copilotArchitect.startAndSetupMcp", label: "Start & Setup MCP" },
   { id: "copilotArchitect.stopMcp", label: "Stop MCP" },
-  { id: "copilotArchitect.installAgents", label: "Install Agents" },
   { id: "copilotArchitect.generateInstructions", label: "Generate Instructions" }
 ];
 
@@ -848,7 +844,6 @@ export function activate(
       await track("Build index", ["index", "--path", workspaceRoot]);
     }
 
-    await track("Install agents", ["agents", "install", "--path", workspaceRoot]);
     await track("Configure MCP server", ["mcp", "config", "--path", workspaceRoot]);
 
     startMcpServer();
@@ -1616,7 +1611,7 @@ function formatAgents(artifacts: DashboardArtifacts | undefined): string {
   const count = artifacts?.agentCount ?? 0;
   return count > 0
     ? `${count} agent(s) installed in .github/agents`
-    : "No agents installed — run Install Agents.";
+    : "Roles are built in — nothing to install.";
 }
 
 export function formatAgentInsights(artifacts: DashboardArtifacts | undefined): string {
@@ -1875,7 +1870,7 @@ async function runAnalyzePhase(
     const lmPrompt = buildCommandLmPrompt(
       "question",
       prompt,
-      "",
+      renderRolePrompt("analyze"),
       repoContext,
       fileContext,
       formatChatHistory(context.history ?? [])
@@ -2049,6 +2044,8 @@ async function runImplementPhase(
     const afterText = await requestLmText(
       vscode,
       [
+        renderRolePrompt("implement"),
+        "",
         `Rewrite this file to satisfy: ${plan.request}`,
         `Reason this file is in scope: ${change.rationale}`,
         "",
@@ -2078,6 +2075,16 @@ async function runImplementPhase(
 
   if (applied.written.length > 0 || applied.deleted.length > 0) {
     await sessions.markImplemented({ workspaceRoot }, approved.version);
+
+    // The file index refreshes itself on read; the call graph cannot, and a
+    // full re-parse has no incremental path. This used to be a line of
+    // markdown asking three agents to remember — now it simply happens.
+    stream.progress?.("Rebuilding the call graph…");
+    await new SymbolGraphService().build({ startPath: workspaceRoot }).catch(() => {
+      stream.markdown(
+        "_The call graph could not be rebuilt; later searches may cite stale call edges._\n\n"
+      );
+    });
   }
 
   stream.markdown(`## Implemented plan v${approved.version}\n\n`);

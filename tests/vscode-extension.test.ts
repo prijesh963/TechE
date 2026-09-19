@@ -248,7 +248,6 @@ describe("VS Code extension shell", () => {
       ["graph", "--path", "/workspace/repo"],
       ["diagnostics", "--path", "/workspace/repo"],
       ["index", "--path", "/workspace/repo"],
-      ["agents", "install", "--path", "/workspace/repo"],
       ["mcp", "config", "--path", "/workspace/repo"]
     ]);
     expect(mcpRequests[0]?.args).toEqual(["mcp", "--path", "/workspace/repo"]);
@@ -329,8 +328,8 @@ describe("VS Code extension shell", () => {
       run: async (request: CliRunRequest): Promise<CliRunResult> => {
         cliRequests.push(request);
         return {
-          // Fail the agents step only; later steps must still run.
-          exitCode: request.args[0] === "agents" ? 1 : 0,
+          // Fail one step only; later steps must still run.
+          exitCode: request.args[0] === "diagnostics" ? 1 : 0,
           stdout: "",
           stderr: "",
           commandLine: createCliCommandLine(request.args)

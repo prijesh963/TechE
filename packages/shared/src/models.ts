@@ -411,7 +411,6 @@ export interface SafetyPolicy extends GeneratedArtifact {
   telemetryEnabled: boolean;
   localFirst: boolean;
   artifactRetention: ArtifactRetentionPolicy;
-  adminAgentTemplatePaths: string[];
   trustMetadata: TrustMetadata;
 }
 

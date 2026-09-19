@@ -255,7 +255,23 @@ Workspace `index`, `search`, `impact`, `plan`, and `validate-plan` commands orch
 
 ## Custom Copilot Agents
 
-`packages/agents` owns Phase 13 custom agent generation. `AgentService` defines and renders seven first-class Copilot agents: `FeatureArchitect`, `FeatureImplementer`, `CodeReviewer`, `TestPlanner`, `Debugger`, `SecurityReviewer`, and `PerformanceReviewer`.
+`packages/agents` owns the four internal roles — one per phase of
+`@architect` — as prompt constants the phases prepend to their requests.
+
+It used to generate eleven `.agent.md` files into `.github/agents/`. That
+design cost twice. It put a menu of eleven mentions in front of a developer who
+wanted one thing, which is how a report about "the Code Analysis Agent" turned
+out to have been typed at `@architect`. And it made coordination advisory:
+every fix became another "Step N — call X" line in a markdown file a model
+could skip. A role invoked by code cannot skip its steps, because the steps are
+code — the symbol-graph rebuild after implementation is now a function call
+rather than a request in three agent files.
+
+The instruction knowledge those templates accumulated survives as role
+guidance and safety rules. The generation, install, validation and backup
+machinery does not, and neither does `agents` as a CLI command, `agent_status`
+as an MCP tool, or `adminAgentTemplatePaths` in the safety policy — which
+described a control that, once nothing installed templates, did nothing.
 
 The default install target is `.github/agents/`, with `--output <dir>` available for custom locations. Generated files use the `.agent.md` suffix and include frontmatter, model and tools metadata, required instruction/handoff/safety sections, trust metadata, and references to `.copilot-architect/` artifacts.
 
