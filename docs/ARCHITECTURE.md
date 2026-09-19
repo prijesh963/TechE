@@ -179,6 +179,29 @@ defended by someone who never saw the session.
 draft lives in the session and nowhere else — the reverse of the previous order,
 where a plan was written first and marked approved afterwards.
 
+## Plan Execution
+
+`packages/planner/src/plan-execution.ts` is the only place in the product that
+modifies a developer's working tree, so the guards live there rather than in
+whichever shell called it.
+
+`applyPlanChanges` resolves every path and refuses anything outside the
+workspace root. A plan is data, and data naming `../../etc/passwd` must not
+reach outside the repo because a model produced it. Refusals are reported
+rather than thrown: one bad path should not abandon the rest half-applied. An
+update with no replacement content is refused rather than written as an empty
+file.
+
+`compareAgainstPlan` classifies what changed against what was approved —
+changed as planned, planned but untouched, and **changed but never planned**.
+That last category is the one a review reading only the plan would miss, and
+scope creep used to pass silently because nothing compared the two.
+
+`/implement` passes four gates before writing: an approved plan (a draft is not
+authorization), `verifyPlanFreshness` (a file that moved since the plan quoted
+it must not be patched blind), the constraints the developer confirmed, and the
+workspace boundary. The checkpoint is captured before the first write.
+
 ## Feature Planning
 
 `packages/planner` owns feature plan generation. `FeaturePlanningService` reads or creates `.copilot-architect/repo-map.json`, reads optional workspace/custom command context, detects available instruction files, refreshes the local index, runs similar-feature search, and renders deterministic JSON and Markdown plan artifacts under `.copilot-architect/plans/`.

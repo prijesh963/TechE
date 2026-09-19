@@ -4,3 +4,4 @@ export * from "./markdown-renderer.js";
 export * from "./models.js";
 export * from "./workspace-planning-service.js";
 export * from "./plan-contract.js";
+export * from "./plan-execution.js";

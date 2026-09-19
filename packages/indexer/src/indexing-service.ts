@@ -440,6 +440,40 @@ export class IndexingService {
     };
   }
 
+  /**
+   * Every indexed file's content hash, keyed by path relative to `startPath`.
+   *
+   * This is the checkpoint a review compares against. Hashes rather than git,
+   * because it costs nothing extra — the index already stores them — and it
+   * works for untracked files and in a workspace with no repository at all.
+   *
+   * Paths are qualified by repo on a multi-repo workspace, matching how search
+   * results and the plan contract name files.
+   */
+  async fileHashes(options: ListFilesOptions = {}): Promise<Record<string, string>> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoRoot = await resolveRepoRoot(startPath, options.strictRoot);
+    const fanOut = await resolveRegisteredRepos(repoRoot);
+    const repos = fanOut.length > 0 ? fanOut : [{ name: "", repoRoot }];
+    const hashes: Record<string, string> = {};
+
+    for (const repo of repos) {
+      const index = await this.readOrCreateIndex(
+        repo.repoRoot,
+        options.strictRoot
+      ).catch(() => undefined);
+
+      for (const document of index?.documents ?? []) {
+        const key = repo.name
+          ? `${repo.name}/${document.relativePath}`
+          : document.relativePath;
+        hashes[key] = document.contentHash;
+      }
+    }
+
+    return hashes;
+  }
+
   async status(startPath = process.cwd()): Promise<IndexStatus> {
     const repoRoot = await findRepoRoot(path.resolve(startPath));
     const indexPath = getIndexPath(repoRoot);

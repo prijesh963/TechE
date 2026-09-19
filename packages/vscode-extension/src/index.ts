@@ -8,10 +8,20 @@ import {
   buildPlannedChange,
   createPlanContract,
   writeApprovedPlan,
+  applyPlanChanges,
+  compareAgainstPlan,
+  plannedPaths,
+  verifyPlanFreshness,
+  type ApplyChangeInput,
   type PlanContract,
   type PlannedChange
 } from "@copilot-architect/planner";
-import { SessionService, type SessionPhase } from "@copilot-architect/session";
+import {
+  SessionService,
+  checkConstraints,
+  diffCheckpoint,
+  type SessionPhase
+} from "@copilot-architect/session";
 
 export const EXTENSION_ID = "copilotArchitect";
 export const VIEW_CONTAINER_ID = "copilotArchitect";
@@ -1128,7 +1138,7 @@ export function activate(
             await runPlanPhase(vscode, sessions, workspaceRoot, prompt, stream);
             break;
           case "implement":
-            await runImplementPhase(sessions, workspaceRoot, stream);
+            await runImplementPhase(vscode, sessions, workspaceRoot, stream, token);
             break;
           case "review":
             await runReviewPhase(sessions, workspaceRoot, stream);
@@ -1957,10 +1967,22 @@ async function runPlanPhase(
   });
 }
 
+/**
+ * Applies the approved plan.
+ *
+ * Four gates before anything is written, in order of what they protect:
+ * approval (no draft may authorize code), freshness (a file that moved since
+ * the plan quoted it must not be patched blind), constraints the developer
+ * confirmed, and finally the workspace boundary enforced inside
+ * applyPlanChanges. The checkpoint is captured before the first write, so
+ * review can tell this feature's changes from everything else in the tree.
+ */
 async function runImplementPhase(
+  vscode: VscodeApiLike,
   sessions: SessionService,
   workspaceRoot: string,
-  stream: ChatResponseStreamLike
+  stream: ChatResponseStreamLike,
+  token: unknown
 ): Promise<void> {
   const session = await sessions.current({ workspaceRoot });
 
@@ -1977,16 +1999,119 @@ async function runImplementPhase(
     return;
   }
 
+  const plan = approved.content as unknown as PlanContract;
   await sessions.setPhase({ workspaceRoot }, "implement");
-  stream.markdown(
-    `Plan v${approved.version} is approved and ready.\n\n` +
-      "Applying changes is not wired up yet — the approval gate, the plan " +
-      "contract and its freshness check are in place, but writing files is " +
-      "deliberately a separate step.\n"
+
+  stream.progress?.("Checking the plan still fits the code…");
+  const freshness = await verifyPlanFreshness(plan, workspaceRoot);
+  if (!freshness.ok) {
+    stream.markdown("**Stopping — the code moved since this plan was written.**\n\n");
+    if (freshness.drifted.length > 0) {
+      stream.markdown(`Changed since planning: ${list(freshness.drifted)}\n`);
+    }
+    if (freshness.missing.length > 0) {
+      stream.markdown(`No longer present: ${list(freshness.missing)}\n`);
+    }
+    stream.markdown(
+      "\nPatching these against a stale snapshot would corrupt them. Re-plan with `/create-plan`.\n"
+    );
+    return;
+  }
+
+  const constraints = checkConstraints(
+    sessions.activeDecisions(session),
+    plannedPaths(plan)
   );
-  stream.button?.({ command: END_SESSION_COMMAND, title: "End session" });
+  if (constraints.violations.length > 0) {
+    stream.markdown("**Stopping — this plan breaks a constraint you set.**\n\n");
+    for (const violation of constraints.violations) {
+      stream.markdown(
+        `- ${violation.statement} — would touch ${list(violation.paths)}\n`
+      );
+    }
+    return;
+  }
+
+  // Before the first write, so review has a baseline.
+  await sessions.captureCheckpoint(
+    { workspaceRoot },
+    await new IndexingService().fileHashes({ startPath: workspaceRoot })
+  );
+
+  stream.progress?.("Writing the changes…");
+  const changes: ApplyChangeInput[] = [];
+  for (const change of plan.changes) {
+    if (change.kind === "delete") {
+      changes.push({ relativePath: change.relativePath, kind: "delete" });
+      continue;
+    }
+
+    const afterText = await requestLmText(
+      vscode,
+      [
+        `Rewrite this file to satisfy: ${plan.request}`,
+        `Reason this file is in scope: ${change.rationale}`,
+        "",
+        "Return ONLY the complete new file contents. No explanation, no fences.",
+        "",
+        change.before
+          ? `Current contents (lines ${change.before.startLine}-${change.before.endLine} of ${change.before.fileLines}):\n${change.before.text}`
+          : "This is a new file."
+      ].join("\n"),
+      token
+    );
+
+    if (!afterText?.trim()) {
+      // Recorded as refused by applyPlanChanges rather than written as empty.
+      changes.push({ relativePath: change.relativePath, kind: change.kind });
+      continue;
+    }
+
+    changes.push({
+      relativePath: change.relativePath,
+      kind: change.kind,
+      afterText: unfence(afterText)
+    });
+  }
+
+  const applied = await applyPlanChanges({ workspaceRoot, changes });
+
+  if (applied.written.length > 0 || applied.deleted.length > 0) {
+    await sessions.markImplemented({ workspaceRoot }, approved.version);
+  }
+
+  stream.markdown(`## Implemented plan v${approved.version}\n\n`);
+  if (applied.written.length > 0) {
+    stream.markdown(`**Written** — ${list(applied.written)}\n\n`);
+  }
+  if (applied.deleted.length > 0) {
+    stream.markdown(`**Deleted** — ${list(applied.deleted)}\n\n`);
+  }
+  if (applied.refused.length > 0) {
+    stream.markdown("**Not applied**\n");
+    for (const refused of applied.refused) {
+      stream.markdown(`- \`${refused.relativePath}\` — ${refused.reason}\n`);
+    }
+    stream.markdown("\n");
+  }
+  if (constraints.unenforceable.length > 0) {
+    // Honest degradation: not verified is not the same as honoured.
+    stream.markdown(
+      `_${constraints.unenforceable.length} constraint(s) could not be checked automatically: ` +
+        `${constraints.unenforceable.map((c) => c.statement).join("; ")}._\n\n`
+    );
+  }
+
+  stream.markdown("Run `/review` to compare this against the approved plan.\n");
 }
 
+/**
+ * Compares what changed against what was approved.
+ *
+ * Reads the checkpoint rather than git, so it works in a workspace with no
+ * repository — and says plainly what it cannot see rather than presenting a
+ * partial review as a complete one.
+ */
 async function runReviewPhase(
   sessions: SessionService,
   workspaceRoot: string,
@@ -2001,17 +2126,65 @@ async function runReviewPhase(
 
   await sessions.setPhase({ workspaceRoot }, "review");
 
-  if (!session.checkpoint) {
+  const approved = sessions.latestApprovedPlan(session);
+  if (!session.checkpoint || !approved) {
     stream.markdown(
-      "No checkpoint was taken, so I cannot tell this feature's changes from " +
-        "everything else in the tree. A checkpoint is captured when " +
-        "implementation starts."
+      "Nothing to review yet — a checkpoint is captured when `/implement` runs, " +
+        "and there must be an approved plan to compare against."
     );
     return;
   }
 
-  stream.markdown("Review against the approved plan is not wired up yet.\n");
+  stream.progress?.("Comparing against the approved plan…");
+  const diff = diffCheckpoint(
+    session.checkpoint,
+    await new IndexingService().fileHashes({ startPath: workspaceRoot })
+  );
+  const plan = approved.content as unknown as PlanContract;
+  const comparison = compareAgainstPlan(plan, diff);
+
+  stream.markdown(`## Review against plan v${approved.version}\n\n`);
+
+  if (comparison.asPlanned.length > 0) {
+    stream.markdown(`**Changed as planned** — ${list(comparison.asPlanned)}\n\n`);
+  }
+  if (comparison.untouched.length > 0) {
+    stream.markdown(
+      `**Planned but unchanged** — ${list(comparison.untouched)}\n` +
+        "_The work may be incomplete._\n\n"
+    );
+  }
+  if (comparison.unplanned.length > 0) {
+    stream.markdown(
+      `**Changed but not in the plan** — ${list(comparison.unplanned)}\n` +
+        "_Was that deliberate? This is the part a review reading only the plan would miss._\n\n"
+    );
+  }
+  if (comparison.deleted.length > 0) {
+    stream.markdown(`**Deleted** — ${list(comparison.deleted)}\n\n`);
+  }
+  if (
+    comparison.asPlanned.length === 0 &&
+    comparison.unplanned.length === 0 &&
+    comparison.deleted.length === 0
+  ) {
+    stream.markdown("Nothing has changed since the checkpoint.\n\n");
+  }
+
+  const unplannedWithoutSnapshot = comparison.unplanned.length;
+  if (unplannedWithoutSnapshot > 0) {
+    stream.markdown(
+      `_I can tell you those ${unplannedWithoutSnapshot} file(s) changed but not what changed inside them: ` +
+        "only files the plan quoted carry a before-snapshot._\n\n"
+    );
+  }
+
+  stream.markdown(await buildReceipts(workspaceRoot));
   stream.button?.({ command: END_SESSION_COMMAND, title: "End session" });
+}
+
+function list(paths: string[]): string {
+  return paths.map((item) => `\`${item}\``).join(", ");
 }
 
 // Returns the absolute paths of all repos registered in workspace.json.
@@ -2517,6 +2690,35 @@ function buildCommandLmPrompt(
     default:
       return undefined;
   }
+}
+
+/**
+ * Asks the model for text and returns it, rather than streaming it to chat.
+ *
+ * Implementation needs the replacement code in hand so it can be checked and
+ * written; showing it to the user is a separate decision.
+ */
+async function requestLmText(
+  vscode: VscodeApiLike,
+  prompt: string,
+  token: unknown
+): Promise<string | undefined> {
+  const collected: string[] = [];
+  const sink: ChatResponseStreamLike = {
+    markdown: (value: string) => collected.push(value)
+  };
+
+  const ok = await streamLmResponse(vscode, prompt, sink, token);
+  return ok ? collected.join("") : undefined;
+}
+
+/**
+ * Strips a fenced code block, which models add even when told not to. Writing
+ * the fence into the file would corrupt it.
+ */
+function unfence(text: string): string {
+  const fenced = /^\s*```[a-zA-Z0-9+-]*\n([\s\S]*?)\n?```\s*$/.exec(text.trim());
+  return (fenced ? fenced[1] : text).trim() + "\n";
 }
 
 async function streamLmResponse(
