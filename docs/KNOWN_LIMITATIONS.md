@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–21 merged. The redesign is complete; what is below is
+**Status:** Phases 0–22 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---

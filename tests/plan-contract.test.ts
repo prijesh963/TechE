@@ -306,6 +306,53 @@ async function createRepo(files: Record<string, string>): Promise<string> {
 }
 
 describe("planValidationCommands", () => {
+  it("keeps the arguments, so the command actually runs the tests", () => {
+    // Reported from a real run: a plan committed to "./mvnw, mvn". Adapters
+    // record the executable and its arguments separately, and taking the
+    // executable alone produces a command that prints usage and tests
+    // nothing.
+    const commands = planValidationCommands({
+      repos: [
+        {
+          root: "/repo",
+          commands: {
+            test: [{ name: "./mvnw test", command: "./mvnw", args: ["test"] }],
+            lint: [{ name: "npm run lint", command: "npm", args: ["run", "lint"] }]
+          }
+        }
+      ]
+    });
+
+    expect(commands).toEqual([
+      { command: "./mvnw test", cwd: "/repo" },
+      { command: "npm run lint", cwd: "/repo" }
+    ]);
+  });
+
+  it("falls back to executable and args when there is no readable name", () => {
+    const commands = planValidationCommands({
+      repos: [{ commands: { test: [{ command: "mvn", args: ["test"] }] } }]
+    });
+
+    expect(commands).toEqual([{ command: "mvn test" }]);
+  });
+
+  it("ignores a name that is a label rather than the command", () => {
+    // A name that does not start with the executable would run as something
+    // else entirely.
+    const commands = planValidationCommands({
+      repos: [
+        {
+          commands: {
+            test: [{ name: "Unit tests (fast)", command: "mvn", args: ["test"] }]
+          }
+        }
+      ]
+    });
+
+    expect(commands).toEqual([{ command: "mvn test" }]);
+  });
+
   it("commits a plan to the tests and lint the repo already has", () => {
     // PlanContract.validation existed from the start and was never populated,
     // so every plan carried an empty list and the validator package was
@@ -315,9 +362,9 @@ describe("planValidationCommands", () => {
         {
           root: "/repo",
           commands: {
-            test: [{ command: "npm test" }],
-            lint: [{ command: "npm run lint" }],
-            build: [{ command: "npm run build" }]
+            test: [{ command: "npm", args: ["test"] }],
+            lint: [{ command: "npm", args: ["run", "lint"] }],
+            build: [{ command: "npm", args: ["run", "build"] }]
           }
         }
       ]

@@ -382,7 +382,11 @@ export function planValidationCommands(repoMap: unknown): PlanCommand[] {
     ).commands;
 
     for (const entry of [...(detected?.test ?? []), ...(detected?.lint ?? [])]) {
-      const command = (entry as { command?: string }).command?.trim();
+      // Adapters record the executable and its arguments separately — Maven
+      // as `mvn` + `["test"]`, npm as `npm` + `["test"]`. Taking the
+      // executable alone produced a plan committing to `./mvnw`, which prints
+      // usage and tests nothing.
+      const command = joinDetectedCommand(entry);
       if (!command || seen.has(command)) continue;
 
       seen.add(command);
@@ -400,3 +404,31 @@ export function planValidationCommands(repoMap: unknown): PlanCommand[] {
 
 /** Past this, the plan is committing to a build rather than a check. */
 const MAX_PLAN_VALIDATION_COMMANDS = 4;
+
+/**
+ * The full command line an adapter detected, executable and arguments
+ * together.
+ *
+ * Prefers the adapter's own `name` where it has one: adapters set it to the
+ * readable form a developer would type — `./mvnw test`, `npm run lint` — and
+ * it is what the plan should quote back.
+ */
+function joinDetectedCommand(entry: unknown): string | undefined {
+  const detected = entry as { command?: string; args?: unknown[]; name?: string };
+  const command = detected.command?.trim();
+
+  if (!command) {
+    return undefined;
+  }
+
+  const args = Array.isArray(detected.args)
+    ? detected.args.filter((arg): arg is string => typeof arg === "string")
+    : [];
+
+  const joined = [command, ...args].join(" ").trim();
+  const name = detected.name?.trim();
+
+  // The name is used only when it is the same command said more readably, not
+  // when it is a label that would run as something else.
+  return name && name.startsWith(command) ? name : joined;
+}
