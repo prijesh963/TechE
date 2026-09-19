@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   COPILOT_ARCHITECT_COMMANDS,
+  getChatHelpText,
   COPILOT_ARCHITECT_SECONDARY_ACTIONS,
   DASHBOARD_PRIMARY_ACTIONS,
   DASHBOARD_VIEW_ID,
@@ -756,6 +757,43 @@ describe("VS Code extension shell", () => {
     // Repos that DO share code keep their graph current.
     await marker({ repos: ["a", "b"], crossRepoEdgeCount: 4 });
     expect(await shouldBuildWorkspaceGraph(workspaceRoot, ["a", "b"])).toBe(true);
+  });
+
+  it("offers four phases, not a menu of twelve", async () => {
+    // The R2D2 report was this problem: the user wrote "Code Analysis Agent"
+    // and typed @architect — two different systems. One door, four steps.
+    const manifest = JSON.parse(
+      await readFile(path.join("packages", "vscode-extension", "package.json"), "utf8")
+    );
+    const participant = manifest.contributes.chatParticipants[0];
+
+    expect(participant.name).toBe("architect");
+    expect(participant.commands.map((c: { name: string }) => c.name)).toEqual([
+      "analyze",
+      "create-plan",
+      "implement",
+      "review",
+      "help"
+    ]);
+
+    // Approve and End are commands, so they can be rendered as buttons. The
+    // gate that authorizes writing code must not rest on reading sentiment.
+    const ids = manifest.contributes.commands.map(
+      (c: { command: string }) => c.command
+    );
+    expect(ids).toContain("copilotArchitect.approvePlan");
+    expect(ids).toContain("copilotArchitect.endSession");
+  });
+
+  it("states the no-command rule rather than guessing intent", () => {
+    const help = getChatHelpText();
+
+    expect(help).toContain("/create-plan");
+    expect(help).toContain("No slash command means `/analyze`");
+    // The old routing inferred "question" vs "plan" from wording, so the same
+    // sentence could route two ways on two days.
+    expect(help).not.toContain("/plan <feature>");
+    expect(help).not.toContain("/diagnostics");
   });
 });
 

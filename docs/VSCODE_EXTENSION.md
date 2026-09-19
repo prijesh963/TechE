@@ -2,6 +2,16 @@
 
 The `@copilot-architect/vscode-extension` package is a thin VS Code shell. It contributes a sidebar dashboard, Command Palette commands, and a GitHub Copilot Chat participant (`@architect`).
 
+`@architect` offers four phases — `/analyze`, `/create-plan`, `/implement`,
+`/review` — and nothing else. A prompt with no slash command means `/analyze`:
+a stated rule rather than an inference about wording. Approving a plan and
+ending a session are **commands rendered as buttons**, because the step that
+authorizes writing code must not depend on a model reading sentiment out of
+"looks good to me". Every response ends with what it was based on.
+
+Setup, MCP and agent commands moved to the Command Palette and dashboard. They
+are still available; they are no longer competing front doors.
+
 Repo retrieval calls `IndexingService` directly — the same engine the MCP tools and CLI use — so every surface answers the same question the same way. Command workflows still delegate to `npm run cli -- ...`. No business logic lives in the extension itself.
 
 ---

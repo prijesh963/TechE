@@ -9,5 +9,9 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../indexer" }]
+  "references": [
+    { "path": "../indexer" },
+    { "path": "../planner" },
+    { "path": "../session" }
+  ]
 }

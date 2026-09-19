@@ -34,7 +34,9 @@
     "onCommand:copilotArchitect.setupRepo",
     "onCommand:copilotArchitect.startAndSetupMcp",
     "onCommand:copilotArchitect.stopMcp",
-    "onCommand:copilotArchitect.moreActions"
+    "onCommand:copilotArchitect.moreActions",
+    "onCommand:copilotArchitect.approvePlan",
+    "onCommand:copilotArchitect.endSession"
   ],
   "contributes": {
     "commands": [
@@ -121,6 +123,14 @@
         "command": "copilotArchitect.moreActions",
         "title": "Copilot Architect: More Actions",
         "icon": "$(ellipsis)"
+      },
+      {
+        "command": "copilotArchitect.approvePlan",
+        "title": "Copilot Architect: Approve Plan"
+      },
+      {
+        "command": "copilotArchitect.endSession",
+        "title": "Copilot Architect: End Session"
       }
     ],
     "viewsContainers": {
@@ -156,47 +166,27 @@
         "fullName": "Copilot Architect",
         "name": "architect",
         "description": "Analyze repos, generate plans, validate, and review with Copilot Architect",
-        "isSticky": false,
+        "isSticky": true,
         "commands": [
           {
             "name": "analyze",
-            "description": "Detect languages, frameworks, and entry points in the current repo"
+            "description": "Explore the repo \u2014 use before planning a change"
           },
           {
-            "name": "index",
-            "description": "Build a searchable local file index"
+            "name": "create-plan",
+            "description": "Draft an implementation plan you approve before any code is written"
           },
           {
-            "name": "plan",
-            "description": "Generate a feature implementation plan \u2014 follow with your feature description"
-          },
-          {
-            "name": "validate",
-            "description": "Run build, test, lint, and format commands"
+            "name": "implement",
+            "description": "Apply the approved plan"
           },
           {
             "name": "review",
-            "description": "Generate a review report from the latest git diff"
-          },
-          {
-            "name": "search",
-            "description": "Search the repo index \u2014 follow with your search query"
-          },
-          {
-            "name": "diagnostics",
-            "description": "Report repo readiness and analysis signals"
-          },
-          {
-            "name": "agents",
-            "description": "Install custom Copilot agent templates into .github/agents/"
-          },
-          {
-            "name": "instructions",
-            "description": "Generate .github/copilot-instructions.md from repo analysis"
+            "description": "Compare what was built against what was approved"
           },
           {
             "name": "help",
-            "description": "Show all available Copilot Architect commands"
+            "description": "Show what Copilot Architect can do"
           }
         ]
       }
@@ -209,6 +199,8 @@
     }
   },
   "dependencies": {
-    "@copilot-architect/indexer": "0.1.0"
+    "@copilot-architect/indexer": "0.1.0",
+    "@copilot-architect/planner": "0.1.0",
+    "@copilot-architect/session": "0.1.0"
   }
 }

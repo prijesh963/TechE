@@ -4,6 +4,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import { IndexingService, tokenize } from "@copilot-architect/indexer";
+import {
+  buildPlannedChange,
+  createPlanContract,
+  writeApprovedPlan,
+  type PlanContract,
+  type PlannedChange
+} from "@copilot-architect/planner";
+import { SessionService, type SessionPhase } from "@copilot-architect/session";
 
 export const EXTENSION_ID = "copilotArchitect";
 export const VIEW_CONTAINER_ID = "copilotArchitect";
@@ -195,6 +203,12 @@ export interface ChatRequestLike {
 export interface ChatResponseStreamLike {
   markdown(value: string): void;
   progress?(value: string): void;
+  /**
+   * Renders a clickable command. Approve and End are buttons rather than
+   * phrases because the gate that authorizes writing code must not depend on a
+   * model reading sentiment out of "looks good to me".
+   */
+  button?(command: { command: string; title: string; arguments?: unknown[] }): void;
 }
 
 export interface ChatHistoryTurnLike {
@@ -862,7 +876,35 @@ export function activate(
     );
   }
 
+  const chatSessions = new SessionService();
+
   context.subscriptions.push(
+    /**
+     * Approval is a command, not a phrase. It is the gate that authorizes
+     * writing code and promotes a draft to a plan on disk, so it must not rest
+     * on a model deciding that "looks good to me" meant yes.
+     */
+    vscode.commands.registerCommand(APPROVE_PLAN_COMMAND, async (...args) => {
+      const version = Number(args[0]);
+      const approved = await chatSessions.approvePlan({ workspaceRoot }, version);
+      const plan = chatSessions.latestApprovedPlan(approved);
+
+      if (plan) {
+        // Only now does it leave the session. The session stores plan bodies
+        // opaquely — it owns versioning and approval, the planner owns shape.
+        await writeApprovedPlan(workspaceRoot, plan.content as unknown as PlanContract);
+      }
+
+      dashboard.refresh();
+      vscode.window.showInformationMessage(
+        `Plan v${version} approved — run \`/implement\` when ready.`
+      );
+    }),
+    vscode.commands.registerCommand(END_SESSION_COMMAND, async () => {
+      await chatSessions.end({ workspaceRoot });
+      dashboard.refresh();
+      vscode.window.showInformationMessage("Session ended.");
+    }),
     vscode.commands.registerCommand("copilotArchitect.openDashboard", () =>
       dashboard.openPanel()
     ),
@@ -1036,221 +1078,68 @@ export function activate(
   );
 
   if (vscode.chat) {
+    const sessions = new SessionService();
+
+    /**
+     * One door. Four phases, named explicitly rather than guessed.
+     *
+     * The previous handler ran `classifyIntent` over the prompt to decide
+     * whether you wanted a question answered or a feature planned. Guessing
+     * that from wording meant the same sentence could route two ways on two
+     * days. A bare prompt now means `/analyze` — a stated rule rather than an
+     * inference — and everything else is asked for by name.
+     */
     const chatHandler: ChatRequestHandlerLike = async (
       request,
       context,
       stream,
       token
     ) => {
-      if (request.command === "help" || (!request.command && !request.prompt.trim())) {
+      const prompt = request.prompt.trim();
+      const command = request.command ?? "analyze";
+
+      if (command === "help" || (!request.command && !prompt)) {
         stream.markdown(getChatHelpText());
         return;
       }
 
-      const args = resolveChatCommandArgs(request.command, request.prompt.trim());
-      if (!args) {
+      const phase = CHAT_PHASES[command];
+      if (!phase) {
         stream.markdown(
-          `Unknown command \`/${request.command}\`. Use \`/help\` to see available commands.`
+          `Unknown command \`/${command}\`. Use \`/help\` to see what @architect can do.`
         );
         return;
       }
 
-      // args[0] is the actual CLI command regardless of whether the user used a slash command
-      const cliCommand = args[0];
-
-      // Workspace-aware arg resolution: workspace plan uses the workspace root and all repos
-      const chatRepoRoots = await getRegisteredRepoRoots(workspaceRoot);
-      let runArgs: string[];
-      if (chatRepoRoots.length > 0 && cliCommand === "plan") {
-        runArgs = ["workspace", "plan", ...args.slice(1), "--path", workspaceRoot];
-      } else {
-        runArgs = [...args, "--path", workspaceRoot];
-      }
-
-      // Question/analysis prompts: skip the CLI entirely and answer conversationally.
-      // The plan CLI pipeline is designed for feature implementation — running it for
-      // questions produces "Files to modify" / risk-score output that is wrong for Q&A.
-      if (cliCommand === "question") {
-        stream.progress?.("Searching your codebase…");
-        const userPrompt = request.prompt.trim();
-        const userTerms = [...new Set(tokenize(userPrompt))];
-        const repoResult = await buildRepoContext(workspaceRoot, userPrompt);
-        let fileCtx = await readFilesForLmContext(
-          workspaceRoot,
-          repoResult.fileAnchors,
-          userTerms
-        );
-        const activeEditor = vscode.window.activeTextEditor;
-        if (activeEditor) {
-          const activeRelPath = path.relative(
-            workspaceRoot,
-            activeEditor.document.fileName
-          );
-          if (!repoResult.fileAnchors.some((a) => a.relativePath === activeRelPath)) {
-            fileCtx += `\n\n=== Currently open in editor: ${activeRelPath} ===\n${activeEditor.document.getText().slice(0, 3_000)}`;
-          }
-        }
-        // An empty context used to be invisible: the model received nothing but
-        // the open editor tab and answered as though the repo were empty, which
-        // reads as a wrong answer rather than a missing setup step.
-        let repoCtx = repoResult.contextText;
-        if (!repoCtx.trim() && repoResult.fileAnchors.length === 0) {
-          const diagnosis = await diagnoseEmptyContext(workspaceRoot);
-          stream.markdown(`> ⚠️ ${diagnosis}\n\n`);
-          repoCtx =
-            `NO REPOSITORY CONTEXT IS AVAILABLE. ${diagnosis}\n` +
-            "Tell the user this and name that step. Do not infer what the " +
-            "repository does or does not contain — you have not seen it.";
-        }
-
-        const historyCtx = formatChatHistory(context.history);
-        if (vscode.lm) {
-          stream.progress?.("Generating answer…");
-          const lmPrompt = buildCommandLmPrompt(
-            "question",
-            userPrompt,
-            "",
-            repoCtx,
-            fileCtx,
-            historyCtx
-          );
-          if (lmPrompt) {
-            await streamLmResponse(vscode, lmPrompt, stream, token);
-          }
-        }
-        return;
-      }
-
-      stream.progress?.(getChatProgressMessage(cliCommand));
-
-      const result = await runner.run({ args: runArgs, cwd: extensionRoot });
-
-      if (result.exitCode !== 0) {
-        const errText = (result.stderr || result.stdout).trim();
-        stream.markdown(
-          `**Command failed** (exit ${result.exitCode})\n\n\`\`\`\n${errText.slice(0, 2000)}\n\`\`\``
-        );
-        return;
-      }
-
-      // Prefer the written markdown artifact over raw stdout
-      let content = result.stdout;
-      const artifactPath = getChatArtifactPath(cliCommand, workspaceRoot);
-      if (artifactPath) {
-        try {
-          content = await readFile(artifactPath, "utf8");
-        } catch {
-          /* no artifact yet — use stdout */
-        }
-      }
-
-      // Try LM for every command
-      if (vscode.lm) {
-        stream.progress?.("Getting AI-powered insights…");
-        const userPrompt = request.prompt.trim();
-        const userTerms = [...new Set(tokenize(userPrompt))];
-
-        const repoResult =
-          cliCommand === "plan"
-            ? await buildRepoContext(workspaceRoot, userPrompt)
-            : { contextText: "", fileAnchors: [] as FileAnchor[] };
-        const repoCtx = repoResult.contextText;
-
-        // Collect full file content for plan commands so the LM can see
-        // existing implementations rather than guessing from 4 KB previews.
-        let fileContext = "";
-        if (cliCommand === "plan") {
-          // Merge plan files (static analysis) with symbol-registry matches
-          // (from buildRepoContext). Plan files come first; registry anchors
-          // supply line numbers for surgical excerpt extraction.
-          const planFilePaths = extractFilesFromPlan(content);
-          const anchorMap = new Map(
-            repoResult.fileAnchors.map((a) => [a.relativePath, a.anchorLine])
-          );
-          const merged: FileAnchor[] = [
-            ...planFilePaths.map((p) => ({
-              relativePath: p,
-              anchorLine: anchorMap.get(p)
-            })),
-            ...repoResult.fileAnchors.filter(
-              (a) => !planFilePaths.includes(a.relativePath)
-            )
-          ];
-          if (merged.length > 0) {
-            fileContext = await readFilesForLmContext(workspaceRoot, merged, userTerms);
-          }
-          // Include the currently open file so the LM sees the exact code the
-          // developer is looking at right now.
-          const activeEditor = vscode.window.activeTextEditor;
-          if (activeEditor) {
-            const activeRelPath = path.relative(
+      try {
+        switch (phase) {
+          case "analyze":
+            await runAnalyzePhase(
+              vscode,
+              sessions,
               workspaceRoot,
-              activeEditor.document.fileName
+              prompt,
+              context,
+              stream,
+              token
             );
-            if (!merged.some((a) => a.relativePath === activeRelPath)) {
-              const activeContent = activeEditor.document.getText().slice(0, 3_000);
-              fileContext += `\n\n=== Currently open in editor: ${activeRelPath} ===\n${activeContent}`;
-            }
-          }
+            break;
+          case "plan":
+            await runPlanPhase(vscode, sessions, workspaceRoot, prompt, stream);
+            break;
+          case "implement":
+            await runImplementPhase(sessions, workspaceRoot, stream);
+            break;
+          case "review":
+            await runReviewPhase(sessions, workspaceRoot, stream);
+            break;
         }
-
-        const historyCtx = formatChatHistory(context.history);
-
-        // For plan commands, try the agentic tool-use loop first — it lets the
-        // LM iteratively request the files it needs rather than relying on a
-        // single pre-selected context window.
-        if (cliCommand === "plan") {
-          stream.progress?.("Reasoning over your codebase…");
-          const agentSucceeded = await runAgenticPlanLoop(
-            vscode,
-            workspaceRoot,
-            userPrompt,
-            [repoCtx, historyCtx ? `\n${historyCtx}` : ""].join(""),
-            repoResult.fileAnchors,
-            stream,
-            token
-          );
-          if (agentSucceeded) {
-            const hint = getChatFollowUpHint(cliCommand);
-            if (hint) stream.markdown(hint);
-            return;
-          }
-          // Fall through to single-shot if agent loop fails or is unsupported.
-          stream.progress?.("Getting AI-powered insights…");
-        }
-
-        const lmPrompt = buildCommandLmPrompt(
-          cliCommand,
-          userPrompt,
-          content,
-          repoCtx,
-          fileContext,
-          historyCtx
-        );
-        if (lmPrompt) {
-          const streamed = await streamLmResponse(vscode, lmPrompt, stream, token);
-          if (streamed) {
-            const hint = getChatFollowUpHint(cliCommand);
-            if (hint) stream.markdown(hint);
-            return;
-          }
-        }
-      } else if (cliCommand === "plan") {
+      } catch (error) {
+        // Never a bare failure: the developer should know which step broke.
         stream.markdown(
-          "> ℹ️ **GitHub Copilot language model not available.** Install GitHub Copilot Chat and sign in for AI-powered answers. Showing static analysis:\n\n"
+          `\n**${phase} failed** — ${error instanceof Error ? error.message : String(error)}`
         );
       }
-
-      // Fallback: show clean formatted output
-      if (artifactPath) {
-        const fallback =
-          cliCommand === "plan" ? extractPlanSummary(content) : content.slice(0, 10000);
-        stream.markdown(fallback);
-      } else {
-        stream.markdown(formatCliOutputAsMarkdown(content));
-      }
-      const hint = getChatFollowUpHint(cliCommand);
-      if (hint) stream.markdown(hint);
     };
 
     context.subscriptions.push(
@@ -1861,132 +1750,268 @@ function trimForDashboard(value: string): string {
   return value.trim().slice(-2000);
 }
 
-export function resolveChatCommandArgs(
-  command: string | undefined,
-  prompt: string
-): string[] | undefined {
-  switch (command) {
-    case "analyze":
-      return ["analyze"];
-    case "index":
-      return ["index"];
-    case "plan":
-      return prompt ? ["plan", prompt] : undefined;
-    case "validate":
-      return ["validate"];
-    case "review":
-      return ["review", "--plan", "latest", "--validation", "latest"];
-    case "search":
-      return prompt ? ["search", prompt] : undefined;
-    case "diagnostics":
-      return ["diagnostics"];
-    case "agents":
-      return ["agents", "install"];
-    case "instructions":
-      return ["instructions", "generate"];
-    default:
-      if (!prompt) return undefined;
-      // Free-form messages: route to the appropriate handler based on intent.
-      // Questions and analysis requests get a conversational Q&A path (no CLI plan artifact).
-      // Feature implementation requests go through the plan pipeline.
-      return classifyIntent(prompt) === "question"
-        ? ["question", prompt]
-        : ["plan", prompt];
+/** Slash command to session phase. The only routing table there is. */
+const CHAT_PHASES: Record<string, SessionPhase | undefined> = {
+  analyze: "analyze",
+  "create-plan": "plan",
+  implement: "implement",
+  review: "review"
+};
+
+export const APPROVE_PLAN_COMMAND = "copilotArchitect.approvePlan";
+export const END_SESSION_COMMAND = "copilotArchitect.endSession";
+
+/**
+ * What the answer was based on, on every response.
+ *
+ * Without it, a thin answer and a broken index look identical from the outside
+ * — which is how "the repo is empty" read as a finding rather than a failure.
+ * Stating the basis turns a silent gap into something a developer can question.
+ */
+async function buildReceipts(workspaceRoot: string): Promise<string> {
+  const inventory = await new IndexingService()
+    .listFiles({ startPath: workspaceRoot, limit: 1 })
+    .catch(() => undefined);
+
+  if (!inventory) {
+    return "_No index yet — run **Setup Repo**, or just ask again and one will be built._";
   }
+
+  const repos = inventory.repos?.length ?? 1;
+  return `_Looked at ${inventory.totalFiles} files across ${repos} repo${repos === 1 ? "" : "s"}._`;
+}
+
+/** Opens a session on first use rather than making setup a separate step. */
+async function ensureSession(
+  sessions: SessionService,
+  workspaceRoot: string,
+  title: string,
+  phase: SessionPhase
+): Promise<ReturnType<SessionService["open"]>> {
+  const current = await sessions.current({ workspaceRoot });
+
+  if (!current) {
+    return sessions.open({ workspaceRoot, title, phase });
+  }
+
+  return current.phase === phase
+    ? Promise.resolve(current)
+    : sessions.setPhase({ workspaceRoot }, phase);
+}
+
+/** Decisions on screen while planning, so a misreading is caught in seconds. */
+function renderDecisions(
+  sessions: SessionService,
+  session: Awaited<ReturnType<SessionService["open"]>>
+): string {
+  const decisions = sessions.activeDecisions(session);
+
+  if (decisions.length === 0) {
+    return "";
+  }
+
+  const rows = decisions
+    .map((decision) => {
+      const rejected = decision.rejected ? ` _(over ${decision.rejected})_` : "";
+      return `- **${decision.kind}** — ${decision.statement}${rejected}`;
+    })
+    .join("\n");
+
+  return `\n**Decisions so far**\n${rows}\n`;
+}
+
+async function runAnalyzePhase(
+  vscode: VscodeApiLike,
+  sessions: SessionService,
+  workspaceRoot: string,
+  prompt: string,
+  context: { history?: ChatHistoryTurnLike[] },
+  stream: ChatResponseStreamLike,
+  token: unknown
+): Promise<void> {
+  stream.progress?.("Searching your codebase…");
+  await ensureSession(sessions, workspaceRoot, prompt || "Repo analysis", "analyze");
+
+  const repoResult = await buildRepoContext(workspaceRoot, prompt);
+  const userTerms = [...new Set(tokenize(prompt))];
+  let fileContext = await readFilesForLmContext(
+    workspaceRoot,
+    repoResult.fileAnchors,
+    userTerms
+  );
+
+  const activeEditor = vscode.window.activeTextEditor;
+  if (activeEditor) {
+    const activeRelPath = path.relative(workspaceRoot, activeEditor.document.fileName);
+    if (
+      !repoResult.fileAnchors.some((anchor) => anchor.relativePath === activeRelPath)
+    ) {
+      fileContext += `\n\n=== Currently open in editor: ${activeRelPath} ===\n${activeEditor.document.getText().slice(0, 3_000)}`;
+    }
+  }
+
+  let repoContext = repoResult.contextText;
+  if (!repoContext.trim() && repoResult.fileAnchors.length === 0) {
+    const diagnosis = await diagnoseEmptyContext(workspaceRoot);
+    stream.markdown(`> ⚠️ ${diagnosis}\n\n`);
+    repoContext =
+      `NO REPOSITORY CONTEXT IS AVAILABLE. ${diagnosis}\n` +
+      "Tell the user this and name that step. Do not infer what the " +
+      "repository does or does not contain — you have not seen it.";
+  }
+
+  if (vscode.lm) {
+    stream.progress?.("Generating answer…");
+    const lmPrompt = buildCommandLmPrompt(
+      "question",
+      prompt,
+      "",
+      repoContext,
+      fileContext,
+      formatChatHistory(context.history ?? [])
+    );
+    if (lmPrompt) {
+      await streamLmResponse(vscode, lmPrompt, stream, token);
+    }
+  }
+
+  stream.markdown(`\n\n${await buildReceipts(workspaceRoot)}`);
+  stream.markdown("\n\nReady to plan a change? Use `/create-plan <what you want>`.");
 }
 
 /**
- * Classify a free-form prompt as a question/analysis request or a feature
- * implementation request. Questions get a conversational Q&A response;
- * implementation requests run the full planning pipeline.
+ * Drafts a plan into the session. Nothing is written to disk until Approve,
+ * which reverses the old order where a plan was written first and marked
+ * approved afterwards.
  */
-export function classifyIntent(prompt: string): "question" | "plan" {
-  const lower = prompt.toLowerCase().trim();
-
-  // Documentation requests — "create a doc", "write a readme", "document X"
-  if (
-    /\b(doc|docs|documentation|readme|wiki)\b/.test(lower) &&
-    /\b(create|write|generate|explain|add)\b/.test(lower)
-  ) {
-    return "question";
+async function runPlanPhase(
+  vscode: VscodeApiLike,
+  sessions: SessionService,
+  workspaceRoot: string,
+  prompt: string,
+  stream: ChatResponseStreamLike
+): Promise<void> {
+  if (!prompt) {
+    stream.markdown(
+      "Tell me what to plan — `/create-plan Add invoice approval workflow`."
+    );
+    return;
   }
 
-  // Explicit question starters
-  if (
-    /^(what|how|why|where|which|who|when|show|list|explain|describe|analyze|analyse|tell|give|can you explain|is there|are there|does|do )\b/.test(
-      lower
-    )
-  ) {
-    return "question";
+  stream.progress?.("Finding the files this touches…");
+  const session = await ensureSession(sessions, workspaceRoot, prompt, "plan");
+
+  const response = await new IndexingService()
+    .search({ startPath: workspaceRoot, query: prompt, limit: 8 })
+    .catch(() => undefined);
+  const results = response?.results ?? [];
+
+  if (results.length === 0) {
+    stream.markdown(
+      `I could not find anything in this repo matching that request, so I will not guess at a plan.\n\n${await buildReceipts(workspaceRoot)}`
+    );
+    return;
   }
 
-  // Strong analysis/explanation verbs anywhere in the prompt
-  if (
-    /\b(explain|describe|analyze|analyse|understand|overview|summarize|summarise|walk me through|show me how)\b/.test(
-      lower
-    )
-  ) {
-    return "question";
+  // Snapshots are read from disk by buildPlannedChange — never written by the
+  // model, which paraphrases existing code and corrupts the patch.
+  const changes: PlannedChange[] = [];
+  for (const result of results) {
+    changes.push(
+      await buildPlannedChange({
+        repoRoot: workspaceRoot,
+        relativePath: path.relative(workspaceRoot, result.filePath),
+        kind: "update",
+        rationale: `Matched on ${result.signals.join(", ")}`,
+        anchorLine: result.anchor?.line
+      })
+    );
   }
 
-  // "how X works / is implemented / is structured"
-  if (/\bhow\b.*(work|implement|structur|organiz|architect)/i.test(lower)) {
-    return "question";
-  }
+  const version = session.plans.length + 1;
+  const plan = createPlanContract({
+    request: prompt,
+    version,
+    decisions: sessions.activeDecisions(session),
+    changes
+  });
+  const withDraft = await sessions.addPlanVersion({ workspaceRoot }, { ...plan });
 
-  return "plan";
+  stream.markdown(`## Plan v${version} — draft\n\n**${prompt}**\n`);
+  stream.markdown(renderDecisions(sessions, withDraft));
+  stream.markdown("\n**Files this would touch**\n");
+  for (const change of changes) {
+    const quoted = change.before
+      ? `lines ${change.before.startLine}–${change.before.endLine} of ${change.before.fileLines}`
+      : "no snapshot — file could not be read";
+    stream.markdown(`- \`${change.relativePath}\` — ${quoted}\n`);
+  }
+  stream.markdown(`\n${await buildReceipts(workspaceRoot)}\n`);
+  stream.markdown(
+    "\nThis is a draft. Nothing is written until you approve it — tell me what to change, or:\n"
+  );
+  stream.button?.({
+    command: APPROVE_PLAN_COMMAND,
+    title: `Approve plan v${version}`,
+    arguments: [version]
+  });
 }
 
-function getChatProgressMessage(command: string): string {
-  const messages: Record<string, string> = {
-    question: "Searching your codebase…",
-    analyze: "Analyzing repository…",
-    index: "Building file index…",
-    plan: "Generating feature plan…",
-    validate: "Running validation commands…",
-    review: "Generating code review…",
-    search: "Searching repository…",
-    diagnostics: "Running diagnostics…",
-    agents: "Installing agent templates…",
-    instructions: "Generating Copilot instructions…"
-  };
-  return messages[command] ?? "Running Copilot Architect…";
+async function runImplementPhase(
+  sessions: SessionService,
+  workspaceRoot: string,
+  stream: ChatResponseStreamLike
+): Promise<void> {
+  const session = await sessions.current({ workspaceRoot });
+
+  if (!session) {
+    stream.markdown("No active session. Start with `/create-plan <what you want>`.");
+    return;
+  }
+
+  const approved = sessions.latestApprovedPlan(session);
+  if (!approved) {
+    stream.markdown(
+      "No approved plan. A draft is not authorization to write code — approve one first."
+    );
+    return;
+  }
+
+  await sessions.setPhase({ workspaceRoot }, "implement");
+  stream.markdown(
+    `Plan v${approved.version} is approved and ready.\n\n` +
+      "Applying changes is not wired up yet — the approval gate, the plan " +
+      "contract and its freshness check are in place, but writing files is " +
+      "deliberately a separate step.\n"
+  );
+  stream.button?.({ command: END_SESSION_COMMAND, title: "End session" });
 }
 
-function getChatArtifactPath(
-  command: string,
-  workspaceRoot: string
-): string | undefined {
-  const base = path.join(workspaceRoot, ".copilot-architect");
-  switch (command) {
-    case "plan":
-      return path.join(base, "plans", "latest-plan.md");
-    case "validate":
-      return path.join(base, "runs", "latest-validation.md");
-    case "review":
-      return path.join(base, "reviews", "latest-review.md");
-    default:
-      return undefined;
-  }
-}
+async function runReviewPhase(
+  sessions: SessionService,
+  workspaceRoot: string,
+  stream: ChatResponseStreamLike
+): Promise<void> {
+  const session = await sessions.current({ workspaceRoot });
 
-function getChatFollowUpHint(command: string): string | undefined {
-  switch (command) {
-    case "analyze":
-      return "\n\n---\n**Next steps:** Run `/index` to build a searchable file index, then `/plan <feature>` to generate an implementation plan.";
-    case "index":
-      return "\n\n---\n**Next steps:** Use `/search <query>` to find relevant files, or `/plan <feature>` to generate a plan.";
-    case "plan":
-      return "\n\n---\n**Next steps:** Run `/validate` to check build and tests, then ask `@FeatureImplementer` to implement the plan.";
-    case "validate":
-      return "\n\n---\n**Next steps:** Run `/review` to generate a review report, or ask `@Debugger` to diagnose any failures.";
-    case "review":
-      return "\n\n---\n**Next steps:** Share the review with `@CodeReviewer` for deeper analysis, or address the findings and re-run `/validate`.";
-    case "instructions":
-      return "\n\n---\n**Next steps:** Run `/agents` to install custom Copilot agent templates that use these instructions.";
-    default:
-      return undefined;
+  if (!session) {
+    stream.markdown("No active session to review.");
+    return;
   }
+
+  await sessions.setPhase({ workspaceRoot }, "review");
+
+  if (!session.checkpoint) {
+    stream.markdown(
+      "No checkpoint was taken, so I cannot tell this feature's changes from " +
+        "everything else in the tree. A checkpoint is captured when " +
+        "implementation starts."
+    );
+    return;
+  }
+
+  stream.markdown("Review against the approved plan is not wired up yet.\n");
+  stream.button?.({ command: END_SESSION_COMMAND, title: "End session" });
 }
 
 // Returns the absolute paths of all repos registered in workspace.json.
@@ -2004,14 +2029,6 @@ async function getRegisteredRepoRoots(workspaceRoot: string): Promise<string[]> 
   } catch {
     return [];
   }
-}
-
-function extractFilesFromPlan(markdown: string): string[] {
-  const m = /## Likely Files To Modify\n([\s\S]*?)(?=\n## |\s*$)/m.exec(markdown);
-  if (!m) return [];
-  return [...m[1].matchAll(/`([^`]+\.[a-zA-Z0-9]+)`/g)]
-    .map((match) => match[1])
-    .filter(Boolean);
 }
 
 /** A file with an optional 1-based anchor line (best-matching symbol location). */
@@ -2278,212 +2295,6 @@ interface RepoContextResult {
 }
 
 // ─── Claude-inspired retrieval mechanisms ────────────────────────────────────
-
-/**
- * Agentic tool-use loop.
- *
- * Instead of a single prompt → single answer, this sends the LM a set of
- * "tools" it can call (readFile, searchSymbol, followImport) and runs a
- * max-step loop. The LM requests the files it needs; we fetch them and send
- * the results back as tool responses — exactly how Claude Code works.
- *
- * Only runs when the VS Code LM API supports tool use (VS Code 1.94+).
- * Falls back to the standard single-shot path on any error.
- */
-async function runAgenticPlanLoop(
-  vscodeApi: VscodeApiLike,
-  workspaceRoot: string,
-  userPrompt: string,
-  initialContext: string,
-  fileAnchors: FileAnchor[],
-  stream: ChatResponseStreamLike,
-  token: unknown
-): Promise<boolean> {
-  if (!vscodeApi.lm) return false;
-
-  const TOOL_READ_FILE = "readFile";
-  const TOOL_SEARCH = "searchSymbol";
-  const MAX_STEPS = 4;
-
-  // System context for the agent
-  const systemCtx = [
-    "You are Copilot Architect, an AI assistant with deep knowledge of the developer's codebase.",
-    "You have tools to read files and search for symbols. Use them to find the existing implementation",
-    "before suggesting any new code. When you have enough context, answer the developer's question.",
-    initialContext
-  ].join("\n");
-
-  const tools = [
-    {
-      name: TOOL_READ_FILE,
-      description:
-        "Read a source file from the repository. Use the exact relative path.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: "Relative file path, e.g. src/auth/AuthService.ts"
-          },
-          startLine: {
-            type: "number",
-            description: "Optional 1-based line to start reading from"
-          }
-        },
-        required: ["path"]
-      }
-    },
-    {
-      name: TOOL_SEARCH,
-      description: "Search for a symbol or concept in the codebase index.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Symbol name or short phrase to search for"
-          }
-        },
-        required: ["query"]
-      }
-    }
-  ];
-
-  let models: LanguageModelLike[] = [];
-  try {
-    for (const selector of [
-      { vendor: "copilot", family: "gpt-4o" },
-      { vendor: "copilot" },
-      {}
-    ]) {
-      models = await vscodeApi.lm.selectChatModels(selector);
-      if (models.length) break;
-    }
-    if (!models.length) return false;
-  } catch {
-    return false;
-  }
-
-  // Check if the model supports tool use by inspecting its interface
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const model = models[0] as any;
-  if (typeof model.sendRequest !== "function") return false;
-
-  // Build initial file context from anchors
-  let accumulatedContext = "";
-  for (const anchor of fileAnchors.slice(0, 4)) {
-    try {
-      const content = await readFile(
-        path.join(workspaceRoot, anchor.relativePath),
-        "utf8"
-      );
-      const excerpt = extractRelevantSnippets(
-        content,
-        tokenize(userPrompt),
-        3_000,
-        anchor.anchorLine
-      );
-      accumulatedContext += `\n=== ${anchor.relativePath} ===\n${excerpt}`;
-    } catch {
-      /* file unavailable */
-    }
-  }
-
-  const messages: LanguageModelChatMessageLike[] = [
-    ...(vscodeApi.LanguageModelChatMessage
-      ? [
-          vscodeApi.LanguageModelChatMessage.User(
-            `${systemCtx}\n\nExisting code context:\n${accumulatedContext}\n\nDeveloper's question: ${userPrompt}`
-          )
-        ]
-      : [{ role: 1, content: `${systemCtx}\n\n${userPrompt}` }])
-  ];
-
-  try {
-    for (let step = 0; step < MAX_STEPS; step++) {
-      const response = await model.sendRequest(messages, { tools }, token);
-
-      // Collect streamed text and tool calls
-      const textParts: string[] = [];
-      const toolCalls: Array<{ name: string; input: Record<string, unknown> }> = [];
-
-      for await (const chunk of response.text) {
-        // VS Code LM streams text chunks; tool calls arrive as structured parts
-        if (typeof chunk === "string") {
-          textParts.push(chunk);
-        } else if (chunk && typeof chunk === "object") {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const c = chunk as any;
-          if (c.type === "tool_use" || c.name) {
-            toolCalls.push({
-              name: c.name ?? c.type,
-              input: c.input ?? c.parameters ?? {}
-            });
-          }
-        }
-      }
-
-      const assistantText = textParts.join("");
-
-      // No tool calls → final answer, stream it out
-      if (toolCalls.length === 0) {
-        if (assistantText) {
-          stream.markdown(assistantText);
-          return true;
-        }
-        return false;
-      }
-
-      // Execute tool calls and append results
-      const toolResults: string[] = [];
-      for (const call of toolCalls.slice(0, 3)) {
-        if (call.name === TOOL_READ_FILE) {
-          const relPath = String(call.input.path ?? "");
-          const startLine = Number(call.input.startLine ?? 0) || undefined;
-          try {
-            const fc = await readFile(path.join(workspaceRoot, relPath), "utf8");
-            const snippet = extractRelevantSnippets(
-              fc,
-              tokenize(userPrompt),
-              3_000,
-              startLine
-            );
-            toolResults.push(`readFile("${relPath}"):\n${snippet}`);
-          } catch {
-            toolResults.push(`readFile("${relPath}"): file not found`);
-          }
-        } else if (call.name === TOOL_SEARCH) {
-          const q = String(call.input.query ?? "");
-          const terms = tokenize(q);
-          // Quick in-memory search over what we already loaded
-          const hits = fileAnchors
-            .filter((a) => terms.some((t) => tokenize(a.relativePath).includes(t)))
-            .slice(0, 3)
-            .map((a) => a.relativePath);
-          toolResults.push(
-            `searchSymbol("${q}"): ${hits.length ? hits.join(", ") : "no results"}`
-          );
-        }
-      }
-
-      // Push the assistant's reasoning + tool results back as context
-      if (assistantText && vscodeApi.LanguageModelChatMessage) {
-        messages.push(vscodeApi.LanguageModelChatMessage.Assistant(assistantText));
-      }
-      if (toolResults.length && vscodeApi.LanguageModelChatMessage) {
-        messages.push(
-          vscodeApi.LanguageModelChatMessage.User(
-            `Tool results:\n${toolResults.join("\n---\n")}\n\nContinue answering.`
-          )
-        );
-      }
-    }
-  } catch {
-    return false;
-  }
-
-  return false;
-}
 
 /**
  * Repo facts plus the files most relevant to a request.
@@ -2876,30 +2687,23 @@ export function getChatHelpText(): string {
   return [
     "## Copilot Architect",
     "",
-    "Use `@architect` with a slash command in Copilot Chat:",
+    "One place to work, four steps. Each one carries what you decided into the next.",
     "",
     "| Command | What it does |",
     "|---|---|",
-    "| `/analyze` | Detect languages, frameworks, and entry points |",
-    "| `/index` | Build a searchable local file index |",
-    "| `/plan <feature>` | Generate a feature implementation plan |",
-    "| `/validate` | Run build, test, lint, and format commands |",
-    "| `/review` | Review the latest git diff against the approved plan |",
-    "| `/search <query>` | Search the repo index |",
-    "| `/diagnostics` | Report repo readiness and analysis signals |",
-    "| `/agents` | Install custom Copilot agent templates |",
-    "| `/instructions` | Generate `.github/copilot-instructions.md` |",
+    "| `/analyze <question>` | Explore the repo — use before planning a change |",
+    "| `/create-plan <what you want>` | Draft a plan you approve before any code is written |",
+    "| `/implement` | Apply the approved plan |",
+    "| `/review` | Compare what was built against what was approved |",
     "",
-    "**Example:** `@architect /plan add user authentication`",
+    "**Example:** `@architect /create-plan Add invoice approval workflow`",
     "",
-    "You can also skip the slash command:",
+    "No slash command means `/analyze` — a stated rule, not a guess about your wording.",
     "",
-    "- Questions and analysis requests get a direct answer from your codebase:",
-    "  `@architect explain how authentication works`",
-    "  `@architect analyze the repo and create a doc explaining it`",
+    "Approving a plan and ending a session are buttons, not phrases: the step that",
+    "authorizes writing code should never depend on how a sentence was read.",
     "",
-    "- Feature requests run the full planning pipeline:",
-    "  `@architect add a payment webhook handler`"
+    "Setup, MCP and agent commands live in the Command Palette and the dashboard."
   ].join("\n");
 }
 
