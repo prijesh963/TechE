@@ -506,6 +506,43 @@ export class IndexingService {
     return names;
   }
 
+  /**
+   * Which symbols each file declares, keyed by the same repo-relative path
+   * `listFiles` reports and uncapped for the same reason `symbolNames` is:
+   * a display limit that leaks into a correctness check reports real symbols
+   * as missing, and a false "this does not exist" is more damaging than a
+   * missed one.
+   */
+  async symbolsByFile(
+    options: ListFilesOptions = {}
+  ): Promise<Map<string, Set<string>>> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoRoot = await resolveRepoRoot(startPath, options.strictRoot);
+    const fanOut = await resolveRegisteredRepos(repoRoot);
+    const repos = fanOut.length > 0 ? fanOut : [{ name: "", repoRoot }];
+    const byFile = new Map<string, Set<string>>();
+
+    for (const repo of repos) {
+      const index = await this.readOrCreateIndex(
+        repo.repoRoot,
+        options.strictRoot
+      ).catch(() => undefined);
+
+      for (const document of index?.documents ?? []) {
+        const key = repo.name
+          ? `${repo.name}/${document.relativePath}`
+          : document.relativePath;
+        const names = byFile.get(key) ?? new Set<string>();
+        for (const symbol of document.symbols) {
+          names.add(symbol.name);
+        }
+        byFile.set(key, names);
+      }
+    }
+
+    return byFile;
+  }
+
   async status(startPath = process.cwd()): Promise<IndexStatus> {
     const repoRoot = await findRepoRoot(path.resolve(startPath));
     const indexPath = getIndexPath(repoRoot);

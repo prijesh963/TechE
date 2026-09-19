@@ -741,6 +741,42 @@ describe("IndexingService", () => {
   });
 });
 
+describe("symbolsByFile", () => {
+  it("reports every symbol a file declares, past the display cap", async () => {
+    // The regression this guards: listFiles caps symbols per file for a
+    // model's context window. Verifying a claim against that truncated view
+    // reports real symbols as missing, and a false "this does not exist"
+    // teaches a developer to ignore the warnings entirely.
+    const declarations = Array.from(
+      { length: 40 },
+      (_, i) => `export function helper${String.fromCharCode(65 + i)}() {}`
+    ).join("\n");
+    const repoRoot = await createRepo({
+      "src/big.ts": `${declarations}\nexport class LastDeclared {}`,
+      "src/small.ts": "export class Small {}"
+    });
+
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+    const byFile = await service.symbolsByFile({ startPath: repoRoot });
+
+    expect(byFile.get("src/big.ts")?.has("LastDeclared")).toBe(true);
+    expect(byFile.get("src/big.ts")?.has("helperA")).toBe(true);
+    expect(byFile.get("src/small.ts")?.has("Small")).toBe(true);
+    // Symbols stay with the file that declares them.
+    expect(byFile.get("src/small.ts")?.has("LastDeclared")).toBe(false);
+  });
+
+  it("returns nothing for a file it has never indexed", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+
+    const byFile = await service.symbolsByFile({ startPath: repoRoot });
+    expect(byFile.get("src/imagined.ts")).toBeUndefined();
+  });
+});
+
 function requireDocument(index: LocalIndex, relativePath: string) {
   const document = index.documents.find(
     (candidate) => candidate.relativePath === relativePath

@@ -62,6 +62,22 @@ blind. A path that escapes the repository is refused at plan time, not at
 write time — you should never be shown a plan proposing to write outside your
 repo, even one that would later be blocked.
 
+Each reason also cites a symbol the file must declare, checked against the
+index. The reason itself is prose and nothing local can tell a true one from a
+confident fabrication — but a reason built on a symbol that is not in the file
+is a reason about some other file, and that is checkable:
+
+```text
+- **update** `src/billing/InvoiceService.ts` — owns the approval state machine ⚠️
+
+⚠️ The reason given for `src/billing/InvoiceService.ts`
+(`ApprovalStateMachine` is not declared in this file) does not check out
+against the index. The file may still be right — the explanation is not.
+```
+
+Nothing is dropped over a failed check. A wrong reason on a right file is
+still the right file, and you are the one who decides.
+
 Where no language model is available it falls back to the top search matches
 and says so, in those words, rather than presenting them as a judged
 selection. Your corrections outrank its first proposal — say what

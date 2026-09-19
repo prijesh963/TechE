@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–11 merged. The redesign is complete; what is below is
+**Status:** Phases 0–12 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -49,19 +49,30 @@ survives rather than being offered for replacement. Detecting it properly
 means comparing meaning, not text, which is a larger piece of work than the
 id plumbing.
 
-### 1.4 A selected file is not checked against what it claims
+### 1.4 Only the cited symbol is checked, not the reason itself
 
-**Phase 11.** The selection validates that a path exists, stays inside the
-repo, and carries a reason. It does not check that the reason is true — a
-model can name a real file with a plausible-sounding rationale that has
-nothing to do with the request.
+**Phase 12.** A rationale verifies when the file declares the symbol it cites.
+That proves the reason is _about that file_; it does not prove the reason is
+_true_. "InvoiceService holds the invoice lifecycle" and "InvoiceService
+handles retries" both verify against a file declaring `InvoiceService`.
 
-**Cost:** a wrong file in a plan now arrives with a confident explanation
-attached, which is harder to spot than "Matched on lexical, structural" was.
-Grounding verifies claims in an answer; it does not yet run over a plan's
-rationales.
+**Cost:** the check catches a reason attached to the wrong file, which was the
+common failure, and not a wrong reason attached to the right one. Checking the
+latter means reading the file and judging the claim, which is a model call per
+change.
 
-### 1.5 Nothing bounds how much of a file an `add` implies
+### 1.5 A model that cites nothing is never flagged
+
+**Phase 12.** Omitting the symbol yields `not-checked`, which shows no warning.
+A model that learns to leave the field empty would silently disable the check
+for every row.
+
+**Cost:** nothing in the plan distinguishes "the model cited nothing" from "the
+file has no indexed symbols", and neither is visible unless the developer looks
+for absence. Requiring a citation would instead punish honest uncertainty,
+which is the worse trade — but the asymmetry is real and unmeasured.
+
+### 1.6 Nothing bounds how much of a file an `add` implies
 
 **Phase 11.** An added file has no snapshot, which is correct — there is
 nothing to quote. But it also means implementation writes it from the
@@ -71,7 +82,7 @@ rationale alone, with no size, shape or interface agreed at plan time.
 seeing what that will be. For an update the plan shows the code; for an add it
 shows a sentence.
 
-### 1.6 `/implement` regenerates whole files, with no dry run
+### 1.7 `/implement` regenerates whole files, with no dry run
 
 **Phase 4b.** The model is asked for complete replacement contents from the
 before-snapshot. There is no preview before writing.
@@ -80,7 +91,7 @@ before-snapshot. There is no preview before writing.
 safer, but needs the model to emit reliable diffs. Approval already gates the
 write, so a preview is a safety improvement rather than a missing gate.
 
-### 1.7 The CLI shell-outs are still subprocesses
+### 1.8 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

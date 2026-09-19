@@ -24,6 +24,24 @@ export interface SelectedChange {
   relativePath: string;
   /** Why this file changes, in the model's words. */
   rationale: string;
+  /**
+   * A symbol the rationale rests on, which the file must actually declare.
+   *
+   * The rationale itself is prose and cannot be checked — "holds the invoice
+   * lifecycle this hooks into" is either true or a confident fabrication, and
+   * nothing local can tell them apart. Asking for one symbol alongside it
+   * makes a checkable claim out of an uncheckable one: if the file does not
+   * declare what the reason is built on, the reason is about some other file.
+   */
+  evidenceSymbol?: string;
+}
+
+export type EvidenceStatus = "verified" | "unverified" | "not-checked";
+
+export interface VerifiedChange extends SelectedChange {
+  evidence: EvidenceStatus;
+  /** Why it did not verify, in terms a developer can act on. */
+  evidenceReason?: string;
 }
 
 export interface SelectChangesOptions {
@@ -71,7 +89,7 @@ export function parseSelectedChanges(
     const trimmed = line.trim().replace(/^[-*]\s*/, "");
     if (!trimmed) continue;
 
-    // kind | path | why
+    // kind | path | why | symbol the reason rests on
     const parts = trimmed.split("|").map((part) => part.trim());
     if (parts.length < 3) continue;
 
@@ -94,11 +112,14 @@ export function parseSelectedChanges(
       continue;
     }
 
+    const evidenceSymbol = normalizeEvidenceSymbol(parts[3]);
+
     seen.add(relativePath);
     selected.push({
       kind: kind === "add" && exists ? "update" : kind,
       relativePath,
-      rationale
+      rationale,
+      ...(evidenceSymbol ? { evidenceSymbol } : {})
     });
 
     if (selected.length === max) break;
@@ -144,4 +165,79 @@ function normalizeSelectedPath(value: string): string | undefined {
   if (normalized.startsWith("..") || normalized === ".") return undefined;
 
   return normalized;
+}
+
+/**
+ * Checks each selection's cited symbol against the file it names.
+ *
+ * Nothing is dropped. A rationale that does not verify is still a file the
+ * model judged necessary, and the developer decides — the plan is the
+ * reviewable artifact, and removing a row from it silently would be a worse
+ * failure than showing one with a warning.
+ *
+ * Only `update` and `delete` are checkable. An `add` names a file that does
+ * not exist yet, so there is nothing to verify against and it is reported as
+ * unchecked rather than guessed at.
+ */
+export function verifySelectedChanges(
+  selection: SelectedChange[],
+  symbolsByFile: Map<string, Set<string>>
+): VerifiedChange[] {
+  return selection.map((change) => {
+    if (change.kind === "add") {
+      return {
+        ...change,
+        evidence: "not-checked" as const,
+        evidenceReason: "a new file has nothing to check against"
+      };
+    }
+
+    if (!change.evidenceSymbol) {
+      return {
+        ...change,
+        evidence: "not-checked" as const,
+        evidenceReason: "no symbol was cited"
+      };
+    }
+
+    const symbols = symbolsByFile.get(change.relativePath);
+
+    // A file with no indexed symbols is not a file whose symbols are absent —
+    // plenty of real files declare none the indexer recognizes.
+    if (!symbols || symbols.size === 0) {
+      return {
+        ...change,
+        evidence: "not-checked" as const,
+        evidenceReason: "no symbols are indexed for this file"
+      };
+    }
+
+    return symbols.has(change.evidenceSymbol)
+      ? { ...change, evidence: "verified" as const }
+      : {
+          ...change,
+          evidence: "unverified" as const,
+          evidenceReason: `\`${change.evidenceSymbol}\` is not declared in this file`
+        };
+  });
+}
+
+/**
+ * A bare identifier, or `undefined`.
+ *
+ * Deliberately narrow: `OrderService` and `OrderService.place` are claims that
+ * can be looked up, and anything else — a phrase, a sentence, a path — is the
+ * model narrating, which would verify against nothing and report every row as
+ * unconfirmed.
+ */
+function normalizeEvidenceSymbol(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+
+  const cleaned = value.replace(/^`|`$/g, "").replace(/\(\)$/, "").trim();
+  // Qualified form: the type is what the index records as a symbol.
+  const bare = cleaned.includes(".") ? cleaned.split(".")[0] : cleaned;
+
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(bare) && bare.length <= 120
+    ? bare
+    : undefined;
 }

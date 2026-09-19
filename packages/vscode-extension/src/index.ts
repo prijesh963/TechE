@@ -24,9 +24,10 @@ import {
   DEFAULT_MAX_CHANGES,
   parseSelectedChanges,
   selectByRelevance,
+  verifySelectedChanges,
   type PlanContract,
   type PlannedChange,
-  type SelectedChange
+  type VerifiedChange
 } from "@copilot-architect/planner";
 import {
   SessionService,
@@ -2303,6 +2304,8 @@ async function runPlanPhase(
   stream.markdown(`## Plan v${version} — draft\n\n**${prompt}**\n`);
   stream.markdown(renderDecisions(sessions, withDraft));
   stream.markdown("\n**Files this would touch**\n");
+  const verdicts = new Map(selection.map((choice) => [choice.relativePath, choice]));
+
   for (const change of changes) {
     const quoted =
       change.kind === "add"
@@ -2310,8 +2313,23 @@ async function runPlanPhase(
         : change.before
           ? `lines ${change.before.startLine}–${change.before.endLine} of ${change.before.fileLines}`
           : "no snapshot — file could not be read";
+    // A reason that did not check out is marked, not hidden and not dropped:
+    // it may still be the right file, and the developer decides.
+    const verdict = verdicts.get(change.relativePath);
+    const flag = verdict?.evidence === "unverified" ? " ⚠️" : "";
+
     stream.markdown(
-      `- **${change.kind}** \`${change.relativePath}\` — ${change.rationale} _(${quoted})_\n`
+      `- **${change.kind}** \`${change.relativePath}\` — ${change.rationale}${flag} _(${quoted})_\n`
+    );
+  }
+
+  const unverified = selection.filter((choice) => choice.evidence === "unverified");
+  if (unverified.length > 0) {
+    const rows = unverified
+      .map((choice) => `\`${choice.relativePath}\` (${choice.evidenceReason})`)
+      .join(", ");
+    stream.markdown(
+      `\n⚠️ The reason given for ${rows} does not check out against the index. The file may still be right — the explanation is not.\n`
     );
   }
 
@@ -3207,7 +3225,7 @@ async function selectPlanChanges(
   request: string,
   results: SearchResult[],
   token: unknown
-): Promise<{ selection: SelectedChange[]; selectedByModel: boolean }> {
+): Promise<{ selection: VerifiedChange[]; selectedByModel: boolean }> {
   const candidates = results.map((result) =>
     path.relative(workspaceRoot, result.filePath)
   );
@@ -3217,8 +3235,13 @@ async function selectPlanChanges(
       result.signals
     ])
   );
+  // The fallback has no cited symbol to check, which is reported as unchecked
+  // rather than passed off as verified.
   const fallback = () => ({
-    selection: selectByRelevance(candidates, (file) => signalsFor.get(file) ?? []),
+    selection: verifySelectedChanges(
+      selectByRelevance(candidates, (file) => signalsFor.get(file) ?? []),
+      new Map<string, Set<string>>()
+    ),
     selectedByModel: false
   });
 
@@ -3272,16 +3295,19 @@ async function selectPlanChanges(
       "mentions the subject. Include a new file where the feature needs one.",
       "",
       "One per line, pipe-separated, nothing else — no prose, no numbering:",
-      "kind | repo-relative path | why this file changes",
+      "kind | repo-relative path | why this file changes | a symbol in that file",
       "",
       "kind is one of: add, update, delete",
       "Use a path from the list above for update and delete.",
-      "For add, give the path the new file should have.",
+      "For add, give the path the new file should have and leave the symbol empty.",
+      "The symbol must be one the file declares — it is checked against the",
+      "index, and it is how your reason is shown to be about that file and not",
+      "another. Leave it empty rather than guessing.",
       `At most ${DEFAULT_MAX_CHANGES} files.`,
       "",
       "Example:",
-      "update | src/billing/InvoiceService.ts | holds the invoice lifecycle this hooks into",
-      "add | src/billing/ApprovalPolicy.ts | new rules deciding who may approve",
+      "update | src/billing/InvoiceService.ts | holds the invoice lifecycle this hooks into | InvoiceService",
+      "add | src/billing/ApprovalPolicy.ts | new rules deciding who may approve |",
       "",
       "If none of these files need to change, answer with nothing at all."
     ].join("\n"),
@@ -3297,7 +3323,18 @@ async function selectPlanChanges(
   // Nothing survived validation. That is not the same as "nothing needs
   // changing" — it usually means the answer was malformed — so relevance is
   // the honest fallback rather than an empty plan.
-  return selection.length > 0 ? { selection, selectedByModel: true } : fallback();
+  if (selection.length === 0) {
+    return fallback();
+  }
+
+  const symbolsByFile = await indexing
+    .symbolsByFile({ startPath: workspaceRoot })
+    .catch(() => new Map<string, Set<string>>());
+
+  return {
+    selection: verifySelectedChanges(selection, symbolsByFile),
+    selectedByModel: true
+  };
 }
 
 /**
