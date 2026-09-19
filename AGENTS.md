@@ -120,7 +120,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               44 files, 410 tests
+├── tests/               44 files, 420 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -176,7 +176,9 @@ the other. If a shell needs repo intelligence, it imports the service.
     each export's signature and purpose, imports, rough size — so an `add` is
     approved as something concrete rather than a sentence, and `/implement`
     checks the file that landed against it.
-11. Grounding: claims verified against the index, unverified ones flagged.
+11. Grounding: claims verified against the index, unverified ones flagged. A
+    path is resolved by unique suffix, so an answer that writes a path the way
+    its own repo does is not reported as a fabrication.
 12. Safe validation runner with timeouts, retries and streaming.
 13. Safety policy engine with blocked patterns and approval gates.
 14. Audit logs (append-only `.copilot-architect/audit/audit.jsonl`).
@@ -293,7 +295,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 410 tests must pass before merging.
+Use Vitest. All 420 tests must pass before merging.
 
 Cover:
 
@@ -314,6 +316,7 @@ Cover:
 - staged diff URIs and the read-only content provider behind them
 - file edits (unique-match requirement, all-or-nothing, literal replacement)
 - grounding (claim extraction, verification, honest "not checked")
+- multi-repo path resolution (unique suffix, ambiguity, segment boundaries)
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)

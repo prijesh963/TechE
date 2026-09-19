@@ -97,11 +97,26 @@ export class GroundingService {
     }
   ): Promise<ClaimResult> {
     if (claim.kind === "file" || claim.kind === "citation") {
-      if (!claim.path || !context.paths.has(claim.path)) {
+      const resolved = claim.path
+        ? resolveClaimedPath(claim.path, context.paths)
+        : { kind: "missing" as const };
+
+      if (resolved.kind === "missing") {
         return {
           claim,
           status: "unverified",
           reason: "no such file in the index"
+        };
+      }
+
+      if (resolved.kind === "ambiguous") {
+        // Not the same as a fabrication, and saying so would be one. A path
+        // like `pom.xml` is real in nine places here; the claim simply does
+        // not say which.
+        return {
+          claim,
+          status: "unverified",
+          reason: `matches ${resolved.matches} files — the path does not say which repo`
         };
       }
 
@@ -112,7 +127,7 @@ export class GroundingService {
       // A cited line past the end of the file is a fabricated reference, and
       // one of the cheapest hallucinations to catch.
       const lineCount = await countLines(
-        path.join(context.startPath, claim.path)
+        path.join(context.startPath, resolved.path)
       ).catch(() => undefined);
 
       if (lineCount === undefined) {
@@ -199,6 +214,63 @@ export function summarizeGrounding(report: GroundingReport): string | undefined 
     .join(", ");
 
   return `⚠️ Could not verify: ${items}. Treat those as unconfirmed.`;
+}
+
+/**
+ * Finds a claimed path among the indexed ones.
+ *
+ * In a multi-repo workspace the index keys files as `repoName/relativePath`,
+ * but nobody writes them that way. A developer — and a model reading that
+ * repository — says
+ * `src/main/java/.../CustomersServiceApplication.java`, because that is the
+ * path inside the service and the one the code itself uses.
+ *
+ * Exact matching against the workspace key reported every one of those as a
+ * fabrication. Eight true claims, eight warnings, on the first real question
+ * anyone asked — which is exactly how a developer learns that the warnings
+ * are noise and stops reading them.
+ *
+ * So a path that is the tail of exactly one indexed file is that file.
+ * Uniqueness is the whole guard: `pom.xml` is the tail of nine files in a
+ * repository like this one, and claiming to have verified one of them would
+ * be a fabrication of its own.
+ */
+export function resolveClaimedPath(
+  claimed: string,
+  indexed: Set<string>
+):
+  | { kind: "exact"; path: string }
+  | { kind: "ambiguous"; matches: number }
+  | { kind: "missing" } {
+  if (indexed.has(claimed)) {
+    return { kind: "exact", path: claimed };
+  }
+
+  // Anchored on a segment boundary: `Service.java` must not match
+  // `customers/OtherService.java`, which is a different file entirely.
+  const suffix = `/${claimed}`;
+  const matches: string[] = [];
+
+  for (const candidate of indexed) {
+    if (candidate.endsWith(suffix)) {
+      matches.push(candidate);
+      if (matches.length > 1) {
+        return { kind: "ambiguous", matches: countSuffixMatches(suffix, indexed) };
+      }
+    }
+  }
+
+  return matches.length === 1
+    ? { kind: "exact", path: matches[0] }
+    : { kind: "missing" };
+}
+
+function countSuffixMatches(suffix: string, indexed: Set<string>): number {
+  let count = 0;
+  for (const candidate of indexed) {
+    if (candidate.endsWith(suffix)) count += 1;
+  }
+  return count;
 }
 
 async function countLines(filePath: string): Promise<number> {

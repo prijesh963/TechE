@@ -157,7 +157,13 @@ describe("VS Code extension shell", () => {
     const repoB = path.join(reposDir, "service-b");
     await mkdir(repoA, { recursive: true });
     await mkdir(repoB, { recursive: true });
+    await writeFile(path.join(repoA, "pom.xml"), "<project/>\n", "utf8");
+    await writeFile(path.join(repoB, "package.json"), "{}\n", "utf8");
     await mkdir(path.join(reposDir, ".hidden"), { recursive: true });
+    // Real projects carry folders like these beside their services. Before
+    // they were registered as repos, so eight services reported as twelve.
+    await mkdir(path.join(reposDir, "docs"), { recursive: true });
+    await mkdir(path.join(reposDir, "scripts"), { recursive: true });
 
     const fake = createFakeVscode();
     fake.openDialogResult = [{ fsPath: reposDir, toString: () => reposDir }];
@@ -263,12 +269,100 @@ describe("VS Code extension shell", () => {
     deactivate();
   });
 
+  it("registers only the folders that look like repositories", async () => {
+    // Reported from spring-petclinic-microservices: eight services came back
+    // as "12 repos" because docs/, docker/ and scripts/ were registered too,
+    // putting documentation in the ranking against source on every search.
+    const reposDir = await mkdtemp(path.join(tmpdir(), "copilot-ext-petclinic-"));
+    const services = ["customers-service", "vets-service", "visits-service"];
+    for (const name of services) {
+      await mkdir(path.join(reposDir, name), { recursive: true });
+      await writeFile(path.join(reposDir, name, "pom.xml"), "<project/>\n", "utf8");
+    }
+    for (const name of ["docs", "docker", "scripts"]) {
+      await mkdir(path.join(reposDir, name), { recursive: true });
+      await writeFile(path.join(reposDir, name, "README.md"), "# notes\n", "utf8");
+    }
+
+    const fake = createFakeVscode();
+    fake.openDialogResult = [{ fsPath: reposDir, toString: () => reposDir }];
+    const cliRequests: CliRunRequest[] = [];
+    const runner = {
+      run: async (request: CliRunRequest): Promise<CliRunResult> => {
+        cliRequests.push(request);
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          commandLine: createCliCommandLine(request.args)
+        };
+      }
+    };
+
+    activate(
+      {
+        subscriptions: [],
+        extensionPath: "/workspace/ext-root/packages/vscode-extension"
+      },
+      fake.vscode,
+      { runner }
+    );
+    await fake.commands.get("copilotArchitect.workspaceScan")?.();
+
+    const registered = cliRequests
+      .filter((request) => request.args[0] === "workspace" && request.args[1] === "add")
+      .map((request) => request.args[2]);
+
+    expect(registered.sort()).toEqual(services.sort());
+    for (const skipped of ["docs", "docker", "scripts"]) {
+      expect(registered).not.toContain(skipped);
+    }
+  });
+
+  it("refuses rather than registering a folder of non-repos", async () => {
+    // Pointing the scan at the wrong folder should say so, not register
+    // three documentation directories and report a working workspace.
+    const reposDir = await mkdtemp(path.join(tmpdir(), "copilot-ext-norepos-"));
+    for (const name of ["docs", "images"]) {
+      await mkdir(path.join(reposDir, name), { recursive: true });
+    }
+
+    const fake = createFakeVscode();
+    fake.openDialogResult = [{ fsPath: reposDir, toString: () => reposDir }];
+    const cliRequests: CliRunRequest[] = [];
+    const runner = {
+      run: async (request: CliRunRequest): Promise<CliRunResult> => {
+        cliRequests.push(request);
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          commandLine: createCliCommandLine(request.args)
+        };
+      }
+    };
+
+    activate(
+      {
+        subscriptions: [],
+        extensionPath: "/workspace/ext-root/packages/vscode-extension"
+      },
+      fake.vscode,
+      { runner }
+    );
+    await fake.commands.get("copilotArchitect.workspaceScan")?.();
+
+    expect(cliRequests.some((request) => request.args[1] === "add")).toBe(false);
+  });
+
   it("sets up every sub-repo when the multi-repo mode is chosen", async () => {
     const reposDir = await mkdtemp(path.join(tmpdir(), "copilot-ext-setup-multi-"));
     const repoA = path.join(reposDir, "service-a");
     const repoB = path.join(reposDir, "service-b");
     await mkdir(repoA, { recursive: true });
     await mkdir(repoB, { recursive: true });
+    await writeFile(path.join(repoA, "pom.xml"), "<project/>\n", "utf8");
+    await writeFile(path.join(repoB, "package.json"), "{}\n", "utf8");
 
     const fake = createFakeVscode();
     fake.quickPickChoice = "Multiple repos";

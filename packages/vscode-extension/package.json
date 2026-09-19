@@ -206,6 +206,7 @@
     "@copilot-architect/planner": "0.1.0",
     "@copilot-architect/reviewer": "0.1.0",
     "@copilot-architect/session": "0.1.0",
+    "@copilot-architect/shared": "0.1.0",
     "@copilot-architect/validator": "0.1.0"
   }
 }

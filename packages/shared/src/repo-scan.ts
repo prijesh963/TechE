@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -313,4 +313,52 @@ function translateGlob(glob: string): string {
     }
   }
   return regex;
+}
+
+/**
+ * Files that mark a directory as a project worth treating as a repo.
+ *
+ * Registering every sub-directory swept `docs/`, `docker/` and `scripts/`
+ * into a workspace alongside the eight real services of a Spring microservice
+ * project — reported as "12 repos", with documentation ranked against source
+ * in every search. A directory earns the name by carrying something that
+ * builds.
+ */
+export const REPO_MARKER_FILES = [
+  "package.json",
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+  "settings.gradle",
+  "settings.gradle.kts",
+  "pyproject.toml",
+  "setup.py",
+  "requirements.txt",
+  "Pipfile",
+  "go.mod",
+  "Cargo.toml",
+  "composer.json",
+  "Gemfile",
+  "mix.exs",
+  "CMakeLists.txt",
+  "angular.json"
+] as const;
+
+/**
+ * Whether a directory looks like a repository.
+ *
+ * A `.git` directory counts on its own: a checked-out repo is one whatever it
+ * builds with, including a docs-only one the developer deliberately cloned.
+ */
+export async function looksLikeRepo(directory: string): Promise<boolean> {
+  for (const marker of [".git", ...REPO_MARKER_FILES]) {
+    try {
+      await access(path.join(directory, marker));
+      return true;
+    } catch {
+      // Next marker.
+    }
+  }
+
+  return false;
 }

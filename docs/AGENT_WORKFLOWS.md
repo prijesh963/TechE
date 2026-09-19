@@ -294,6 +294,17 @@ retries three times" — is not verified, and the report says so. A false
 "unverified" on something real teaches a developer to ignore the warnings, and
 a warning nobody reads is worse than no warning.
 
+In a multi-repo workspace a path is matched by its tail. The index keys files
+as `repoName/relativePath`, but nobody writes them that way — an answer about
+a Spring microservice says
+`src/main/java/.../CustomersServiceApplication.java`, because that is the path
+inside the service. Exact matching once reported eight true claims as
+fabrications in a single answer.
+
+The guard is uniqueness: a path that is the tail of exactly one indexed file
+is that file. One matching several says so, with the count — real, but the
+claim does not say which.
+
 ---
 
 ## Using this without the extension

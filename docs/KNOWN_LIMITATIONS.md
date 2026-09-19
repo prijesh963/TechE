@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–19 merged. The redesign is complete; what is below is
+**Status:** Phases 0–20 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -160,7 +160,30 @@ say so, and does.
 is the failure most worth catching. Sending real hunks means choosing which,
 since a large diff is the context cost this design exists to avoid.
 
-### 1.14 The CLI shell-outs are still subprocesses
+### 1.14 A path shared by several repos cannot be verified
+
+**Phase 20.** Resolving a claimed path by its tail means
+`src/main/resources/application.yml` matches every service that has one. It
+is reported as ambiguous with the count, which is honest but still an
+unverified claim against a real file.
+
+**Cost:** answers about conventions shared across services — config layout,
+a common package structure — collect warnings that are not findings. Closing
+it means the model naming the repo, which is a prompt change with its own
+failure mode.
+
+### 1.15 A repo is recognised by its build file, not its contents
+
+**Phase 20.** The workspace scan registers a directory when it carries a
+known manifest — `pom.xml`, `package.json`, `go.mod` and a dozen others — or
+a `.git` directory. A project built with something not on that list is
+skipped.
+
+**Cost:** it is named in the output channel rather than dropped silently, so
+a developer can see why. But the list is a list, and the next unfamiliar
+build system is a support question rather than a detection.
+
+### 1.16 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   GroundingService,
   extractClaims,
+  resolveClaimedPath,
   summarizeGrounding
 } from "../packages/grounding/src/index.js";
 
@@ -55,6 +56,70 @@ describe("extractClaims", () => {
   it("does not report the same claim twice", () => {
     const claims = extractClaims("`src/a.ts` and again `src/a.ts`");
     expect(claims).toHaveLength(1);
+  });
+});
+
+describe("resolveClaimedPath", () => {
+  // The workspace keys files by repo; nobody writing about the code does.
+  const indexed = new Set([
+    "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java",
+    "spring-petclinic-customers-service/pom.xml",
+    "spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/VetsServiceApplication.java",
+    "spring-petclinic-vets-service/pom.xml",
+    "spring-petclinic-visits-service/pom.xml"
+  ]);
+
+  it("resolves a path written relative to its own repo", () => {
+    // The regression: eight true claims flagged as fabrications on the first
+    // real question anyone asked, because the model wrote the path the way
+    // the repository itself does.
+    expect(
+      resolveClaimedPath(
+        "src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java",
+        indexed
+      )
+    ).toEqual({
+      kind: "exact",
+      path: "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java"
+    });
+  });
+
+  it("takes an exact workspace path as it stands", () => {
+    expect(
+      resolveClaimedPath("spring-petclinic-vets-service/pom.xml", indexed)
+    ).toEqual({
+      kind: "exact",
+      path: "spring-petclinic-vets-service/pom.xml"
+    });
+  });
+
+  it("refuses to pick one of several matches", () => {
+    // `pom.xml` is real in three places here. Verifying one of them would be
+    // a fabrication of its own, and calling it missing would be a lie.
+    expect(resolveClaimedPath("pom.xml", indexed)).toEqual({
+      kind: "ambiguous",
+      matches: 3
+    });
+  });
+
+  it("matches only on a segment boundary", () => {
+    // `ServiceApplication.java` must not match `CustomersServiceApplication.java`
+    // — a different file with a similar ending.
+    expect(resolveClaimedPath("ServiceApplication.java", indexed)).toEqual({
+      kind: "missing"
+    });
+  });
+
+  it("reports a path that is nowhere as missing", () => {
+    expect(resolveClaimedPath("src/main/java/Imagined.java", indexed)).toEqual({
+      kind: "missing"
+    });
+  });
+
+  it("does not match a prefix", () => {
+    expect(resolveClaimedPath("spring-petclinic-vets-service/src", indexed)).toEqual({
+      kind: "missing"
+    });
   });
 });
 
@@ -159,6 +224,53 @@ describe("GroundingService", () => {
   });
 });
 
+describe("GroundingService across a multi-repo workspace", () => {
+  it("verifies a path written the way the repository writes it", async () => {
+    // Reproduces the reported failure on spring-petclinic-microservices: a
+    // correct answer citing eight real files, every one flagged as a
+    // fabrication because the index keys them by repo and the model did not.
+    const workspaceRoot = await createWorkspace({
+      "customers-service": {
+        "src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java":
+          "package org.springframework.samples.petclinic.customers;\npublic class CustomersServiceApplication {}\n",
+        "pom.xml": "<project/>\n"
+      },
+      "vets-service": {
+        "src/main/java/org/springframework/samples/petclinic/vets/VetsServiceApplication.java":
+          "package org.springframework.samples.petclinic.vets;\npublic class VetsServiceApplication {}\n",
+        "pom.xml": "<project/>\n"
+      }
+    });
+
+    const report = await new GroundingService().verify(
+      "Entry points are `src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java` " +
+        "and `src/main/java/org/springframework/samples/petclinic/vets/VetsServiceApplication.java`.",
+      { startPath: workspaceRoot }
+    );
+
+    expect(report.unverified).toEqual([]);
+    expect(report.verified).toHaveLength(2);
+  });
+
+  it("says a path shared by several repos is ambiguous, not missing", async () => {
+    // The cost of resolving by suffix: `src/main/resources/application.yml`
+    // is real in every service. Picking one would be a fabrication; calling
+    // it missing would be a lie. It says which it is.
+    const workspaceRoot = await createWorkspace({
+      "customers-service": { "src/main/resources/application.yml": "server:\n" },
+      "vets-service": { "src/main/resources/application.yml": "server:\n" }
+    });
+
+    const report = await new GroundingService().verify(
+      "Each service is configured in `src/main/resources/application.yml`.",
+      { startPath: workspaceRoot }
+    );
+
+    expect(report.unverified[0].reason).toContain("matches 2 files");
+    expect(report.unverified[0].reason).not.toContain("no such file");
+  });
+});
+
 describe("summarizeGrounding", () => {
   it("stays silent when everything checked out", () => {
     expect(
@@ -184,6 +296,32 @@ describe("summarizeGrounding", () => {
     expect(summary).toContain("unconfirmed");
   });
 });
+
+/** A workspace of registered repos, as Setup Repo's multi-repo mode builds one. */
+async function createWorkspace(
+  repos: Record<string, Record<string, string>>
+): Promise<string> {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-ground-ws-"));
+
+  for (const [repoName, files] of Object.entries(repos)) {
+    for (const [relativePath, contents] of Object.entries(files)) {
+      const fullPath = path.join(workspaceRoot, repoName, relativePath);
+      await mkdir(path.dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, contents, "utf8");
+    }
+  }
+
+  await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+  await writeFile(
+    path.join(workspaceRoot, ".copilot-architect", "workspace.json"),
+    JSON.stringify({
+      repos: Object.keys(repos).map((name) => ({ name, path: name }))
+    }),
+    "utf8"
+  );
+
+  return workspaceRoot;
+}
 
 async function createRepo(files: Record<string, string>): Promise<string> {
   const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-ground-"));

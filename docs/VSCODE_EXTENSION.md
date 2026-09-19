@@ -271,8 +271,15 @@ VS Code opens the folder and the extension activates against it automatically.
 
 For analysis that spans several repos, register them once from the primary
 window. From an installed extension use **More Actions → Scan & Register
-Sub-repos**, and point it at the folder holding the repos; it registers every
-sub-directory that looks like one.
+Sub-repos**, and point it at the folder holding the repos.
+
+A sub-directory is registered when it carries a build file — `pom.xml`,
+`package.json`, `build.gradle`, `go.mod`, `pyproject.toml` and others — or a
+`.git` directory. Folders like `docs/`, `docker/` and `scripts/` sit beside
+the services in most real projects and are not repositories; registering them
+puts documentation in the ranking against source on every search. Whatever is
+skipped is named in the output channel, so a project built with something
+unfamiliar shows up as a skip rather than a silent absence.
 
 From a monorepo clone the same thing is available as CLI commands, which take
 the repos one at a time:

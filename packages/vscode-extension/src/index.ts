@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { renderRolePrompt } from "@copilot-architect/agents";
 import { GroundingService, summarizeGrounding } from "@copilot-architect/grounding";
 import { ReviewService } from "@copilot-architect/reviewer";
+import { looksLikeRepo } from "@copilot-architect/shared";
 import { ValidationService } from "@copilot-architect/validator";
 import {
   IndexingService,
@@ -644,6 +645,38 @@ export function activate(
       );
       return [];
     }
+
+    // A directory has to carry something that builds. Registering every
+    // sub-directory swept `docs/`, `docker/` and `scripts/` into a workspace
+    // beside eight real services — reported as "12 repos", with
+    // documentation ranked against source in every search.
+    const skipped: string[] = [];
+    const candidates: string[] = [];
+
+    for (const subDir of subDirs) {
+      if (await looksLikeRepo(subDir)) {
+        candidates.push(subDir);
+      } else {
+        skipped.push(path.basename(subDir));
+      }
+    }
+
+    if (skipped.length > 0) {
+      // Named, not silently dropped: a developer whose repo uses a build
+      // system this does not know needs to see why it was left out.
+      outputChannel.appendLine(
+        `[workspace scan] skipped ${skipped.length} folder(s) with no project file: ${skipped.join(", ")}`
+      );
+    }
+
+    if (candidates.length === 0) {
+      vscode.window.showErrorMessage(
+        `None of the ${subDirs.length} sub-directories look like repositories — no package.json, pom.xml, build.gradle or equivalent. Use "Setup Repo" if this folder is itself the repo.`
+      );
+      return [];
+    }
+
+    subDirs = candidates;
 
     outputChannel.appendLine(
       `[workspace scan] ${subDirs.length} repo(s) found in ${reposDir}`
