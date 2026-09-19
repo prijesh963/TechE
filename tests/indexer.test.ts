@@ -11,6 +11,8 @@ import { SymbolGraphService } from "../packages/graph/src/index.js";
 import {
   IndexingService,
   resetIndexFreshnessCache,
+  shapeInventoryForModel,
+  shapeSearchForModel,
   type LocalIndex
 } from "../packages/indexer/src/index.js";
 import { runCli } from "../packages/cli/src/index.js";
@@ -375,6 +377,37 @@ describe("IndexingService", () => {
     expect(isConfig("src/config/app.ts")).toBe(true);
   });
 
+  it("follows a branch switch without waiting out the freshness cache", async () => {
+    if (!(await gitAvailable())) return;
+
+    const repoRoot = await createRepo({ "src/app.ts": "export class Thruster {}" });
+    await execFileAsync("git", ["init", "-b", "main"], { cwd: repoRoot });
+    await commitAll(repoRoot, "initial");
+    await execFileAsync("git", ["checkout", "-b", "feature"], { cwd: repoRoot });
+    await writeFile(
+      path.join(repoRoot, "src/app.ts"),
+      "export class Astromech {}",
+      "utf8"
+    );
+    await commitAll(repoRoot, "feature");
+
+    const service = new IndexingService();
+    const symbolsNow = async (): Promise<string[]> =>
+      (await service.listFiles({ startPath: repoRoot })).files[0]?.symbols ?? [];
+
+    await service.index({ startPath: repoRoot });
+    expect(await symbolsNow()).toEqual(["Astromech"]);
+
+    // No delay: the call above just warmed the freshness cache. A branch switch
+    // replaces the whole tree at once, so serving that cached verdict would
+    // answer from the branch the developer just left.
+    await execFileAsync("git", ["checkout", "main"], { cwd: repoRoot });
+    expect(await symbolsNow()).toEqual(["Thruster"]);
+
+    await execFileAsync("git", ["checkout", "feature"], { cwd: repoRoot });
+    expect(await symbolsNow()).toEqual(["Astromech"]);
+  });
+
   it("refreshes itself when the repo changed under it", async () => {
     // Regression: search read the index file if it existed and never checked
     // whether it was current, so for a whole working session every agent saw
@@ -637,6 +670,74 @@ describe("IndexingService", () => {
 
     // A truncated list must still surface the file that explains the repo.
     expect(inventory.files[0]?.relativePath).toBe("src/app.ts");
+  });
+
+  it("caps the payload a model receives without changing what ranked", async () => {
+    // Measured before this: one search at limit 20 cost ~24,000 tokens, half of
+    // it symbols (each repeating the parent's filePath) and half a 4,000-char
+    // preview per file. Ranking was never the problem — payload was.
+    const repoRoot = await createRepo({
+      "src/big.ts": Array.from(
+        { length: 40 },
+        (_, i) => `export function handler${i}() { return ${i}; }`
+      ).join("\n"),
+      "src/small.ts": "export function handlerOnly() { return 1; }"
+    });
+    const service = new IndexingService();
+    // Query the path: "handler0" is a single token, so it would not match a
+    // bare "handler" — the point here is payload size, not the tokenizer.
+    const full = await service.search({ startPath: repoRoot, query: "big" });
+    const shaped = shapeSearchForModel(full);
+
+    // Same files, same order.
+    expect(shaped.results.map((result) => result.relativePath)).toEqual(
+      full.results.map((result) => result.relativePath)
+    );
+
+    const big = shaped.results.find((result) => result.relativePath === "src/big.ts");
+    expect(big?.symbols.length).toBe(12);
+    expect(big?.omittedSymbols).toBe(28);
+    // A symbol no longer repeats the file path the result already carries.
+    expect(Object.keys(big?.symbols[0] ?? {}).sort()).toEqual(["kind", "line", "name"]);
+
+    const shapedSmall = shapeSearchForModel(full, { maxSymbols: 2, previewChars: 10 });
+    const small = shapedSmall.results[0];
+    expect(small.preview.length).toBe(10);
+    expect(small.previewTruncated).toBe(true);
+
+    // The projection must be materially cheaper, not cosmetically.
+    expect(JSON.stringify(shaped).length).toBeLessThan(JSON.stringify(full).length / 2);
+  });
+
+  it("renders an inventory as lines rather than repeating JSON keys", async () => {
+    // 300 files each repeating relativePath/languageGuess/sizeBytes/isTestFile/
+    // isConfigFile/isDocFile spent roughly half the payload on keys.
+    const repoRoot = await createRepo({
+      "src/app.ts": "export class App {}",
+      "tests/app.test.ts": "test('x', () => {})",
+      "package.json": "{}",
+      "README.md": "# hi"
+    });
+    const inventory = await new IndexingService().listFiles({ startPath: repoRoot });
+    const shaped = shapeInventoryForModel(inventory);
+
+    expect(shaped.totalFiles).toBe(inventory.totalFiles);
+    expect(shaped.files).toContain("src/app.ts|TypeScript|-|App");
+    expect(shaped.files.some((line) => line.startsWith("tests/app.test.ts|"))).toBe(
+      true
+    );
+    // Kind markers replace three booleans per file.
+    expect(shaped.files.find((l) => l.startsWith("tests/app.test.ts"))).toContain(
+      "|T|"
+    );
+    expect(shaped.files.find((l) => l.startsWith("package.json"))).toContain("|C|");
+    expect(shaped.files.find((l) => l.startsWith("README.md"))).toContain("|D|");
+    // The format is stated in-band so a reader never has to guess.
+    expect(shaped.fileFormat).toContain("path|language|kind");
+
+    expect(JSON.stringify(shaped).length).toBeLessThan(
+      JSON.stringify(inventory).length
+    );
   });
 });
 

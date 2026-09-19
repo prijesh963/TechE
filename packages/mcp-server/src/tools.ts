@@ -3,7 +3,11 @@ import path from "node:path";
 import { AgentService } from "@copilot-architect/agents";
 import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core";
 import { SymbolGraphService } from "@copilot-architect/graph";
-import { IndexingService } from "@copilot-architect/indexer";
+import {
+  IndexingService,
+  shapeInventoryForModel,
+  shapeSearchForModel
+} from "@copilot-architect/indexer";
 import { QueryIntentService } from "@copilot-architect/intent";
 import { ContextMeasurementService } from "@copilot-architect/measurement";
 import {
@@ -171,11 +175,13 @@ export function createCopilotArchitectTools(
       listFilesSchema,
       true,
       async (args) =>
-        new IndexingService().listFiles({
-          startPath: resolveStartPath(args, options),
-          filter: optionalStringArg(args, "filter"),
-          limit: numberArg(args, "limit", 300)
-        })
+        shapeInventoryForModel(
+          await new IndexingService().listFiles({
+            startPath: resolveStartPath(args, options),
+            filter: optionalStringArg(args, "filter"),
+            limit: numberArg(args, "limit", 300)
+          })
+        )
     ),
     tool(
       "search_repo",
@@ -186,11 +192,13 @@ export function createCopilotArchitectTools(
       searchSchema,
       true,
       async (args) =>
-        new IndexingService().search({
-          startPath: resolveStartPath(args, options),
-          query: stringArg(args, "query"),
-          limit: numberArg(args, "limit", 20)
-        })
+        shapeSearchForModel(
+          await new IndexingService().search({
+            startPath: resolveStartPath(args, options),
+            query: stringArg(args, "query"),
+            limit: numberArg(args, "limit", 20)
+          })
+        )
     ),
     tool(
       "analyze_query_intent",
@@ -237,11 +245,13 @@ export function createCopilotArchitectTools(
       searchSchema,
       true,
       async (args) =>
-        new IndexingService().findSimilarFeatures({
-          startPath: resolveStartPath(args, options),
-          query: stringArg(args, "query"),
-          limit: numberArg(args, "limit", 12)
-        })
+        shapeSearchForModel(
+          await new IndexingService().findSimilarFeatures({
+            startPath: resolveStartPath(args, options),
+            query: stringArg(args, "query"),
+            limit: numberArg(args, "limit", 12)
+          })
+        )
     ),
     tool(
       "find_impacted_files",
@@ -295,7 +305,7 @@ export function createCopilotArchitectTools(
           query: stringArg(args, "request"),
           limit: numberArg(args, "limit", 12)
         });
-        return { repoMap, search };
+        return { repoMap, search: shapeSearchForModel(search) };
       }
     ),
     tool(

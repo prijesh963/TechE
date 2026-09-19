@@ -15,6 +15,7 @@ import {
   getArtifactDirectoryPath,
   getArtifactFilePath,
   isBinaryPath,
+  readGitHead,
   readJsonFile,
   resolveRegisteredRepos,
   scanRepository,
@@ -30,6 +31,9 @@ import type {
   IndexStatus,
   ListFilesOptions,
   LocalIndex,
+  ModelRepoInventory,
+  ModelSearchResponse,
+  ModelShapeOptions,
   RepoFileEntry,
   RepoFileInventory,
   RepoFileInventoryRepo,
@@ -79,6 +83,7 @@ export class IndexingService {
     // change per-query, so it's cached here like searchStats and reused
     // by every search() call until the next index() run.
     const gitActivity = await collectGitActivity(repoRoot);
+    const gitHead = await readGitHead(repoRoot);
     const index: LocalIndex = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
@@ -88,7 +93,8 @@ export class IndexingService {
       stats: createStats(documents),
       searchStats: computeSearchStats(documents),
       gitActivity,
-      scanSignature
+      scanSignature,
+      gitHead
     };
     const mode = options.rebuild ? "rebuild" : existingIndex ? "incremental" : "full";
 
@@ -552,6 +558,14 @@ async function isIndexStale(repoRoot: string, index: LocalIndex): Promise<boolea
   // records one and puts it on the cheap path from then on.
   if (!index.scanSignature) return true;
 
+  // Checked before the cache, not after: a branch switch replaces the whole
+  // working tree at once, and serving a verdict formed moments earlier would
+  // answer from the branch the developer just left. One small file read.
+  if ((await readGitHead(repoRoot)) !== index.gitHead) {
+    stalenessChecks.delete(repoRoot);
+    return true;
+  }
+
   const cached = stalenessChecks.get(repoRoot);
   if (cached && Date.now() - cached.checkedAtMs < STALENESS_CACHE_MS) {
     return cached.stale;
@@ -583,6 +597,104 @@ function markIndexFresh(repoRoot: string): void {
  */
 export function resetIndexFreshnessCache(): void {
   stalenessChecks.clear();
+}
+
+/**
+ * Caps chosen from measurement rather than taste: on this repo a 20-result
+ * search carried 24,053 tokens, 50% of it symbols and 46% a 4,000-character
+ * preview per file. Twelve symbols and 400 characters are enough to judge
+ * whether a file is relevant — which is all this payload is for. A caller that
+ * needs the whole file asks for it.
+ */
+const DEFAULT_MODEL_MAX_SYMBOLS = 12;
+const DEFAULT_MODEL_PREVIEW_CHARS = 400;
+
+/**
+ * Projects a search response for a model's context window. Ranking, ordering
+ * and which files matched are untouched — only per-result payload is trimmed.
+ *
+ * Deliberately not applied inside `search()`: internal callers (the planner,
+ * the CLI) legitimately want full results. This is for the paths that feed a
+ * model, where every field is paid for.
+ */
+export function shapeSearchForModel(
+  response: SearchResponse,
+  options: ModelShapeOptions = {}
+): ModelSearchResponse {
+  const maxSymbols = options.maxSymbols ?? DEFAULT_MODEL_MAX_SYMBOLS;
+  const previewChars = options.previewChars ?? DEFAULT_MODEL_PREVIEW_CHARS;
+
+  return {
+    schemaVersion: response.schemaVersion,
+    generatedAt: response.generatedAt,
+    query: response.query,
+    repoRoot: response.repoRoot,
+    results: response.results.map((result) => {
+      const preview = result.textPreview.slice(0, previewChars);
+      const omitted = Math.max(0, result.symbols.length - maxSymbols);
+      const repoName = (result as { repoName?: string }).repoName;
+
+      return {
+        relativePath: result.relativePath,
+        ...(repoName ? { repoName } : {}),
+        score: result.score,
+        languageGuess: result.languageGuess,
+        matchedFields: result.matchedFields,
+        signals: result.signals,
+        ...(result.anchor ? { anchor: result.anchor } : {}),
+        symbols: result.symbols.slice(0, maxSymbols).map((symbol) => ({
+          name: symbol.name,
+          kind: symbol.kind,
+          ...(symbol.startLine === undefined ? {} : { line: symbol.startLine })
+        })),
+        ...(omitted > 0 ? { omittedSymbols: omitted } : {}),
+        preview,
+        ...(preview.length < result.textPreview.length
+          ? { previewTruncated: true }
+          : {}),
+        isTestFile: result.isTestFile,
+        isConfigFile: result.isConfigFile,
+        isDocFile: result.isDocFile
+      };
+    })
+  };
+}
+
+/** Symbol names kept per file in a model-facing inventory. */
+const DEFAULT_INVENTORY_SYMBOLS = 6;
+
+/**
+ * Projects a file inventory for a model's context window. Same files, same
+ * order, one line each instead of an object — see ModelRepoInventory for why.
+ */
+export function shapeInventoryForModel(
+  inventory: RepoFileInventory,
+  maxSymbols = DEFAULT_INVENTORY_SYMBOLS
+): ModelRepoInventory {
+  return {
+    schemaVersion: inventory.schemaVersion,
+    generatedAt: inventory.generatedAt,
+    repoRoot: inventory.repoRoot,
+    totalFiles: inventory.totalFiles,
+    returnedFiles: inventory.returnedFiles,
+    languageCounts: inventory.languageCounts,
+    ...(inventory.repos ? { repos: inventory.repos } : {}),
+    fileFormat: "path|language|kind(-=source,T=test,C=config,D=doc)|symbols",
+    files: inventory.files.map((file) => {
+      const path = file.repoName
+        ? `${file.repoName}/${file.relativePath}`
+        : file.relativePath;
+      const symbols = file.symbols.slice(0, maxSymbols).join(",");
+      return `${path}|${file.languageGuess}|${inventoryKind(file)}|${symbols}`;
+    })
+  };
+}
+
+function inventoryKind(file: RepoFileEntry): string {
+  if (file.isTestFile) return "T";
+  if (file.isConfigFile) return "C";
+  if (file.isDocFile) return "D";
+  return "-";
 }
 
 const DEFAULT_LIST_LIMIT = 300;

@@ -42,28 +42,28 @@ All tools return structured JSON. Missing artifacts return a structured `{ ok: f
 
 ### Read-Only Tools (Default)
 
-| Tool                        | Arguments                       | Description                                                                                              |
-| --------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `repo_map`                  | `startPath?`                    | Return the full `UniversalRepoMap` for the target repo, running analysis if no cached map exists         |
-| `workspace_map`             | `startPath?`                    | Return the workspace-level map; generates per-repo maps and merges them                                  |
-| `detect_languages`          | `startPath?`                    | Detected languages with confidence scores                                                                |
-| `detect_frameworks`         | `startPath?`                    | Detected frameworks                                                                                      |
-| `detect_package_managers`   | `startPath?`                    | Detected package managers                                                                                |
-| `detect_build_commands`     | `startPath?`                    | Build commands from adapters and custom config                                                           |
-| `detect_test_commands`      | `startPath?`                    | Test commands from adapters and custom config                                                            |
-| `search_repo`               | `query`, `startPath?`, `limit?` | Keyword search the local index; auto-indexes if no index exists                                          |
-| `search_across_repos`       | `query`, `startPath?`, `limit?` | Search across all workspace repos; results annotated with `repoName` and `repoRole`                      |
-| `find_similar_feature`      | `query`, `startPath?`, `limit?` | Search filtered to non-config source files most relevant to a feature description                        |
-| `find_impacted_files`       | `featureRequest`, `startPath?`  | Return files likely affected by the described change                                                     |
-| `analyze_impact`            | `featureRequest`, `startPath?`  | Return full impact analysis including affected languages, modules, and files                             |
-| `analyze_cross_repo_impact` | `featureRequest`, `startPath?`  | Cross-repo impact for multi-repo workspace configs; returns impacted repos and per-repo validation plans |
-| `generate_plan_context`     | `featureRequest`, `startPath?`  | Return planning context (repo map + search results) without writing any artifacts                        |
-| `get_validation_commands`   | `startPath?`                    | List safe validation commands from detected and custom config                                            |
-| `get_safety_policy`         | `startPath?`                    | Return the active safety policy; falls back to defaults if no `policy.json` exists                       |
-| `get_latest_plan`           | `startPath?`                    | Return the contents of `latest-plan.json`; `{ ok: false }` if none exists                                |
-| `get_latest_validation`     | `startPath?`                    | Return the contents of the latest validation report                                                      |
-| `get_latest_review`         | `startPath?`                    | Return the contents of the latest review report                                                          |
-| `agent_status`              | `startPath?`                    | Return installed agent status from `.github/agents/`                                                     |
+| Tool                        | Arguments                       | Description                                                                                               |
+| --------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `repo_map`                  | `startPath?`                    | Return the full `UniversalRepoMap` for the target repo, running analysis if no cached map exists          |
+| `workspace_map`             | `startPath?`                    | Return the workspace-level map; generates per-repo maps and merges them                                   |
+| `detect_languages`          | `startPath?`                    | Detected languages with confidence scores                                                                 |
+| `detect_frameworks`         | `startPath?`                    | Detected frameworks                                                                                       |
+| `detect_package_managers`   | `startPath?`                    | Detected package managers                                                                                 |
+| `detect_build_commands`     | `startPath?`                    | Build commands from adapters and custom config                                                            |
+| `detect_test_commands`      | `startPath?`                    | Test commands from adapters and custom config                                                             |
+| `search_repo`               | `query`, `startPath?`, `limit?` | Hybrid search the local index; auto-indexes if none exists. Per-result payload is capped for context cost |
+| `search_across_repos`       | `query`, `startPath?`, `limit?` | Search across all workspace repos; results annotated with `repoName` and `repoRole`                       |
+| `find_similar_feature`      | `query`, `startPath?`, `limit?` | Search filtered to non-config source files most relevant to a feature description                         |
+| `find_impacted_files`       | `featureRequest`, `startPath?`  | Return files likely affected by the described change                                                      |
+| `analyze_impact`            | `featureRequest`, `startPath?`  | Return full impact analysis including affected languages, modules, and files                              |
+| `analyze_cross_repo_impact` | `featureRequest`, `startPath?`  | Cross-repo impact for multi-repo workspace configs; returns impacted repos and per-repo validation plans  |
+| `generate_plan_context`     | `featureRequest`, `startPath?`  | Return planning context (repo map + search results) without writing any artifacts                         |
+| `get_validation_commands`   | `startPath?`                    | List safe validation commands from detected and custom config                                             |
+| `get_safety_policy`         | `startPath?`                    | Return the active safety policy; falls back to defaults if no `policy.json` exists                        |
+| `get_latest_plan`           | `startPath?`                    | Return the contents of `latest-plan.json`; `{ ok: false }` if none exists                                 |
+| `get_latest_validation`     | `startPath?`                    | Return the contents of the latest validation report                                                       |
+| `get_latest_review`         | `startPath?`                    | Return the contents of the latest review report                                                           |
+| `agent_status`              | `startPath?`                    | Return installed agent status from `.github/agents/`                                                      |
 
 ### Approval-Gated Tools
 
@@ -91,6 +91,24 @@ MCP tools read and write the same `.copilot-architect/` artifacts as the CLI. Th
 
 - `repo-map.json` — read and written by `repo_map`
 - `index/index.json` — read and written by `search_repo` (auto-indexes if missing)
+
+## Response shaping
+
+`search_repo`, `find_similar_feature`, `generate_plan_context` and
+`list_repo_files` return results shaped for a model's context window rather than
+the full internal records. Ranking, ordering and which files matched are
+unchanged — only per-result payload is capped.
+
+Measured on this repository: one `search_repo` at `limit: 20` fell from ~24,000
+to ~4,800 estimated tokens, and `list_repo_files` from ~14,500 to ~4,900. The
+savings came from three places — symbols no longer repeat the parent's file
+path, previews are capped at 400 characters instead of 4,000, and the inventory
+is emitted as one line per file instead of an object whose keys repeat 300
+times.
+
+A caller that needs full records calls `IndexingService` directly; the CLI and
+planner are unaffected.
+
 - `plans/latest-plan.json` — written by `generate_feature_plan`, read by `get_latest_plan`
 - `runs/latest-validation.json` — read by `get_latest_validation`
 - `reviews/latest-review.json` — read by `get_latest_review`

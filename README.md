@@ -390,7 +390,7 @@ Start: `npm run cli -- mcp [--path <repo>]`
 | `detect_package_managers`   | Detected package managers                                                                                                                             |
 | `detect_build_commands`     | Build commands                                                                                                                                        |
 | `detect_test_commands`      | Test commands                                                                                                                                         |
-| `list_repo_files`           | Enumerate the indexed files with language, size, symbols and per-language/per-directory counts — use before searching when there is no query to guess |
+| `list_repo_files`           | Enumerate the indexed files as `path\|language\|kind\|symbols` lines, with per-language counts — use before searching when there is no query to guess |
 | `search_repo`               | Hybrid search the local index (keyword + path/symbol + graph-connected + recency; see `signals` per result)                                           |
 | `analyze_query_intent`      | Classify a query's intent (debugging/feature/refactor/test) and resolve likely components, tests, and recent changes                                  |
 | `search_across_repos`       | Search across all workspace repos                                                                                                                     |

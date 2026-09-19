@@ -31,6 +31,12 @@ export interface LocalIndex {
    * stale once, which repopulates it.
    */
   scanSignature?: ScanSignature;
+  /**
+   * `.git/HEAD` as it stood when this index was built. A different value means
+   * the working tree was switched to another branch, which the timestamp
+   * signature can miss inside its short caching window.
+   */
+  gitHead?: string;
 }
 
 /** How many files the scan saw, and the newest mtime among them. */
@@ -229,6 +235,79 @@ export interface SearchResponse {
   query: string;
   repoRoot: string;
   results: SearchResult[];
+}
+
+/**
+ * A search result projected for a model's context window.
+ *
+ * The internal SearchResult carries everything a caller might want; a model
+ * needs far less, and the difference is expensive. Measured on this repo, one
+ * `search_repo` at limit 20 cost ~24,000 tokens, of which 96% was `symbols`
+ * (each redundantly repeating the parent's `filePath`) and a 4,000-character
+ * `textPreview` per result. Ranking is unchanged — only the per-result payload
+ * is capped.
+ */
+export interface ModelSearchResult {
+  /** Relative to `repoName`'s root, or to the repo root when single-repo. */
+  relativePath: string;
+  repoName?: string;
+  score: number;
+  languageGuess: string;
+  matchedFields: string[];
+  signals: SearchSignal[];
+  anchor?: SearchAnchor;
+  symbols: ModelSymbol[];
+  /** Symbols beyond the cap, so a caller can tell the list was truncated. */
+  omittedSymbols?: number;
+  preview: string;
+  previewTruncated?: boolean;
+  isTestFile: boolean;
+  isConfigFile: boolean;
+  isDocFile: boolean;
+}
+
+/** A symbol without the parent's `filePath`, which the result already carries. */
+export interface ModelSymbol {
+  name: string;
+  kind: string;
+  line?: number;
+}
+
+export interface ModelSearchResponse {
+  schemaVersion: string;
+  generatedAt: string;
+  query: string;
+  repoRoot: string;
+  results: ModelSearchResult[];
+}
+
+export interface ModelShapeOptions {
+  /** Symbols kept per result. Defaults to 12. */
+  maxSymbols?: number;
+  /** Preview characters kept per result. Defaults to 400. */
+  previewChars?: number;
+}
+
+/**
+ * A file inventory projected for a model's context window.
+ *
+ * The per-file JSON object is the wrong shape here: 300 files each repeating
+ * `relativePath`, `languageGuess`, `sizeBytes`, `isTestFile`, `isConfigFile`
+ * and `isDocFile` spent roughly half the payload on keys rather than content.
+ * One line per file carries the same facts at a fraction of the cost, and a
+ * model reads a table as readily as an object graph.
+ */
+export interface ModelRepoInventory {
+  schemaVersion: string;
+  generatedAt: string;
+  repoRoot: string;
+  totalFiles: number;
+  returnedFiles: number;
+  languageCounts: Record<string, number>;
+  repos?: RepoFileInventoryRepo[];
+  /** `path|language|kind|symbols` where kind is one of `-` `T` `C` `D`. */
+  fileFormat: string;
+  files: string[];
 }
 
 export interface SimilarFeatureOptions {

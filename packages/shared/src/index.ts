@@ -1,5 +1,6 @@
 export * from "./artifacts.js";
 export * from "./constants.js";
+export * from "./git-head.js";
 export * from "./json.js";
 export * from "./models.js";
 export * from "./repo-scan.js";

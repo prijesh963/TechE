@@ -416,9 +416,13 @@ describe("Copilot Architect MCP server", () => {
       "customer-api",
       "billing-service"
     ]);
+    // The inventory reaches a model as `path|language|kind|symbols` lines, so
+    // the repo is the path prefix rather than a field.
     expect(
-      inventory.data.files.map((file: { repoName: string }) => file.repoName)
-    ).toContain("billing-service");
+      (inventory.data.files as string[]).some((line) =>
+        line.startsWith("billing-service/")
+      )
+    ).toBe(true);
 
     expect(
       search.data.results.map((result: { repoName: string }) => result.repoName)
