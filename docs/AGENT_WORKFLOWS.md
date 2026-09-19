@@ -54,6 +54,22 @@ re-asking; not clicking rejects it; saying what is wrong lands in the next
 draft. Only what you confirm is recorded, because a decision nobody agreed to
 would bind implementation to a choice you never made.
 
+When a new proposal contradicts something you already decided, it says which
+decision it replaces and quotes it back:
+
+```text
+- **design** — Approvals are recorded per batch after all _(over per-invoice approval)_
+  ↳ replaces: _Approvals are recorded per invoice_
+  [ Replace with: Approvals are recorded per batch after all ]
+```
+
+Confirming supersedes the old one rather than adding a second, contradictory
+decision beside it. Both are kept — a change of mind keeps its history — but
+only the current one reaches a plan or the dashboard. The decision being
+replaced is quoted rather than named by id, because "replaces d2" is not
+something you can check, and replacing the wrong decision silently would be
+worse than the contradiction it fixes.
+
 If no language model is reachable, it says so rather than showing an empty
 list as though the plan made no choices worth confirming.
 

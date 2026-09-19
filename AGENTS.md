@@ -118,7 +118,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               42 files, 311 tests
+├── tests/               42 files, 318 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -160,7 +160,9 @@ the other. If a shell needs repo intelligence, it imports the service.
 8. Symbol/dependency graph for TS/JS (compiler API) and Java.
 9. Session model: one feature, recorded decisions, versioned plans, explicit
    end, parked rather than deleted on a branch change. `/create-plan` proposes
-   decisions for the developer to confirm; only confirmed ones are recorded.
+   decisions for the developer to confirm; only confirmed ones are recorded,
+   and a proposal that contradicts an earlier decision supersedes it rather
+   than sitting beside it.
    The dashboard's Current work card shows the live session, read through
    `peek` so a repaint never parks it.
 10. Plan contract carrying each changed file's content and hash at plan time.
@@ -281,7 +283,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 311 tests must pass before merging.
+Use Vitest. All 318 tests must pass before merging.
 
 Cover:
 
@@ -291,7 +293,7 @@ Cover:
 - search (scoring, filtering, cross-repo fan-out, graph expansion)
 - symbol graph construction and cross-repo edges
 - session lifecycle (phase, decisions, plan versions, park, end, read-only peek)
-- decision proposal parsing and confirmation wiring
+- decision proposal parsing, confirmation wiring and supersession
 - dashboard session rendering, including the idle and moved-branch states
 - plan contract (freshness, approval gating, path constraints)
 - grounding (claim extraction, verification, honest "not checked")

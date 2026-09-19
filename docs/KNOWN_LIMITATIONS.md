@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–9 merged. The redesign is complete; what is below is
+**Status:** Phases 0–10 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -37,14 +37,17 @@ wording and record it".
 confirm would close it, at the price of a modal in the middle of a chat
 turn.
 
-### 1.3 Nothing supersedes a decision from the UI
+### 1.3 A superseding proposal depends on the model spotting the conflict
 
-**Phase 9.** `recordDecision` takes `supersedes` and the service handles the
-history correctly, but the confirm command never sets it. A developer who
-changes their mind gets two contradictory decisions, both active.
+**Phase 10.** Replacing a decision works, but only when the model notices its
+proposal contradicts a recorded one and puts that id in the last field.
+Nothing detects a contradiction independently, so two decisions that conflict
+in substance but not in wording both stay active.
 
-**Cost:** `activeDecisions` returns both, so a contradiction reaches the plan
-and the dashboard with nothing marking which is current.
+**Cost:** the failure is quieter than the one it replaced — a contradiction
+survives rather than being offered for replacement. Detecting it properly
+means comparing meaning, not text, which is a larger piece of work than the
+id plumbing.
 
 ### 1.4 `/create-plan` picks files by search relevance alone
 
@@ -353,4 +356,5 @@ Kept so the record shows what was traded and when.
 | Phase 6 entries misfiled under documentation debt      | Phase 6   | Phase 8 — refiled under correctness edges         |
 | Dashboard showed artifacts, never the session          | Phase 4a  | Phase 9 — Current work card, read via `peek`      |
 | Nothing ever called `recordDecision`                   | Phase 1   | Phase 9 — proposals confirmed from `/create-plan` |
+| A change of mind left two decisions active             | Phase 9   | Phase 10 — proposals carry what they replace      |
 | `templates/agents/` left empty after Phase 5           | Phase 5   | Phase 8 — directory removed                       |

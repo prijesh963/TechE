@@ -63,6 +63,46 @@ describe("SessionService", () => {
     expect(parked.closedReason).toContain("branch changed");
   });
 
+  it("keeps only the latest of a chain of changes of mind active", async () => {
+    // A developer can change their mind twice. Every version is kept for the
+    // history; exactly one is current, and it is the one a plan is built on.
+    const workspaceRoot = await createWorkspace();
+    const service = new SessionService();
+    await service.open({ workspaceRoot, title: "Invoice approval" });
+
+    await service.recordDecision(
+      { workspaceRoot },
+      { kind: "design", statement: "Approvals are per invoice" }
+    );
+    await service.recordDecision(
+      { workspaceRoot },
+      { kind: "design", statement: "Approvals are per batch", supersedes: "d1" }
+    );
+    const session = await service.recordDecision(
+      { workspaceRoot },
+      { kind: "design", statement: "Approvals are per customer", supersedes: "d2" }
+    );
+
+    expect(session.decisions).toHaveLength(3);
+
+    const active = service.activeDecisions(session);
+    expect(active).toHaveLength(1);
+    expect(active[0].statement).toBe("Approvals are per customer");
+  });
+
+  it("refuses to supersede a decision that does not exist", async () => {
+    const workspaceRoot = await createWorkspace();
+    const service = new SessionService();
+    await service.open({ workspaceRoot, title: "Invoice approval" });
+
+    await expect(
+      service.recordDecision(
+        { workspaceRoot },
+        { kind: "design", statement: "Approvals are per batch", supersedes: "d9" }
+      )
+    ).rejects.toThrow("No decision to supersede");
+  });
+
   it("peeks at a moved branch without parking the session", async () => {
     if (!(await gitAvailable())) return;
 

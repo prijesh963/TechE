@@ -954,18 +954,29 @@ export function activate(
         return;
       }
 
+      // Re-checked against the session as it is now, not as it was when the
+      // button was rendered. A chat turn can sit on screen for a long time,
+      // and recordDecision throws on an id it cannot find — which would lose
+      // the developer's click over a stale button.
+      const replaced = proposal.replaces
+        ? session.decisions.find((decision) => decision.id === proposal.replaces)
+        : undefined;
+
       await chatSessions.recordDecision(
         { workspaceRoot },
         {
           kind: proposal.kind,
           statement: proposal.statement,
-          ...(proposal.rejected ? { rejected: proposal.rejected } : {})
+          ...(proposal.rejected ? { rejected: proposal.rejected } : {}),
+          ...(replaced ? { supersedes: replaced.id } : {})
         }
       );
 
       dashboard.refresh();
       vscode.window.showInformationMessage(
-        `Recorded: ${truncate(proposal.statement, 60)}`
+        replaced
+          ? `Replaced "${truncate(replaced.statement, 40)}" with "${truncate(proposal.statement, 40)}"`
+          : `Recorded: ${truncate(proposal.statement, 60)}`
       );
     }),
     vscode.commands.registerCommand(END_SESSION_COMMAND, async () => {
@@ -2024,9 +2035,20 @@ export interface ProposedDecision {
   kind: DecisionKind;
   statement: string;
   rejected?: string;
+  /**
+   * The id of a recorded decision this replaces, when the developer has
+   * changed their mind. Shown before it is acted on: superseding the wrong
+   * decision silently would be worse than the contradiction it fixes, so the
+   * developer sees what they are replacing and the id is re-checked against
+   * the live session before anything is written.
+   */
+  replaces?: string;
 }
 
 const DECISION_KINDS: DecisionKind[] = ["design", "scope", "constraint", "fact"];
+
+/** The shape `SessionService.recordDecision` mints: `d1`, `d2`, … */
+const DECISION_ID = /^d\d+$/;
 
 /** How many proposals to show. More than this is a wall of buttons nobody reads. */
 const MAX_PROPOSED_DECISIONS = 4;
@@ -2245,14 +2267,9 @@ async function runPlanPhase(
     stream.markdown(`- \`${change.relativePath}\` — ${quoted}\n`);
   }
   stream.progress?.("Looking for choices worth confirming…");
-  const proposals = await proposeDecisions(
-    vscode,
-    prompt,
-    changes,
-    sessions.activeDecisions(withDraft),
-    token
-  );
-  renderProposedDecisions(proposals, stream);
+  const recorded = sessions.activeDecisions(withDraft);
+  const proposals = await proposeDecisions(vscode, prompt, changes, recorded, token);
+  renderProposedDecisions(proposals, recorded, stream);
 
   stream.markdown(`\n${await buildReceipts(workspaceRoot)}\n`);
   stream.markdown(
@@ -2274,6 +2291,7 @@ async function runPlanPhase(
  */
 function renderProposedDecisions(
   proposals: ProposedDecision[] | undefined,
+  recorded: Decision[],
   stream: ChatResponseStreamLike
 ): void {
   if (proposals === undefined) {
@@ -2296,9 +2314,21 @@ function renderProposedDecisions(
   for (const proposal of proposals) {
     const rejected = proposal.rejected ? ` _(over ${proposal.rejected})_` : "";
     stream.markdown(`\n- **${proposal.kind}** — ${proposal.statement}${rejected}\n`);
+
+    // Named, not just referenced by id. "Replaces d2" tells the developer
+    // nothing they can check; replacing the wrong decision silently would be
+    // worse than the contradiction this exists to fix.
+    const replaced = proposal.replaces
+      ? recorded.find((decision) => decision.id === proposal.replaces)
+      : undefined;
+
+    if (replaced) {
+      stream.markdown(`  ↳ replaces: _${replaced.statement}_\n`);
+    }
+
     stream.button?.({
       command: CONFIRM_DECISION_COMMAND,
-      title: `Confirm: ${truncate(proposal.statement, 48)}`,
+      title: `${replaced ? "Replace with" : "Confirm"}: ${truncate(proposal.statement, 44)}`,
       arguments: [proposal]
     });
   }
@@ -3068,7 +3098,7 @@ export function parseProposedDecisions(text: string): ProposedDecision[] {
     const trimmed = line.trim().replace(/^[-*]\s*/, "");
     if (!trimmed) continue;
 
-    // kind | statement | optional rejected alternative
+    // kind | statement | optional rejected alternative | optional id replaced
     const parts = trimmed.split("|").map((part) => part.trim());
     if (parts.length < 2) continue;
 
@@ -3084,10 +3114,17 @@ export function parseProposedDecisions(text: string): ProposedDecision[] {
     seen.add(key);
 
     const rejected = parts[2];
+    // Only an id in the shape the session actually mints. Anything else is
+    // the model narrating, and would name a decision that does not exist.
+    const replaces = parts[3] && DECISION_ID.test(parts[3]) ? parts[3] : undefined;
+
     proposals.push({
       kind,
       statement,
-      ...(rejected && rejected.length > 1 && rejected.length <= 300 ? { rejected } : {})
+      ...(rejected && rejected.length > 1 && rejected.length <= 300
+        ? { rejected }
+        : {}),
+      ...(replaces ? { replaces } : {})
     });
 
     if (proposals.length === MAX_PROPOSED_DECISIONS) break;
@@ -3112,7 +3149,12 @@ async function proposeDecisions(
   token: unknown
 ): Promise<ProposedDecision[] | undefined> {
   const files = changes.map((change) => change.relativePath).join("\n");
-  const settled = alreadyRecorded.map((decision) => decision.statement).join("\n");
+  // With ids, so a proposal can say which one it replaces when the developer
+  // has changed their mind. Without them the model can only restate, and two
+  // contradictory decisions both stay active.
+  const settled = alreadyRecorded
+    .map((decision) => `${decision.id} | ${decision.kind} | ${decision.statement}`)
+    .join("\n");
 
   const prompt = [
     "A developer asked for this change:",
@@ -3121,19 +3163,33 @@ async function proposeDecisions(
     "A plan proposes touching these files:",
     files,
     "",
-    ...(settled ? ["Already decided — do not repeat these:", settled, ""] : []),
+    ...(settled ? ["Already decided in this session:", settled, ""] : []),
     "Name the choices this plan is making that a developer should confirm",
     "before any code is written. A choice is worth naming when a reasonable",
     `engineer could pick differently. At most ${MAX_PROPOSED_DECISIONS}.`,
     "",
     "One per line, pipe-separated, nothing else — no prose, no numbering:",
-    "kind | what is being decided | what it was chosen over (optional)",
+    "kind | what is being decided | what it was chosen over | id it replaces",
     "",
     "kind is one of: design, scope, constraint, fact",
+    "Leave a field empty if it does not apply, but keep the pipes.",
     "",
+    ...(settled
+      ? [
+          "Do not repeat a decision above. Propose one only if this plan",
+          "contradicts it — then put that decision's id in the last field, so",
+          "the developer can replace it rather than hold both.",
+          ""
+        ]
+      : []),
     "Example:",
-    "design | Approvals are recorded per invoice, not per batch | a batch-level approval table",
-    "scope | Changes stay inside the billing service | touching the orders service too",
+    "design | Approvals are recorded per invoice, not per batch | a batch-level approval table |",
+    "scope | Changes stay inside the billing service | touching the orders service too |",
+    ...(settled
+      ? [
+          "design | Approvals are recorded per batch after all | per-invoice approval | d1"
+        ]
+      : []),
     "",
     "If the plan makes no choice worth confirming, answer with nothing at all."
   ].join("\n");

@@ -993,6 +993,48 @@ describe("proposed decisions", () => {
     expect(proposals).toHaveLength(1);
   });
 
+  it("reads the id of a decision being replaced", () => {
+    const proposals = parseProposedDecisions(
+      "design | Approvals are recorded per batch after all | per-invoice approval | d1"
+    );
+
+    expect(proposals).toEqual([
+      {
+        kind: "design",
+        statement: "Approvals are recorded per batch after all",
+        rejected: "per-invoice approval",
+        replaces: "d1"
+      }
+    ]);
+  });
+
+  it("reads a replacement with no rejected alternative", () => {
+    const proposals = parseProposedDecisions(
+      "scope | Changes now include the orders service | | d2"
+    );
+
+    expect(proposals[0]).toEqual({
+      kind: "scope",
+      statement: "Changes now include the orders service",
+      replaces: "d2"
+    });
+  });
+
+  it("ignores anything in the id field that is not an id", () => {
+    // A model narrating — "replaces the earlier scope decision" — must not
+    // become a supersedes. Superseding the wrong decision silently is worse
+    // than the contradiction this field exists to fix.
+    const proposals = parseProposedDecisions(
+      [
+        "design | Approvals are per batch | per invoice | the earlier decision",
+        "scope | Billing service only | orders too | decision 1",
+        "fact | OrderService is deprecated now | | D1"
+      ].join("\n")
+    );
+
+    expect(proposals.every((proposal) => proposal.replaces === undefined)).toBe(true);
+  });
+
   it("caps the list so it stays a decision, not a survey", () => {
     const many = Array.from(
       { length: 12 },
@@ -1037,6 +1079,76 @@ describe("confirming a proposed decision", () => {
         rejected: "touching the orders service too"
       })
     );
+  });
+
+  it("replaces the decision it supersedes instead of holding both", async () => {
+    // The gap this closes: a developer who changed their mind ended up with
+    // two contradictory decisions, both active, both reaching the plan and
+    // the dashboard with nothing marking which was current.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-supersede-"));
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+    await sessions.recordDecision(
+      { workspaceRoot },
+      { kind: "design", statement: "Approvals are recorded per invoice" }
+    );
+
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.confirmDecision")?.({
+      kind: "design",
+      statement: "Approvals are recorded per batch after all",
+      rejected: "per-invoice approval",
+      replaces: "d1"
+    });
+
+    const session = await sessions.current({ workspaceRoot });
+
+    // Both are kept — a change of mind keeps its history.
+    expect(session?.decisions).toHaveLength(2);
+    expect(session?.decisions[1].supersedes).toBe("d1");
+
+    // Only the current one is active, so only it reaches a plan or the card.
+    const active = sessions.activeDecisions(session!);
+    expect(active).toHaveLength(1);
+    expect(active[0].statement).toBe("Approvals are recorded per batch after all");
+  });
+
+  it("records the decision anyway when the id it claims to replace is gone", async () => {
+    // A chat turn can sit on screen for a long time. recordDecision throws on
+    // an id it cannot find, which would lose the developer's click over a
+    // stale button — so the id is re-checked and dropped rather than passed.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-stale-id-"));
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.confirmDecision")?.({
+      kind: "scope",
+      statement: "Changes stay inside the billing service",
+      replaces: "d9"
+    });
+
+    const session = await sessions.current({ workspaceRoot });
+    expect(session?.decisions).toHaveLength(1);
+    expect(session?.decisions[0].supersedes).toBeUndefined();
   });
 
   it("ignores a click carrying nothing to record", async () => {
