@@ -11,6 +11,7 @@ import { RepoDiscoveryService, WorkspaceService } from "../packages/core/src/ind
 import { IndexingService } from "../packages/indexer/src/index.js";
 import { FeaturePlanningService } from "../packages/planner/src/index.js";
 import {
+  CHAT_COMMANDS,
   ARTIFACT_DIRECTORY,
   CURRENT_SCHEMA_VERSION,
   getArtifactDirectoryPath
@@ -268,7 +269,7 @@ describe("Phase 22 sample repo matrix", () => {
         path.join(getArtifactDirectoryPath(repoRoot, "handoffs"), "latest-handoff.md"),
         "utf8"
       )
-    ).resolves.toContain("@FeatureImplementer");
+    ).resolves.toContain(CHAT_COMMANDS.implement);
     await expect(
       readFile(
         path.join(getArtifactDirectoryPath(repoRoot, "reviews"), "latest-review.md"),

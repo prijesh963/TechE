@@ -121,10 +121,10 @@ planner are unaffected.
 After starting the MCP server and connecting Copilot Chat, use the tools in Agent mode:
 
 ```text
-@FeatureArchitect Use repo_map and search_repo to find patterns for invoice approval.
+Use repo_map and search_repo to find patterns for invoice approval.
 Then use generate_plan_context to build a detailed plan.
 ```
 
 ```text
-@CodeReviewer Use get_latest_plan and get_latest_validation to review the implementation.
+Use get_latest_plan and get_latest_validation to review the implementation.
 ```

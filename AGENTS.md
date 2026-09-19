@@ -2,43 +2,53 @@
 
 We are building **Copilot Architect**.
 
-Copilot Architect is an internal developer tool that helps teams use GitHub Copilot, Codex, Claude Code, or other AI coding agents more effectively.
+Copilot Architect is an internal developer tool that grounds GitHub Copilot,
+Codex, Claude Code and other AI coding agents in what is actually in a
+repository, instead of in a model's general sense of how projects like this
+usually look.
 
-The user should be able to type a high-level task like:
+A developer types a high-level task:
 
 > Add invoice approval workflow based on the current repo.
 
-The tool then:
+The tool walks one feature from question to reviewed change, in one session:
 
-1. Analyzes the current repo or multi-repo workspace.
-2. Detects languages, frameworks, package managers, build systems, and test systems.
-3. Builds a repo map and local searchable index.
-4. Finds similar existing features and patterns.
-5. Generates a detailed implementation plan.
-6. Requires human approval.
-7. Generates custom Copilot/Codex handoff prompts.
-8. Runs safe validation commands.
-9. Generates review reports from git diff and validation evidence.
-10. Exposes repo intelligence through a CLI and local MCP server.
-11. Generates and maintains custom Copilot agents and workspace instructions.
+1. Analyzes the repo or multi-repo workspace and indexes it locally.
+2. Answers questions about it from that index, not from guesses.
+3. Drafts a plan carrying the current contents of every file it would change.
+4. Takes the developer's corrections and redrafts, versioned.
+5. Waits for explicit approval — a button, not a phrase.
+6. Applies the approved plan and nothing beyond it.
+7. Reviews what was built against what was approved.
+8. Exposes the same repo intelligence through a CLI and a local MCP server.
 
-## Quick Start (Current State)
+## Quick Start
 
 ```bash
 git clone <repo>
 cd copilot-architect
 scripts/setup.sh              # install, build, test, verify
 npm run cli -- demo           # end-to-end demo: analyze → index → search → diagnostics
+npm run package:vsix          # build the installable VS Code extension
 ```
 
-Full workflow:
+Then install the `.vsix` and drive a feature from Copilot Chat:
+
+```text
+@architect /analyze        what is in this repo
+@architect /create-plan    propose a change
+                           (Approve Plan — a button)
+@architect /implement      apply the approved plan
+@architect /review         check it against the plan
+```
+
+The CLI path, for scripting and for clients that are not the extension:
 
 ```bash
 npm run cli -- init
 npm run cli -- analyze
 npm run cli -- index
 npm run cli -- plan "Add X feature"
-npm run cli -- agents install
 npm run cli -- instructions generate
 npm run cli -- mcp config
 npm run cli -- handoff --plan latest --approve
@@ -69,19 +79,19 @@ Most target repositories are:
 
 ## Distribution Model
 
-This is not a commercial product.
+This is not a commercial product. The goal is internal team sharing with
+minimal setup.
 
-The goal is internal team sharing with minimal setup via `git clone`, `npm install`, `npm run build`, and `npm run cli -- doctor`.
-
-Internal sharing options:
-
-1. Git clone + `scripts/setup.sh`
-2. `npm link --workspace @copilot-architect/cli` for a global command
-3. `npm run package:local` to build a tarball for teammates
+1. **`npm run package:vsix`** — an installable VS Code extension. This is the
+   normal path: the recipient needs VS Code and Copilot, not Node, npm or a
+   clone. The CLI is bundled inside the package and spawned by absolute path.
+2. Git clone + `scripts/setup.sh`, for developing the tool itself.
+3. `npm link --workspace @copilot-architect/cli` for a global command.
+4. `npm run package:local` to build a tarball for teammates.
 
 ## Core Architecture
 
-Use a TypeScript monorepo-style structure:
+A TypeScript monorepo:
 
 ```text
 copilot-architect/
@@ -89,80 +99,83 @@ copilot-architect/
 │   ├── shared/          domain models, constants, artifact helpers
 │   ├── core/            repo discovery, workspace service, advanced analysis
 │   ├── adapters/        language/framework/toolchain adapters
-│   ├── indexer/         file indexing and keyword search
-│   ├── planner/         feature planning, handoff, workspace planning
-│   ├── validator/       validation engine, safety policy, audit, risk assessment
+│   ├── indexer/         file indexing, keyword search, staleness detection
+│   ├── graph/           symbol/dependency graph
+│   ├── intent/          query intent classification
+│   ├── planner/         plan contract, feature planning, handoff
+│   ├── session/         one feature at a time: phase, decisions, plan versions
+│   ├── grounding/       verifies model claims against the index
+│   ├── measurement/     naive-vs-selected context measurement
+│   ├── validator/       validation engine, safety policy, audit, risk
 │   ├── reviewer/        review report generation
-│   ├── agents/          Copilot agent template generation
+│   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 20 tools
+│   ├── mcp-server/      MCP server and 27 tools
 │   ├── cli/             CLI entry point and command routing
-│   ├── vscode-extension VS Code extension shell (thin)
+│   ├── vscode-extension the @architect chat participant and dashboard
 │   └── web/             optional local web UI shell (thin)
 ├── templates/
-│   ├── agents/
 │   ├── instructions/
 │   └── skills/
-├── samples/             representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               integration and e2e tests (147 tests)
+├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
+├── tests/               42 files, 297 tests
 ├── docs/                product documentation
-└── scripts/             setup and packaging scripts
+└── scripts/             setup, bundling and packaging scripts
 ```
 
 ## Core Rule
 
 Business logic must not live inside UI shells.
 
-All real product logic must live in:
+All real product logic must live in `packages/`, excluding `vscode-extension`
+and `web`.
 
-- packages/core
-- packages/adapters
-- packages/indexer
-- packages/planner
-- packages/validator
-- packages/reviewer
-- packages/agents
-- packages/instructions
-- packages/mcp-server
-- packages/cli
+UI shells must only call CLI/core/MCP services.
 
-UI shells (`vscode-extension`, `web`) must only call CLI/core/MCP services.
+This rule was violated once and it mattered: the extension re-implemented
+retrieval rather than calling the indexer, so `@architect` and the MCP tools
+answered the same question differently, and a fix applied to one never reached
+the other. If a shell needs repo intelligence, it imports the service.
 
 ## Do Not Build in MVP
 
-- Visual Studio VSIX
+- Visual Studio (the IDE) extensions — VSIX here means the **VS Code** package
+  built by `npm run package:vsix`, which is in scope and shipping
 - WPF / Blazor UI
 - .NET core engine
 - Commercial marketplace packaging
 - Heavy vector database or cloud backend
 - Enterprise installer
 
-These can be future optional wrappers.
+## Implemented
 
-## Required MVP Features (All Implemented)
+1. TypeScript CLI with 24 commands including `demo`.
+2. Local MCP server with 27 tools.
+3. VS Code extension with the `@architect` chat participant and four phases.
+4. Repo analysis and discovery; language/framework/package-manager detection.
+5. Adapter architecture with registry, confidence scoring, generic fallback.
+6. Local JSON index with full, incremental and rebuild modes, plus staleness
+   detection so a session's own edits are not answered from a stale snapshot.
+7. Keyword search with scoring, cross-repo fan-out and symbol-graph expansion.
+8. Symbol/dependency graph for TS/JS (compiler API) and Java.
+9. Session model: one feature, recorded decisions, versioned plans, explicit
+   end, parked rather than deleted on a branch change.
+10. Plan contract carrying each changed file's content and hash at plan time.
+11. Grounding: claims verified against the index, unverified ones flagged.
+12. Safe validation runner with timeouts, retries and streaming.
+13. Safety policy engine with blocked patterns and approval gates.
+14. Audit logs (append-only `.copilot-architect/audit/audit.jsonl`).
+15. Secret redaction (AWS, GCP, Stripe, JWT, PEM, DB connection strings, etc.).
+16. Copilot instructions and prompt-file generation.
+17. Handoff prompt generation (requires `--approve`).
+18. Review report generation from git diff and validation evidence.
+19. Multi-repo workspace support.
+20. Advanced intelligence: architecture detection, route/API detection, test
+    relationships, risk scoring.
+21. VSIX packaging, internal setup docs, npm link support.
 
-1. TypeScript CLI with 23 commands including `demo`.
-2. Local MCP server with 20 tools.
-3. Repo analysis and discovery.
-4. Language/framework/package-manager detection (adapter-based).
-5. Adapter architecture with registry, confidence scoring, and generic fallback.
-6. Local JSON index with full, incremental, and rebuild modes.
-7. Keyword search with scoring.
-8. Feature planning engine with impact analysis and risk scoring.
-9. Custom command config (`.copilot-architect/commands.json`).
-10. Safe validation runner with timeouts, retries, and streaming.
-11. Safety policy engine with blocked patterns and approval gates.
-12. Audit logs (append-only `.copilot-architect/audit/audit.jsonl`).
-13. Secret redaction (AWS, GCP, Stripe, JWT, PEM, DB connection strings, etc.).
-14. Custom Copilot agents (`gpt-4o` model) installed under `.github/agents/`.
-15. Copilot instructions generation with skill templates.
-16. Handoff prompt generation (requires `--approve`).
-17. Review report generation from git diff and validation evidence.
-18. Multi-repo workspace support.
-19. Basic VS Code extension shell.
-20. Optional local web UI shell.
-21. Advanced intelligence: architecture detection, route/API detection, test relationships, risk scoring.
-22. Internal setup docs, packaging scripts, npm link support.
+Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
+rather than left to be rediscovered.
 
 ## Language and Toolchain Support
 
@@ -178,11 +191,14 @@ These can be future optional wrappers.
 
 ### Extended validation allowlist
 
-`bun`, `deno`, `npx`, `tsc`, `biome`, `cargo`, `go`, `rustfmt`, `clippy`, `dotnet`, `mocha`, `jasmine`, `playwright`, `cypress`, `webpack`, `esbuild`, `turbo`, `nx`, `python3`, `py`, `pipenv`, `uv`, and more.
+`bun`, `deno`, `npx`, `tsc`, `biome`, `cargo`, `go`, `rustfmt`, `clippy`,
+`dotnet`, `mocha`, `jasmine`, `playwright`, `cypress`, `webpack`, `esbuild`,
+`turbo`, `nx`, `python3`, `py`, `pipenv`, `uv`, and more.
 
 ### Generic fallback
 
-All repos get file scanning, docs detection, config detection, import scanning, test pattern detection, and custom commands through `GenericTextAdapter`.
+All repos get file scanning, docs detection, config detection, import scanning,
+test pattern detection, and custom commands through `GenericTextAdapter`.
 
 ## Adapter Responsibilities
 
@@ -202,7 +218,8 @@ Each adapter must detect:
 
 Analysis is **read-only by default**.
 
-Block dangerous commands by default (see `DEFAULT_BLOCKED_PATTERNS` in `packages/validator/src/safety-policy-service.ts`):
+Block dangerous commands by default (see `DEFAULT_BLOCKED_PATTERNS` in
+`packages/validator/src/safety-policy-service.ts`):
 
 - `rm -rf`, `del /s`, `format`, `diskpart`
 - `git clean -fdx`, `git reset --hard`
@@ -210,12 +227,16 @@ Block dangerous commands by default (see `DEFAULT_BLOCKED_PATTERNS` in `packages
 
 Redact secrets from all logs and reports (see `SecretRedactionService`):
 
-- Env-var assignments with `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`, etc.
-- AWS, GCP, Stripe, JWT, PEM, database connection strings, npm tokens, Slack tokens, Bearer headers, GitHub tokens.
+- Env-var assignments with `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`,
+  `ACCESS_KEY`, `PRIVATE_KEY`, etc.
+- AWS, GCP, Stripe, JWT, PEM, database connection strings, npm tokens, Slack
+  tokens, Bearer headers, GitHub tokens.
 
 Never write outside the repo/workspace root without explicit permission.
 
-Implementation handoff always requires `--approve`.
+Writing code requires an approved plan. Approval is explicit and per-version:
+a button in the extension, `--approve` on the CLI. Silence, a question, or
+qualified agreement are not approval.
 
 ## Generated Artifacts
 
@@ -227,8 +248,10 @@ All runtime artifacts live under:
 ├── workspace.json
 ├── commands.json
 ├── policy.json
+├── graph.json
 ├── index/
-├── plans/
+├── sessions/
+├── plans/          drafts, and approved/ for plans that were signed off
 ├── handoffs/
 ├── runs/
 ├── reviews/
@@ -240,7 +263,6 @@ GitHub Copilot integration artifacts:
 
 ```text
 .github/
-├── agents/          *.agent.md (7 templates, gpt-4o)
 ├── copilot-instructions.md
 ├── prompts/         *.prompt.md
 └── skills/          SKILL.md files
@@ -248,25 +270,36 @@ GitHub Copilot integration artifacts:
 └── mcp.json
 ```
 
+Generated text must name the real front door. `CHAT_PARTICIPANT` and
+`CHAT_COMMANDS` in `packages/shared/src/constants.ts` are the single source:
+never hard-code a mention. A generated artifact naming an agent that does not
+exist sends a developer to type into the void and report that "the agent" is
+broken.
+
 ## Testing
 
-Use Vitest. All 147 tests must pass before merging.
+Use Vitest. All 297 tests must pass before merging.
 
 Cover:
 
 - adapter detection (all supported stacks)
 - repo discovery (single and multi-repo)
-- indexing (full, incremental, rebuild)
-- search (scoring and filtering)
+- indexing (full, incremental, rebuild, staleness)
+- search (scoring, filtering, cross-repo fan-out, graph expansion)
+- symbol graph construction and cross-repo edges
+- session lifecycle (phase, decisions, plan versions, park, end)
+- plan contract (freshness, approval gating, path constraints)
+- grounding (claim extraction, verification, honest "not checked")
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
-- MCP tools (all 20 tools)
-- agent generation (7 templates, validation)
+- MCP tools (all 27 tools)
+- role prompt rendering
 - instructions generation and validation
 - handoff generation (approval gating, git checkpoint)
 - review reports (diff, risk detection, missing tests)
 - CLI commands (help, JSON output, exit codes)
+- extension chat phases and packaged CLI invocation
 - multi-repo workspaces
 - end-to-end sample repos
 - demo command
@@ -291,5 +324,8 @@ For every phase:
 4. Update docs.
 5. Run `npm run build` and confirm zero TypeScript errors.
 6. Summarize changed files.
-7. List limitations.
+7. List limitations — in `docs/KNOWN_LIMITATIONS.md`, not only in the summary.
 8. Stop before moving to the next phase.
+
+When a test fails, fix the cause or the fixture. Do not relax the assertion to
+make it pass.

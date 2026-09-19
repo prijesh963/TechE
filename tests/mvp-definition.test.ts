@@ -33,7 +33,8 @@ const lockedMvpCapabilities = [
 const mvpNonGoals = [
   "Full autonomous code editing inside this tool.",
   "Commercial distribution.",
-  "Visual Studio VSIX.",
+  // Not the VS Code .vsix, which ships. See MVP_DEFINITION.md.
+  "Visual Studio (the IDE) extensions",
   "Cloud sync.",
   "Team dashboard.",
   "Heavy vector database.",

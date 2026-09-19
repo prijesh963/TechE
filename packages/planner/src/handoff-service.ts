@@ -9,6 +9,7 @@ import {
   type GitCheckpointResult
 } from "@copilot-architect/validator";
 import {
+  CHAT_COMMANDS,
   CURRENT_SCHEMA_VERSION,
   type FeaturePlan,
   type HandoffPrompt,
@@ -196,7 +197,7 @@ function renderHandoffMarkdown(input: {
   } = input;
 
   return [
-    "@FeatureImplementer",
+    CHAT_COMMANDS.implement,
     "",
     "Implement the approved plan below.",
     "",
@@ -213,7 +214,7 @@ function renderHandoffMarkdown(input: {
     "Target agent compatibility:",
     `- Requested target: ${targetAgent}.`,
     "- This handoff is suitable for GitHub Copilot custom agents, Copilot chat, Codex, Claude Code, and generic coding agents.",
-    "- Prefer the installed @FeatureImplementer agent when available.",
+    `- Inside VS Code, ${CHAT_COMMANDS.implement} applies an approved plan directly.`,
     "",
     "Approved plan:",
     "",

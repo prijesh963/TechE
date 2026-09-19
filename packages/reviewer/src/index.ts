@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import {
+  CHAT_COMMANDS,
   CURRENT_SCHEMA_VERSION,
   type FeaturePlan,
   type FindingDisposition,
@@ -524,7 +525,7 @@ function buildReviewerPrompt(context: {
   findings: ReviewFinding[];
 }): string {
   return [
-    "@CodeReviewer",
+    CHAT_COMMANDS.review,
     "",
     "Review the git diff against the approved plan and validation evidence.",
     context.plan

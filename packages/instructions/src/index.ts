@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { RepoDiscoveryService } from "@copilot-architect/core";
 import {
+  CHAT_COMMANDS,
   CURRENT_SCHEMA_VERSION,
   type InstructionGenerationResult,
   type RepoMap,
@@ -223,10 +224,10 @@ const promptDefinitions: PromptDefinition[] = [
     fileName: "copilot-architect-plan.prompt.md",
     name: "copilot-architect-plan",
     description: "Plan a feature with Copilot Architect repo intelligence.",
-    agent: "FeatureArchitect",
+    agent: "architect",
     argumentHint: "feature request",
     body: [
-      "@FeatureArchitect Add ${input:feature:feature request} based on this repo.",
+      `${CHAT_COMMANDS.plan} Add ${"${input:feature:feature request}"} based on this repo.`,
       "Use Copilot Architect repo map, index, MCP tools, and latest generated plan.",
       "Do not modify code yet. First create a detailed implementation plan.",
       "Include impacted files, similar feature patterns, risks, tests, validation commands, and open questions."
@@ -237,10 +238,10 @@ const promptDefinitions: PromptDefinition[] = [
     fileName: "copilot-architect-implement.prompt.md",
     name: "copilot-architect-implement",
     description: "Implement an approved Copilot Architect plan.",
-    agent: "FeatureImplementer",
+    agent: "architect",
     argumentHint: "optional implementation notes",
     body: [
-      "@FeatureImplementer Implement the approved plan from .copilot-architect/plans/latest-plan.md.",
+      `${CHAT_COMMANDS.implement} Implement the approved plan from .copilot-architect/plans/latest-plan.md.`,
       "Use .copilot-architect/handoffs/latest-handoff.md when it exists.",
       "Keep changes scoped to the approved plan, update or add focused tests, run validation commands, and summarize changed files.",
       "Do not expand scope without human approval."
@@ -251,10 +252,10 @@ const promptDefinitions: PromptDefinition[] = [
     fileName: "copilot-architect-review.prompt.md",
     name: "copilot-architect-review",
     description: "Review implementation against plan and validation evidence.",
-    agent: "CodeReviewer",
+    agent: "architect",
     argumentHint: "optional review focus",
     body: [
-      "@CodeReviewer Review the git diff against the approved plan and latest validation report.",
+      `${CHAT_COMMANDS.review} Review the git diff against the approved plan and latest validation report.`,
       "Prioritize bugs, missing tests, behavioral regressions, validation failures, security risks, and unexpected scope.",
       "Use .copilot-architect/reviews/latest-review.md when available and produce actionable findings."
     ]
@@ -264,10 +265,10 @@ const promptDefinitions: PromptDefinition[] = [
     fileName: "copilot-architect-debug.prompt.md",
     name: "copilot-architect-debug",
     description: "Debug failed validation evidence from Copilot Architect.",
-    agent: "Debugger",
+    agent: "architect",
     argumentHint: "failing command or symptom",
     body: [
-      "@Debugger Validation failed.",
+      `${CHAT_COMMANDS.review} Validation failed.`,
       "Use .copilot-architect/runs/latest-validation.json and related logs to classify the failure.",
       "Propose the smallest safe fix, identify files to inspect, and name the validation command to rerun.",
       "Do not mask failures by deleting tests or loosening validation without approval."
@@ -497,7 +498,7 @@ function renderInstructions(repoMap: UniversalRepoMap): string {
     [
       "- Stop after planning and request human approval.",
       "- Generate implementation handoff only after approval.",
-      "- Use `@FeatureImplementer` only with an approved handoff."
+      `- Use \`${CHAT_COMMANDS.implement}\` only with an approved plan.`
     ].join("\n"),
     "",
     "## Validation Workflow",

@@ -4,6 +4,28 @@ export const COPILOT_ARCHITECT_VERSION = "0.1.0";
 
 export const CURRENT_SCHEMA_VERSION = COPILOT_ARCHITECT_VERSION;
 
+/**
+ * The one front door, and its phases.
+ *
+ * Generated prompts, handoffs and review reports all name the thing a
+ * developer should type next. When Phase 5 deleted the eleven `.agent.md`
+ * files, those generated texts went on naming `@FeatureImplementer` and
+ * `@CodeReviewer` — mentions that now resolve to nothing. A developer who
+ * follows them types into the void and reports that "the agent" is broken,
+ * which is exactly how a bug report about `@architect` once arrived
+ * describing a different system entirely.
+ *
+ * Defined once here so a rename cannot leave a generated artifact behind.
+ */
+export const CHAT_PARTICIPANT = "@architect";
+
+export const CHAT_COMMANDS = {
+  analyze: `${CHAT_PARTICIPANT} /analyze`,
+  plan: `${CHAT_PARTICIPANT} /create-plan`,
+  implement: `${CHAT_PARTICIPANT} /implement`,
+  review: `${CHAT_PARTICIPANT} /review`
+} as const;
+
 export const ARTIFACT_DIRECTORY = ".copilot-architect";
 
 export const ARTIFACT_FILE_NAMES = {
@@ -74,8 +96,10 @@ export const REQUIRED_PACKAGE_DIRECTORIES = [
   "packages/web"
 ] as const;
 
+// `templates/agents` was removed in Phase 8. Phase 5 deleted the agent
+// templates themselves; the empty directory outlived them because nothing
+// was checking whether it still had a purpose.
 export const REQUIRED_TEMPLATE_DIRECTORIES = [
-  "templates/agents",
   "templates/instructions",
   "templates/skills"
 ] as const;

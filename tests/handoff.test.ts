@@ -11,6 +11,7 @@ import {
   HandoffService
 } from "../packages/planner/src/index.js";
 import { runCli } from "../packages/cli/src/index.js";
+import { CHAT_COMMANDS } from "../packages/shared/src/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,7 +87,10 @@ describe("HandoffService", () => {
     );
     expect(result.handoff.validationCommands.length).toBeGreaterThan(0);
     expect(result.clipboard.attempted).toBe(false);
-    expect(markdown).toContain("@FeatureImplementer");
+    expect(markdown).toContain(CHAT_COMMANDS.implement);
+    // Phase 5 deleted the .agent.md files. A handoff that still names one
+    // sends the developer to a mention that resolves to nothing.
+    expect(markdown).not.toContain("@FeatureImplementer");
     expect(markdown).toContain("Implement the approved plan below.");
     expect(markdown).toContain("Rules:");
     expect(markdown).toContain("Approved plan:");
@@ -197,7 +201,7 @@ describe("handoff CLI", () => {
     const json = JSON.parse(capture.stdout.join("\n"));
 
     expect(result.exitCode).toBe(0);
-    expect(json.handoff.promptMarkdown).toContain("@FeatureImplementer");
+    expect(json.handoff.promptMarkdown).toContain(CHAT_COMMANDS.implement);
     expect(json.gitCheckpoint.message).toBeDefined();
     expect(json.clipboard.attempted).toBe(false);
   });

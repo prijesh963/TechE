@@ -9,7 +9,8 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–7 merged. Phase 8 outstanding.
+**Status:** Phases 0–8 merged. The redesign is complete; what is below is
+the backlog it leaves behind.
 
 ---
 
@@ -174,6 +175,37 @@ rediscovered as a bug.
 
 ---
 
+### 4.9 Grounding checks paths and symbols, not statements
+
+**Phase 6.** Only backticked paths, `file:line` citations and qualified symbols
+are verified. A claim made in prose — "the service retries three times" — is
+not checked at all, and a bare PascalCase word is deliberately ignored to avoid
+flagging framework names.
+
+**Cost:** the most consequential claims, about behaviour rather than existence,
+are unverifiable by this mechanism. The precision trade is deliberate, and the
+report says so.
+
+### 4.10 Relation claims are not checked
+
+**Phase 6, narrowed in Phase 7.** `useSymbolGraph` still defaults off, and the
+`verifyRelation` implementation was deleted in Phase 7: importing the graph
+package pulled the TypeScript compiler into the extension bundle, 9.5 MB for a
+code path nothing called.
+
+**Cost:** a claim that one symbol calls another is reported as not checked, and
+restoring the check means routing it through the CLI rather than importing the
+graph directly. The reason it defaulted off still stands — a graph is only as
+current as its last build, and asserting a claim is wrong on stale data is the
+mistake this module exists to prevent.
+
+### 4.11 Grounding is wired into `/analyze` only
+
+**Phase 6.** `/create-plan` and `/review` produce claims about the repo too and
+do not verify them.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
@@ -227,21 +259,30 @@ would ship the same bytes as `node_modules`.
 
 ## 6. Documentation debt
 
-### 6.1 `docs/SOLUTION_OVERVIEW.md` describes a design now partly built
+### 6.3 Two plan formats coexist — and should
 
-Its measured figures predate Phase 0's payload trimming and therefore
-understate the saving. Phase 8 should refresh it against reality.
+**Raised Phase 2, assessed Phase 8: not a duplication.** `FeaturePlan` and
+`PlanContract` looked like two formats for one thing. They are not.
 
-### 6.2 `AGENTS.md` is the spec and is behind
+`FeaturePlan` is a narrative plan — steps, assumptions, impact analysis,
+validation strategy — written for a human or another agent to act on. It is
+what `handoff`, `measure`, `review` and four MCP tools consume, and it is the
+CLI's plan surface. `PlanContract` is an executable contract: per-file changes
+with before-snapshots and content hashes, versioned, carrying the decisions it
+was approved under, which `/implement` applies directly.
 
-Tool, command and test counts have drifted, the "Do Not Build: Visual Studio
-VSIX" line is ambiguous now that a VS Code `.vsix` is planned, and the Core
-Rule it states was violated until Phase 3. Phase 8 owns this.
+Retiring `FeaturePlan` as originally intended would remove the CLI `plan`
+command, `handoff`, `measure`, workspace planning and four MCP tools — the
+surfaces that matter most where policy forbids installing an extension.
 
-### 6.3 Two plan formats coexist
+**Cost, which is real:** `/review` in the extension reads the approved
+contract while the CLI's `review` reads `plans/latest-plan.json`, so a
+developer using both can get different answers to "what was approved". They
+write to different paths (`plans/approved/` and `plans/latest-plan.json`) so
+nothing collides, but nothing reconciles them either.
 
-`FeaturePlanningService` still produces the pre-redesign shape alongside the
-new `PlanContract`. Deliberate during migration; Phase 8 cleans it up.
+**Shape of the fix:** have the CLI's `review` prefer an approved contract when
+one exists, falling back to the narrative plan. Not a format retirement.
 
 ---
 
@@ -260,30 +301,19 @@ a live failure to learn. They are recoverable from git history.
 than separate agents. `/review` could run security, performance and API-design
 checks as passes over the same diff.
 
-### 4.9 Grounding checks paths and symbols, not statements
+### 6.5 Five docs describe the pre-redesign product
 
-**Phase 6.** Only backticked paths, `file:line` citations and qualified symbols
-are verified. A claim made in prose — "the service retries three times" — is
-not checked at all, and a bare PascalCase word is deliberately ignored to avoid
-flagging framework names.
+**Phase 8.** `AGENT_WORKFLOWS.md` was rewritten and the dead `@Agent` mentions
+were corrected everywhere, but `PLAN_LIFECYCLE_DESIGN.md`, `ROADMAP.md`,
+`TESTING_STRATEGY.md`, `MVP_DEFINITION.md` and `PHASE_26_VALIDATION_REPORT.md`
+still describe the eleven-agent product as current.
 
-**Cost:** the most consequential claims, about behaviour rather than existence,
-are unverifiable by this mechanism. The precision trade is deliberate, and the
-report says so.
+**Cost:** a reader who starts from the wrong doc builds the wrong mental model
+— the failure that produced a bug report about "the Code Analysis Agent" that
+was really about `@architect`. Corrected only where a doc named a mention that
+no longer resolves; a full rewrite of each is a phase of its own.
 
-### 4.10 Relation claims are not checked
-
-**Phase 6.** `verifyRelation` exists and uses the symbol graph, but
-`useSymbolGraph` defaults off and nothing calls it. A graph is only as current
-as its last build, and asserting a claim is wrong on stale data is the mistake
-this module exists to prevent.
-
-### 4.11 Grounding is wired into `/analyze` only
-
-**Phase 6.** `/create-plan` and `/review` produce claims about the repo too and
-do not verify them.
-
-### 6.7 `--help` still says `npm run cli --`
+### 6.6 `--help` still says `npm run cli --`
 
 **Phase 7.** The CLI's usage and example lines name the monorepo's npm script.
 Correct for a developer with a clone, wrong for the copy inside the VSIX,
@@ -309,3 +339,8 @@ Kept so the record shows what was traded and when.
 | No checkpoint captured                                 | Phase 4a  | Phase 4b                                       |
 | Two tokenizers that had to be fixed twice              | pre-phase | Phase 3 — one exported tokenizer               |
 | Extension unusable without a monorepo clone            | pre-phase | Phase 7 — CLI bundled into the VSIX            |
+| Generated artifacts named deleted agents               | Phase 5   | Phase 8 — `CHAT_COMMANDS` as one source        |
+| `AGENTS.md` behind the built product                   | Phase 2   | Phase 8 — rewritten against measured figures   |
+| No solution overview on main                           | Phase 6   | Phase 8 — written with re-measured numbers     |
+| Phase 6 entries misfiled under documentation debt      | Phase 6   | Phase 8 — refiled under correctness edges      |
+| `templates/agents/` left empty after Phase 5           | Phase 5   | Phase 8 — directory removed                    |

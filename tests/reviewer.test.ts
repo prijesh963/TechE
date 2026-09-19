@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { runCli } from "../packages/cli/src/index.js";
 import { ReviewService } from "../packages/reviewer/src/index.js";
 import {
+  CHAT_COMMANDS,
   CURRENT_SCHEMA_VERSION,
   getArtifactDirectoryPath
 } from "../packages/shared/src/index.js";
@@ -69,7 +70,8 @@ describe("ReviewService", () => {
         "Changed source without nearby test change"
       ])
     );
-    expect(result.report.reviewerPrompt).toContain("@CodeReviewer");
+    expect(result.report.reviewerPrompt).toContain(CHAT_COMMANDS.review);
+    expect(result.report.reviewerPrompt).not.toContain("@CodeReviewer");
     expect(markdown).toContain("## Plan Comparison");
     expect(markdown).toContain("Unexpected files:");
   });
@@ -477,7 +479,7 @@ describe("review CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(capture.stderr).toEqual([]);
     expect(json.validationStatus).toBe("failed");
-    expect(json.reviewerPrompt).toContain("@CodeReviewer");
+    expect(json.reviewerPrompt).toContain(CHAT_COMMANDS.review);
   });
 });
 

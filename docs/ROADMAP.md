@@ -90,13 +90,13 @@ Status: implemented as `InstructionService` with repo-aware `.github/copilot-ins
 
 Generate implementation handoff prompts from approved plans, repo maps, validation commands, and safety policy for Copilot custom agents, Codex, Claude Code, and other coding agents.
 
-Status: implemented as `HandoffService` with explicit `--approve` gating, latest or path-based plan loading, repo-map and safety-policy context, validation command inclusion, git checkpoint creation where possible, clipboard copy attempts where supported, JSON/Markdown handoff artifacts, and required `@FeatureImplementer` prompt format.
+Status: implemented as `HandoffService` with explicit `--approve` gating, latest or path-based plan loading, repo-map and safety-policy context, validation command inclusion, git checkpoint creation where possible, clipboard copy attempts where supported, JSON/Markdown handoff artifacts, and required `@architect /implement` prompt format.
 
 ## Phase 16 - Review Reports
 
 Generate review reports from git diff, validation evidence, plan-vs-diff comparison, risk analysis, missing-test detection, and reviewer prompts.
 
-Status: implemented as `ReviewService` with git diff reading, approved plan loading, optional validation report loading, expected-vs-actual file comparison, unexpected-change findings, missing-test detection, config/dependency/security/breaking-change signals, JSON/Markdown review artifacts, latest aliases, and a generated `@CodeReviewer` prompt.
+Status: implemented as `ReviewService` with git diff reading, approved plan loading, optional validation report loading, expected-vs-actual file comparison, unexpected-change findings, missing-test detection, config/dependency/security/breaking-change signals, JSON/Markdown review artifacts, latest aliases, and a generated `@architect /review` prompt.
 
 ## Phase 17 - VS Code Extension Shell
 

@@ -67,21 +67,21 @@ The MVP does not include:
 
 1. Full autonomous code editing inside this tool.
 2. Commercial distribution.
-3. Visual Studio VSIX.
+3. Visual Studio (the IDE) extensions — the VS Code `.vsix` built by `npm run package:vsix` is in scope and shipping.
 4. Cloud sync.
 5. Team dashboard.
 6. Heavy vector database.
 7. Perfect support for every framework.
 8. PR automation.
 
-The MVP is not a .NET product, does not include a Visual Studio VSIX, and does not assume target repositories are C#/.NET.
+The MVP is not a .NET product, does not include a Visual Studio VSIX, and does not assume target repositories are C#/.NET. "VSIX" in that sentence means the Visual Studio IDE; the VS Code extension package of the same file extension is the primary way this ships.
 
 ## Lock Rules
 
 Until the MVP is stable:
 
 - Do not add new major product scope beyond the locked MVP scope.
-- Do not introduce a cloud backend, marketplace packaging, Visual Studio VSIX, .NET engine, or heavy vector database.
+- Do not introduce a cloud backend, marketplace packaging, a Visual Studio (IDE) extension, a .NET engine, or a heavy vector database.
 - Do not move business logic into UI shells.
 - Do not claim perfect framework support.
 - Do not claim autonomous implementation approval or completion.

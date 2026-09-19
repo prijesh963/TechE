@@ -322,13 +322,13 @@ Existing instruction and skill files are backed up before overwrite. Instruction
 
 `HandoffService` loads an approved plan from `.copilot-architect/plans/latest-plan.json` or a provided path, refreshes repo-map context through `RepoDiscoveryService`, loads the active safety policy, captures a git checkpoint through `GitCheckpointService` where possible, and writes `.copilot-architect/handoffs/<timestamp>-handoff.{json,md}` plus latest aliases.
 
-The Markdown handoff starts with `@FeatureImplementer`, includes the required rules, references the approved plan, lists validation commands, includes safety rules and repo context, and works with GitHub Copilot custom agents, Copilot chat, Codex, Claude Code, and generic coding agents. Clipboard copy is attempted where a platform clipboard tool is available, but failure to copy does not block artifact generation.
+The Markdown handoff starts with `@architect /implement`, includes the required rules, references the approved plan, lists validation commands, includes safety rules and repo context, and works with GitHub Copilot custom agents, Copilot chat, Codex, Claude Code, and generic coding agents. Clipboard copy is attempted where a platform clipboard tool is available, but failure to copy does not block artifact generation.
 
 ## Review Workflow
 
 `packages/reviewer` owns Phase 16 review report generation through `ReviewService`. It reads the git diff, loads the approved plan from `.copilot-architect/plans/latest-plan.json` or a provided path, loads validation evidence from `.copilot-architect/runs/latest-validation.json` or a provided path, and writes `.copilot-architect/reviews/<timestamp>-review.{json,md}` plus latest aliases.
 
-Review reports include changed files, expected files from the plan, unexpected file changes, missing-test signals, config and dependency changes, security-sensitive file or diff signals, possible breaking-change signals, validation failures, risk summaries, and an `@CodeReviewer` prompt. The CLI `review --plan latest --validation latest` command is a thin shell over this package-owned workflow.
+Review reports include changed files, expected files from the plan, unexpected file changes, missing-test signals, config and dependency changes, security-sensitive file or diff signals, possible breaking-change signals, validation failures, risk summaries, and an `@architect /review` prompt. The CLI `review --plan latest --validation latest` command is a thin shell over this package-owned workflow.
 
 ## VS Code Extension Shell
 

@@ -1,6 +1,17 @@
 # Copilot Architect
 
-Copilot Architect is a TypeScript/Node.js-first internal team tool for making AI coding agents more repo-aware. It analyzes repositories, detects languages and frameworks, builds a local searchable index, generates feature implementation plans, runs safe validation, creates custom Copilot agents and workspace instructions, exposes repo intelligence through a local MCP server, and produces review reports — all without sending your code anywhere.
+Copilot Architect is a TypeScript/Node.js-first internal team tool that grounds
+AI coding agents in what is actually in your repository.
+
+It analyzes repositories, detects languages and frameworks, builds a local
+searchable index and symbol graph, generates feature plans a human approves,
+applies them, runs safe validation, and produces review reports — all locally.
+Nothing leaves your machine except what Copilot itself sends.
+
+Two surfaces, for different situations: the **`@architect` VS Code extension**,
+which walks one feature from analysis to review in a single session, and a
+**local MCP server** exposing the same intelligence as 27 tools to any MCP
+client.
 
 ---
 
@@ -91,11 +102,6 @@ Run any command with `npm run cli -- <command> [flags]` or `copilot-architect <c
 | `review`                     | Generate a review report from git diff + validation evidence                          |
 | `review resolve`             | Accept or decline a review finding by id (`--finding-id --decision --reason --by`)    |
 | `handoff`                    | Generate an implementation handoff prompt (requires `--approve` and an approved plan) |
-| `agents install`             | Install custom Copilot agent templates under `.github/agents/`                        |
-| `agents list`                | List available agent templates                                                        |
-| `agents validate`            | Validate installed agent files                                                        |
-| `agents update`              | Update existing agents (backs up first)                                               |
-| `agents doctor`              | Explain how to use installed agents                                                   |
 | `instructions preview`       | Preview `.github/copilot-instructions.md`                                             |
 | `instructions generate`      | Write instructions and skill files                                                    |
 | `instructions validate`      | Validate generated instructions                                                       |
@@ -165,13 +171,11 @@ npm run cli -- handoff --plan latest --approve
 # copies prompt to clipboard and writes .copilot-architect/handoffs/latest-handoff.md
 ```
 
-### 3. Set up Copilot agents and instructions
+### 3. Set up Copilot instructions and MCP
 
 ```bash
-npm run cli -- agents install                # installs .github/agents/*.agent.md
 npm run cli -- instructions generate         # writes .github/copilot-instructions.md
 npm run cli -- mcp config                    # writes .vscode/mcp.json
-npm run cli -- agents doctor                 # explains how to use @FeatureArchitect etc.
 ```
 
 ### 4. Validate and review
@@ -205,114 +209,66 @@ npm run cli -- cleanup --apply               # delete eligible artifacts
 
 ## GitHub Copilot Chat Integration
 
-Copilot Architect integrates with GitHub Copilot Chat through supported repository customization files — it does not modify Copilot internals.
+There are two ways in, and they are for different situations.
 
-### Setup
+### The extension: `@architect`
 
-```bash
-npm run cli -- agents install        # .github/agents/*.agent.md
-npm run cli -- instructions generate # .github/copilot-instructions.md and skills
-npm run cli -- mcp config            # .vscode/mcp.json
-npm run cli -- agents doctor         # explains usage
+The normal path. Install the VS Code extension (see
+[docs/INSTALL.md](docs/INSTALL.md)) and drive a feature through four phases in
+Copilot Chat:
+
+| Type this                 | What it does                                                         |
+| ------------------------- | -------------------------------------------------------------------- |
+| `@architect /analyze`     | Explains what is in the repo, grounded in a real index of the files. |
+| `@architect /create-plan` | Turns the request into a plan you can read, correct, and approve.    |
+| `@architect /implement`   | Applies the approved plan and nothing beyond it.                     |
+| `@architect /review`      | Compares what was built against what was approved.                   |
+
+A prompt with no slash command is treated as `/analyze`.
+
+The session holds the feature, the decisions you have made and the approved
+plan until you end it explicitly, so later phases do not re-ask what earlier
+ones established. **Approve Plan** and **End Session** are buttons, not
+phrases: the step that authorizes writing code must not depend on a model
+reading approval out of "looks good to me".
+
+```text
+@architect /create-plan Add invoice approval to the billing service
 ```
 
-### Connect Copilot Chat To Copilot Architect MCP
+Earlier versions installed eleven `@FeatureArchitect`-style agents under
+`.github/agents/`. They are gone. A menu of eleven mentions in front of a
+developer who wanted one thing is how a bug report about "the Code Analysis
+Agent" turned out to describe a different system entirely — and coordination
+written as "Step N: call X" in a markdown file is advisory, because a model
+can skip it. The four phases are code, and code cannot skip its steps.
 
-1. Open the target repo in VS Code.
-2. Run `npm run cli -- mcp config --path /path/to/target-repo`.
-3. Open Command Palette → `MCP: List Servers`.
-4. Start `copilotArchitect`.
-5. Open Copilot Chat, switch to Agent mode, enable Copilot Architect tools.
+### MCP: everything outside the extension
 
-Or start the MCP server directly:
+The MCP server exposes the same repo intelligence as 27 tools, for plain
+Copilot agent mode, Codex, Claude Code, or any other MCP client. This is the
+interoperability surface, and the path that still works where policy forbids
+installing extensions.
+
+```bash
+npm run cli -- mcp config --path /path/to/target-repo   # writes .vscode/mcp.json
+npm run cli -- instructions generate                    # .github/copilot-instructions.md
+```
+
+Then in VS Code:
+
+1. Command Palette → `MCP: List Servers`.
+2. Start `copilotArchitect`.
+3. Open Copilot Chat, switch to Agent mode, enable the Copilot Architect tools.
+
+Or run the server directly:
 
 ```bash
 npm run cli -- mcp --path /path/to/target-repo
 ```
 
-### Installed Agents
-
-| Agent                  | Purpose                                                                                                                                    |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@FeatureArchitect`    | Analyze repo, find existing patterns, produce a detailed implementation plan — no code edits                                               |
-| `@FeatureImplementer`  | Implement an approved plan with minimal, scoped changes and captured validation evidence                                                   |
-| `@CodeReviewer`        | Review diff against approved plan; separate blocking from advisory findings                                                                |
-| `@TestPlanner`         | Map features to unit, integration, and regression test coverage                                                                            |
-| `@Debugger`            | Classify build/test/lint failures and propose the smallest correct fix                                                                     |
-| `@SecurityReviewer`    | Review changes for auth, input validation, secrets handling, and access control                                                            |
-| `@PerformanceReviewer` | Identify performance regressions in loops, queries, rendering, and caching                                                                 |
-| `@DocumentationWriter` | Generate or update README, JSDoc/docstrings, and API docs following the repo's existing style                                              |
-| `@DependencyAuditor`   | Audit dependencies for outdated packages, known CVEs, and licensing issues                                                                 |
-| `@APIDesignReviewer`   | Review REST/GraphQL API changes for naming consistency, breaking changes, and auth coverage                                                |
-| `@CodeAnalysisAgent`   | Scan the full codebase, map execution flows and module connections, identify issues, and produce an end-to-end system understanding report |
-
-All agents use `gpt-4o`. Each installed agent file includes a **Repo Context** section auto-generated from `.copilot-architect/repo-map.json` at install time (languages, frameworks, test/build commands, entry points, architectural patterns), so agents understand your stack without needing to re-discover it.
-
-### Example Chat Prompts
-
-**Plan a feature:**
-
-```text
-@FeatureArchitect I want to add [describe feature]. Call repo_map and find_similar_feature
-first, then produce a detailed implementation plan with impacted files and test strategy.
-Do not modify any code yet.
-```
-
-**After plan approval:**
-
-```text
-@FeatureImplementer Implement the approved plan from .copilot-architect/plans/latest-plan.md.
-Call get_latest_plan, make the minimal scoped change, add tests, then run
-get_validation_commands and capture evidence.
-```
-
-**After implementation:**
-
-```text
-@CodeReviewer Review the implementation diff against the approved plan. Call get_latest_plan
-and get_latest_validation, then report blocking findings and advisory findings separately.
-```
-
-**If validation failed:**
-
-```text
-@Debugger The last validation run failed. Call get_latest_validation to load the failing
-output, classify the failure, find the root cause with search_repo, and propose the
-smallest fix.
-```
-
-**Update documentation:**
-
-```text
-@DocumentationWriter Update the documentation for [feature]. Call repo_map and
-get_latest_plan, match the existing docs style, then update the README and add JSDoc
-comments to any new exported symbols.
-```
-
-**Audit dependencies:**
-
-```text
-@DependencyAuditor Audit project dependencies. Call detect_package_managers, find all
-manifests, and produce a prioritised table: package | current version | recommended
-version | reason | breaking changes.
-```
-
-**Full codebase analysis:**
-
-```text
-@CodeAnalysisAgent Scan this codebase and produce a full system understanding report.
-Call repo_map first, trace execution flows from entry points, map module dependencies,
-identify data flows, and flag issues. Include a quick-reference index of the 20 most
-important files.
-```
-
-**Review an API change:**
-
-```text
-@APIDesignReviewer Review the proposed API changes. Call search_repo to map the existing
-API surface, compare it to get_latest_plan, and report breaking changes, naming
-inconsistencies, and missing auth coverage.
-```
+Copilot Architect integrates through supported repository customization files
+and the MCP protocol. It does not modify Copilot internals.
 
 ---
 
@@ -409,7 +365,6 @@ Start: `npm run cli -- mcp [--path <repo>]`
 | `get_latest_validation`     | Return the latest validation report                                                                                                                   |
 | `get_latest_review`         | Return the latest review report                                                                                                                       |
 | `resolve_review_finding`    | Accept or decline one review finding by stable id (`reason` required for both)                                                                        |
-| `agent_status`              | Return installed agent status                                                                                                                         |
 
 ---
 
@@ -496,11 +451,12 @@ GitHub Copilot Chat artifacts:
 
 ```bash
 npm run build     # compile all TypeScript packages
-npm test          # run all 159 Vitest tests (11 agents)
+npm test          # run all 297 Vitest tests
 npm run lint      # ESLint
 npm run format    # Prettier check
 npm run format:write  # Prettier fix
 npm run package:local # build internal release tarball
+npm run package:vsix  # build the installable VS Code extension (.vsix)
 ```
 
 ### Project structure
@@ -518,16 +474,18 @@ copilot-architect/
 │   ├── measurement/      naive-vs-selected context/token measurement harness
 │   ├── validator/       validation engine, safety policy, audit, risk assessment
 │   ├── reviewer/        review report generation
-│   ├── agents/          Copilot agent template generation
+│   ├── session/          one feature at a time: phase, decisions, plan versions
+│   ├── grounding/        verifies the model's claims against the index
+│   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and tools
+│   ├── mcp-server/      MCP server and 27 tools
 │   ├── cli/             CLI entry point
-│   ├── vscode-extension VS Code extension shell
+│   ├── vscode-extension VS Code extension: the @architect chat participant
 │   └── web/             optional local web UI shell
 ├── samples/             representative sample repos for testing
 ├── tests/               integration and e2e tests
 ├── docs/                product documentation
-├── templates/           agent and instruction templates
+├── templates/           instruction and skill templates
 └── scripts/             setup and packaging scripts
 ```
 
@@ -537,7 +495,10 @@ All business logic belongs in `packages/`. UI shells (`vscode-extension`, `web`)
 
 ## Further Reading
 
-- [Installation](docs/INSTALLATION.md)
+- [Install the extension](docs/INSTALL.md)
+- [Solution overview](docs/SOLUTION_OVERVIEW.md)
+- [Known limitations](docs/KNOWN_LIMITATIONS.md)
+- [Installation from source](docs/INSTALLATION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Language Support](docs/LANGUAGE_SUPPORT.md)
 - [MCP Tools](docs/MCP_TOOLS.md)

@@ -386,7 +386,7 @@ Add a fifth prompt definition:
   agent: "TestPlanner",
   argumentHint: "feature, file, or symbol to cover",
   body: [
-    "@TestPlanner Create unit test cases for ${input:target:feature, file, or symbol to cover}.",
+    "Create unit test cases for ${input:target:feature, file, or symbol to cover}.",
     "Call detect_test_commands and find_impacted_files first, and match the existing test file naming and assertion style.",
     "For each test state: file path, test name, what it validates, and the command to run it.",
     "Write the tests with the edit tool, then run the detected test command and report the result."

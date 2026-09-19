@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { CHAT_COMMANDS } from "../packages/shared/src/index.js";
+
 import { runCli } from "../packages/cli/src/index.js";
 
 function createCapture() {
@@ -57,16 +59,24 @@ describe("Copilot Chat integration", () => {
   it("documents Copilot Chat connection and does not claim to modify internals", async () => {
     const readme = await readFile(path.join(process.cwd(), "README.md"), "utf8");
 
-    expect(readme).toContain("Connect Copilot Chat To Copilot Architect MCP");
     expect(readme).toContain("MCP: List Servers");
-    expect(readme).toContain("@FeatureArchitect I want to add [describe feature].");
-    expect(readme).toContain(
-      "@FeatureImplementer Implement the approved plan from .copilot-architect/plans/latest-plan.md."
-    );
-    expect(readme).toContain(
-      "@CodeReviewer Review the implementation diff against the approved plan."
-    );
     expect(readme).toContain("does not modify Copilot internals");
+
+    // The four phases of the one front door, and nothing that points at an
+    // agent Phase 5 deleted. A README that names a dead mention sends a
+    // developer to type into the void and report that "the agent" is broken.
+    for (const command of Object.values(CHAT_COMMANDS)) {
+      expect(readme).toContain(command);
+    }
+    for (const dead of [
+      "@FeatureArchitect ",
+      "@FeatureImplementer",
+      "@CodeReviewer",
+      "@TestPlanner",
+      "@CodeAnalysisAgent"
+    ]) {
+      expect(readme).not.toContain(dead);
+    }
   });
 });
 
