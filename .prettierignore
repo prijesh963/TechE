@@ -7,3 +7,5 @@ packages/*/dist/
 .copilot-architect/
 **/.copilot-architect/
 **/.pytest_cache/
+dist-vsix/
+packages/vscode-extension/bundle/

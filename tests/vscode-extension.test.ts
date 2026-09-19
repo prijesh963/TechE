@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -925,6 +926,47 @@ async function writeWorkspace(workspaceRoot: string, repos: string[]): Promise<v
     JSON.stringify({ repos: repos.map((name) => ({ name, path: name })) }),
     "utf8"
   );
+}
+
+describe("packaged CLI invocation", () => {
+  it("names a command that exists on disk rather than an npm script", () => {
+    // The defect this covers: an installed extension has no monorepo, so
+    // `npm run cli --` resolved to nothing and every command failed. The
+    // command line must name the interpreter and an absolute entry point.
+    const commandLine = createCliCommandLine(["analyze"]);
+
+    expect(commandLine).not.toContain("npm run cli");
+    expect(commandLine.startsWith(quoteForTest(process.execPath))).toBe(true);
+
+    const entryPoint = commandLine
+      .slice(quoteForTest(process.execPath).length)
+      .trim()
+      .split(" ")[0];
+    expect(existsSync(entryPoint)).toBe(true);
+  });
+
+  it("echoes exactly what it spawns", async () => {
+    // The output channel prints this line and the MCP terminal executes it.
+    // A friendly approximation in either place is a command a developer
+    // cannot copy, or one the terminal cannot run.
+    const seen: string[] = [];
+    const runner = {
+      run: async (request: CliRunRequest): Promise<CliRunResult> => {
+        seen.push(createCliCommandLine(request.args));
+        return { exitCode: 0, stdout: "", stderr: "", commandLine: seen.at(-1)! };
+      }
+    };
+
+    const result = await runner.run({ args: ["plan", "Add invoice approval"] });
+
+    expect(result.commandLine).toBe(seen[0]);
+    // An argument with a space stays one argument.
+    expect(result.commandLine).toContain('"Add invoice approval"');
+  });
+});
+
+function quoteForTest(value: string): string {
+  return /^[A-Za-z0-9._:/=+-]+$/.test(value) ? value : `"${value}"`;
 }
 
 /** diagnoseEmptyContext only checks whether an index file exists. */

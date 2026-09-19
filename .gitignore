@@ -2,6 +2,8 @@ node_modules/
 coverage/
 dist/
 packages/*/dist/
+packages/vscode-extension/bundle/
+dist-vsix/
 .copilot-architect/
 **/.copilot-architect/
 **/.pytest_cache/

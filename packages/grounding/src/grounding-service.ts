@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { SymbolGraphService } from "@copilot-architect/graph";
 import { IndexingService } from "@copilot-architect/indexer";
 
 import type { Claim, ClaimResult, GroundingReport, VerifyOptions } from "./models.js";
@@ -200,17 +199,6 @@ export function summarizeGrounding(report: GroundingReport): string | undefined 
     .join(", ");
 
   return `⚠️ Could not verify: ${items}. Treat those as unconfirmed.`;
-}
-
-/** Builds the symbol graph and checks a call claim. Opt-in; see VerifyOptions. */
-export async function verifyRelation(
-  startPath: string,
-  from: string,
-  to: string
-): Promise<boolean> {
-  const { graph } = await new SymbolGraphService().build({ startPath });
-
-  return graph.edges.some((edge) => edge.from.includes(from) && edge.to.includes(to));
 }
 
 async function countLines(filePath: string): Promise<number> {

@@ -12,44 +12,83 @@ authorizes writing code must not depend on a model reading sentiment out of
 Setup, MCP and agent commands moved to the Command Palette and dashboard. They
 are still available; they are no longer competing front doors.
 
-Repo retrieval calls `IndexingService` directly — the same engine the MCP tools and CLI use — so every surface answers the same question the same way. Command workflows still delegate to `npm run cli -- ...`. No business logic lives in the extension itself.
+Repo retrieval calls `IndexingService` directly — the same engine the MCP
+tools and CLI use — so every surface answers the same question the same way.
+Command workflows delegate to the CLI, which is bundled alongside the
+extension and spawned by absolute path. No business logic lives in the
+extension itself.
 
 ---
 
 ## Requirements
 
+**To use it** (the normal case — an installed `.vsix`):
+
 - VS Code 1.90 or newer
-- Node.js 20.11+ and `npm` (same as the CLI)
-- The Copilot Architect monorepo built locally (`npm run build` from the repo root)
-- GitHub Copilot extension installed and signed in (for Chat integration only)
+- GitHub Copilot installed and signed in, for the `@architect` chat participant
+
+Nothing else. Node.js, npm and a clone of this repository are _not_ required:
+the packaged extension carries its own CLI and runs it with the Node runtime
+already inside VS Code.
+
+**To develop it:**
+
+- The above, plus Node.js 20.11+ and npm
+- The monorepo built locally (`npm run build` from the repo root)
 
 ---
 
-## Loading the Extension
+## Installing the packaged extension
 
-The extension is not published to the VS Code Marketplace. Load it from source using the VS Code Extension Development Host.
+The extension is not published to the VS Code Marketplace. Build a `.vsix` and
+share the file.
+
+```bash
+npm run package:vsix      # → dist-vsix/copilot-architect-<version>.vsix
+```
+
+Teammates install it from the Extensions view (`...` → **Install from
+VSIX…**) or with `code --install-extension <path>`. `docs/INSTALL.md` is the
+page they see on the extension's detail view, and is written for someone who
+has never seen this repository.
+
+### What is inside the package
+
+| File            | Why it is there                                                                                    |
+| --------------- | -------------------------------------------------------------------------------------------------- |
+| `extension.cjs` | The extension, bundled. The host requires CommonJS; the sources are ESM, so esbuild converts them. |
+| `cli.mjs`       | The whole CLI, bundled. Command workflows spawn it by absolute path.                               |
+
+The CLI is packaged rather than resolved because `npm run cli --` only works
+inside this monorepo. On a teammate's machine there is no `package.json` with
+a `cli` script, so a packaged extension that shelled out to npm could not run
+a single command. It is spawned as `process.execPath` with
+`ELECTRON_RUN_AS_NODE=1` — VS Code's own binary, run as Node — so the user
+does not need Node on their `PATH` either.
+
+`npm run bundle:extension` produces the bundle alone, without packaging.
+
+---
+
+## Running from source (development)
 
 **The repo includes `.vscode/launch.json` and `.vscode/tasks.json` which wire up F5 automatically.**
 
-### Steps
-
-1. Open the Copilot Architect monorepo folder in VS Code (`code /path/to/Copilot_Assistant`).
+1. Open the Copilot Architect monorepo folder in VS Code.
 2. Press `F5` (or **Run > Start Debugging**).
    - VS Code runs `npm run build` automatically (the pre-launch task).
    - A new **Extension Development Host** window opens with the extension active.
-3. In the new window, the Copilot Architect icon appears in the activity bar. You are ready to use it.
+3. In the new window, the Copilot Architect icon appears in the activity bar.
 
-### What happens under the hood
+In this mode there is no bundle beside the extension, so it falls back to the
+monorepo's built CLI at `packages/cli/dist/index.js`. That fallback is the only
+difference between a development run and an installed one.
 
-- `launch.json` tells VS Code to start an `extensionHost` process with `--extensionDevelopmentPath` pointing at `packages/vscode-extension`.
-- `tasks.json` defines the `build` task that runs `npm run build` before launch so `dist/index.js` is always up to date.
-- The Extension Development Host is a separate VS Code window that behaves like a normal VS Code but loads your local extension.
+### If `F5` shows the Command Palette or a debugger picker
 
-### If `F5` still shows the Command Palette or a debugger picker
-
-This means VS Code opened a different folder (not the Copilot Architect repo root). Confirm the folder shown in the Explorer sidebar is the repo root (`Copilot_Assistant/`). The `.vscode/` folder must be at the root for launch config to be picked up.
-
-Alternatively, package the extension with `vsce` and install the `.vsix` once it is available as an internal artifact.
+VS Code opened a different folder. Confirm the folder in the Explorer sidebar
+is the repo root — `.vscode/` must be at the root for the launch config to be
+picked up.
 
 ---
 
@@ -214,7 +253,13 @@ VS Code opens the folder and the extension activates against it automatically.
 
 ### Approach 3 — Multi-repo workspace (cross-repo analysis)
 
-For analysis that spans several repos, set up a workspace config in the primary window:
+For analysis that spans several repos, register them once from the primary
+window. From an installed extension use **More Actions → Scan & Register
+Sub-repos**, and point it at the folder holding the repos; it registers every
+sub-directory that looks like one.
+
+From a monorepo clone the same thing is available as CLI commands, which take
+the repos one at a time:
 
 ```bash
 npm run cli -- workspace init
@@ -222,7 +267,8 @@ npm run cli -- workspace add --path /path/to/service-a --name service-a
 npm run cli -- workspace add --path /path/to/service-b --name service-b
 ```
 
-Then use `Build Index` and `@architect /search` to query across all registered repos simultaneously.
+Either way, `Build Index` and `@architect` then query across all registered
+repos at once.
 
 ---
 
@@ -236,9 +282,10 @@ All CLI commands write their output to the **Copilot Architect** output channel 
 
 **Commands do nothing / fail silently**
 
-- Check the **Copilot Architect** output channel for error details.
-- Run `npm run cli -- doctor` in the integrated terminal to verify the environment.
-- Confirm `npm run build` has been run after any source changes.
+- Check the **Copilot Architect** output channel for error details. It prints
+  the exact command line that ran, which you can paste into a terminal.
+- Running from source: confirm `npm run build` has been run after any source
+  changes, and run `npm run cli -- doctor` to verify the environment.
 
 **`@architect` does not appear in Copilot Chat**
 
@@ -248,8 +295,10 @@ All CLI commands write their output to the **Copilot Architect** output channel 
 
 **"Open Repo in New Window" opens but commands fail**
 
-- The new window needs the same Node.js environment. Check `npm run cli -- doctor` in a terminal inside the new window.
 - If the target repo has never been initialized, run `Analyze Repo` first before other commands.
+- Running from source: the new window needs the same Node.js environment.
+  Check `npm run cli -- doctor` in a terminal inside it. An installed
+  extension carries its own runtime and is unaffected.
 
 **MCP server does not start**
 

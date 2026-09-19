@@ -17,11 +17,15 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "cli": "node packages/cli/dist/index.js",
-    "package:local": "node scripts/package-local.mjs"
+    "package:local": "node scripts/package-local.mjs",
+    "bundle:extension": "node scripts/bundle-extension.mjs",
+    "package:vsix": "node scripts/package-vsix.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
     "@types/node": "^22.9.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9.15.0",
     "prettier": "^3.3.3",
     "typescript": "^5.6.3",

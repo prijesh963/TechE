@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { renderRolePrompt } from "@copilot-architect/agents";
-import { SymbolGraphService } from "@copilot-architect/graph";
 import { GroundingService, summarizeGrounding } from "@copilot-architect/grounding";
 import { IndexingService, tokenize } from "@copilot-architect/indexer";
 import {
@@ -292,7 +293,11 @@ export interface VscodeApiLike {
       showOptions: number | { viewColumn?: number },
       options: { enableCommandUris?: boolean; enableScripts?: boolean }
     ): WebviewPanelLike;
-    createTerminal?(options: { name: string; cwd?: string }): TerminalLike;
+    createTerminal?(options: {
+      name: string;
+      cwd?: string;
+      env?: Record<string, string>;
+    }): TerminalLike;
     /** The file the user currently has open in the editor. */
     activeTextEditor?: {
       document: {
@@ -1170,11 +1175,17 @@ export function deactivate(): void {
 export class NodeCliRunner implements CliRunner {
   async run(request: CliRunRequest): Promise<CliRunResult> {
     return new Promise((resolve) => {
-      const [exe, cliArgs] = resolveNpmSpawn(["run", "cli", "--", ...request.args]);
+      const [exe, cliArgs] = resolveCliSpawn(request.args);
       const child = spawn(exe, cliArgs, {
         cwd: request.cwd,
         shell: false,
-        env: { ...process.env, FORCE_COLOR: "0" }
+        env: {
+          ...process.env,
+          FORCE_COLOR: "0",
+          // VS Code's own binary runs as Node with this set, so an installed
+          // extension does not depend on the user having Node on PATH.
+          ELECTRON_RUN_AS_NODE: "1"
+        }
       });
       const commandLine = createCliCommandLine(request.args);
       let stdout = "";
@@ -1221,7 +1232,10 @@ export class TerminalMcpStarter implements McpStarter {
     if (this.vscode.window.createTerminal) {
       const terminal = this.vscode.window.createTerminal({
         name: "Copilot Architect MCP",
-        cwd: request.cwd
+        cwd: request.cwd,
+        // The command below is VS Code's own binary. Without this it would
+        // launch another editor window instead of running the CLI.
+        env: { ELECTRON_RUN_AS_NODE: "1" }
       });
       terminal.sendText(createCliCommandLine(request.args));
       terminal.show(true);
@@ -1234,11 +1248,11 @@ export class TerminalMcpStarter implements McpStarter {
 
 export class NodeMcpStarter implements McpStarter {
   start(request: CliRunRequest): DisposableLike {
-    const [exe, cliArgs] = resolveNpmSpawn(["run", "cli", "--", ...request.args]);
+    const [exe, cliArgs] = resolveCliSpawn(request.args);
     const child = spawn(exe, cliArgs, {
       cwd: request.cwd,
       shell: false,
-      env: { ...process.env, FORCE_COLOR: "0" }
+      env: { ...process.env, FORCE_COLOR: "0", ELECTRON_RUN_AS_NODE: "1" }
     });
 
     attachProcessOutput(child, request);
@@ -1409,8 +1423,17 @@ export function createDashboardHtml(state: ExtensionState): string {
   ].join("");
 }
 
+/**
+ * The command line, as it will actually be run.
+ *
+ * It is both what the output channel echoes and what the MCP terminal
+ * executes, so it cannot be a friendly approximation: `npm run cli --` only
+ * resolves inside this monorepo, and an installed extension has no monorepo
+ * to resolve it against.
+ */
 export function createCliCommandLine(args: string[]): string {
-  return ["npm", "run", "cli", "--", ...args.map(quoteCliArg)].join(" ");
+  const [exe, cliArgs] = resolveCliSpawn(args);
+  return [exe, ...cliArgs].map(quoteCliArg).join(" ");
 }
 
 // --- Dashboard artifact loading + formatting ---
@@ -1725,11 +1748,51 @@ function resolveExtensionRoot(context: ExtensionContextLike): string {
 
 // On Windows, npm.cmd cannot be spawned with shell:false (EINVAL).
 // Route through cmd.exe /c so the .cmd file is executed correctly.
-function resolveNpmSpawn(args: string[]): [string, string[]] {
-  if (process.platform === "win32") {
-    return ["cmd.exe", ["/c", "npm.cmd", ...args]];
+/**
+ * How to run the CLI.
+ *
+ * It used to spawn `npm run cli --`, which resolves only when the working
+ * directory is this monorepo — so a packaged extension on a teammate's machine
+ * could not run a single command. The bundled CLI sits beside the extension and
+ * is invoked by absolute path: no npm, no monorepo, nothing to resolve on the
+ * user's disk.
+ *
+ * Falls back to the monorepo's CLI when the bundle is absent, which is the
+ * case while developing the extension from source.
+ */
+function resolveCliSpawn(args: string[]): [string, string[]] {
+  return [process.execPath, [resolveBundledCli(), ...args]];
+}
+
+function resolveBundledCli(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const bundled = path.join(here, "cli.mjs");
+
+  if (existsSync(bundled)) {
+    return bundled;
   }
-  return ["npm", args];
+
+  // Development: running from source, where the built CLI lives in the workspace.
+  return path.resolve(here, "..", "..", "cli", "dist", "index.js");
+}
+
+/**
+ * Rebuilds the symbol graph after implementation.
+ *
+ * Through the CLI rather than by importing the graph package: that pulls in the
+ * TypeScript compiler, 9.5 MB that every extension activation would carry for a
+ * step which runs once per implementation.
+ */
+async function rebuildSymbolGraph(workspaceRoot: string): Promise<boolean> {
+  try {
+    const result = await new NodeCliRunner().run({
+      args: ["graph", "--path", workspaceRoot],
+      cwd: workspaceRoot
+    });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 function attachProcessOutput(
@@ -2103,11 +2166,17 @@ async function runImplementPhase(
     // full re-parse has no incremental path. This used to be a line of
     // markdown asking three agents to remember — now it simply happens.
     stream.progress?.("Rebuilding the call graph…");
-    await new SymbolGraphService().build({ startPath: workspaceRoot }).catch(() => {
+    // Through the CLI rather than by import: building the graph needs the
+    // TypeScript compiler, which is 9.5 MB and would be carried by every
+    // extension activation for a step that runs once per implementation. Still
+    // a function call in code, not a line of markdown asking a model to
+    // remember.
+    const graphRun = await rebuildSymbolGraph(workspaceRoot);
+    if (!graphRun) {
       stream.markdown(
         "_The call graph could not be rebuilt; later searches may cite stale call edges._\n\n"
       );
-    });
+    }
   }
 
   stream.markdown(`## Implemented plan v${approved.version}\n\n`);

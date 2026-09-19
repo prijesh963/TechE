@@ -11,7 +11,6 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../agents" },
-    { "path": "../graph" },
     { "path": "../grounding" },
     { "path": "../indexer" },
     { "path": "../planner" },

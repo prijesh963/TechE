@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–6 merged. Phases 7–8 outstanding.
+**Status:** Phases 0–7 merged. Phase 8 outstanding.
 
 ---
 
@@ -54,13 +54,18 @@ before-snapshot. There is no preview before writing.
 safer, but needs the model to emit reliable diffs. Approval already gates the
 write, so a preview is a safety improvement rather than a missing gate.
 
-### 1.5 The CLI shell-outs are unreplaced
+### 1.5 The CLI shell-outs are still subprocesses
 
-**Phase 3, deferred to Phase 7.** The extension still runs 13 CLI commands as
-subprocesses. Not a Core Rule violation — the CLI is core — and the calls
-stream progress into the output channel, which direct imports would have to
-reproduce. VSIX bundling is what forces the change, since a packaged extension
-cannot shell out to a path that does not exist on the user's machine.
+**Phase 3, addressed differently in Phase 7.** The extension still runs its
+command workflows as subprocesses. Phase 7 fixed the part that was broken —
+they no longer shell out to `npm run cli --`, which does not exist on a
+teammate's machine — by bundling the CLI into the package and spawning it by
+absolute path. They were not converted to direct imports.
+
+**Cost:** a process spawn per command, and the CLI's 11.5 MB bundle inside the
+package. Not a Core Rule violation — the CLI is core — and the subprocess is
+what streams progress into the output channel, which direct imports would have
+to reproduce. Left as a subprocess deliberately.
 
 ---
 
@@ -207,6 +212,19 @@ it for realism; noted so the cause is known.
 
 ---
 
+### 5.7 The CLI bundle is 11.5 MB of a 2 MB package
+
+**Phase 7.** Almost all of it is the TypeScript compiler, which the symbol
+graph uses to resolve references in TS and JS. It compresses to well under the
+2 MB the VSIX weighs, so the download is not the problem; the disk footprint
+per install is.
+
+**Cost:** an installed extension takes ~12 MB on disk for a compiler that runs
+during graph builds only. Marking `typescript` external would not help — it
+would ship the same bytes as `node_modules`.
+
+---
+
 ## 6. Documentation debt
 
 ### 6.1 `docs/SOLUTION_OVERVIEW.md` describes a design now partly built
@@ -265,6 +283,16 @@ this module exists to prevent.
 **Phase 6.** `/create-plan` and `/review` produce claims about the repo too and
 do not verify them.
 
+### 6.7 `--help` still says `npm run cli --`
+
+**Phase 7.** The CLI's usage and example lines name the monorepo's npm script.
+Correct for a developer with a clone, wrong for the copy inside the VSIX,
+which is invoked by absolute path.
+
+**Cost:** low — the bundled CLI is driven by the extension, not typed by hand.
+Fixing it means threading the actual invocation through `getHelpText` and
+`commandUsage`, which is a wider change than it looks.
+
 ---
 
 ## Closed by a later phase
@@ -280,3 +308,4 @@ Kept so the record shows what was traded and when.
 | `runAgenticPlanLoop` — a third retrieval mechanism     | Phase 3   | Phase 4a                                       |
 | No checkpoint captured                                 | Phase 4a  | Phase 4b                                       |
 | Two tokenizers that had to be fixed twice              | pre-phase | Phase 3 — one exported tokenizer               |
+| Extension unusable without a monorepo clone            | pre-phase | Phase 7 — CLI bundled into the VSIX            |

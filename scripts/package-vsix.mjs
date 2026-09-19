@@ -1,0 +1,122 @@
+#!/usr/bin/env node
+/**
+ * Builds an installable `.vsix` from the bundled extension.
+ *
+ * Why this stages a copy rather than running `vsce` over the workspace
+ * package directly:
+ *
+ * - A VSIX identifier must match `^[a-z0-9][a-z0-9-]*$`, and the workspace
+ *   package is scoped (`@copilot-architect/vscode-extension`). Renaming it in
+ *   place would break every workspace reference.
+ * - `vsce` would otherwise walk `node_modules` for five workspace
+ *   dependencies that are already inside the bundle, producing a package
+ *   containing each of them twice.
+ * - The staged manifest points `main` at the bundled CommonJS entry point,
+ *   while the workspace manifest keeps pointing at the `tsc` output the tests
+ *   and other packages import.
+ *
+ * Usage: npm run package:vsix
+ */
+
+import { spawnSync } from "node:child_process";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const rootDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const extensionDir = path.join(rootDir, "packages", "vscode-extension");
+const bundleDir = path.join(extensionDir, "bundle");
+const stageDir = path.join(rootDir, "dist-vsix", "stage");
+const outDir = path.join(rootDir, "dist-vsix");
+
+run("node", [path.join(rootDir, "scripts", "bundle-extension.mjs")]);
+
+for (const required of ["extension.cjs", "cli.mjs"]) {
+  if (!existsSync(path.join(bundleDir, required))) {
+    throw new Error(`Bundle is missing ${required} — did the bundler fail?`);
+  }
+}
+
+await rm(stageDir, { recursive: true, force: true });
+await mkdir(stageDir, { recursive: true });
+
+const manifest = JSON.parse(
+  await readFile(path.join(extensionDir, "package.json"), "utf8")
+);
+
+const staged = {
+  name: "copilot-architect",
+  displayName: manifest.displayName,
+  description: manifest.description,
+  version: manifest.version,
+  publisher: manifest.publisher,
+  license: "SEE LICENSE IN README.md",
+  categories: manifest.categories,
+  engines: manifest.engines,
+  // The bundle is CommonJS, which the extension host requires. Declaring no
+  // `type` keeps `.cjs` and `.mjs` meaning exactly what their extensions say.
+  main: "./extension.cjs",
+  activationEvents: manifest.activationEvents,
+  contributes: manifest.contributes
+};
+
+await writeFile(
+  path.join(stageDir, "package.json"),
+  `${JSON.stringify(staged, null, 2)}\n`,
+  "utf8"
+);
+
+// Source maps stay in `bundle/` for local debugging but are left out of the
+// package: the CLI's map alone is larger than everything else combined.
+await copyFile(
+  path.join(bundleDir, "extension.cjs"),
+  path.join(stageDir, "extension.cjs")
+);
+await copyFile(path.join(bundleDir, "cli.mjs"), path.join(stageDir, "cli.mjs"));
+
+await mkdir(path.join(stageDir, "resources"), { recursive: true });
+await copyFile(
+  path.join(extensionDir, "resources", "copilot-architect.svg"),
+  path.join(stageDir, "resources", "copilot-architect.svg")
+);
+
+await copyFile(
+  path.join(rootDir, "docs", "INSTALL.md"),
+  path.join(stageDir, "README.md")
+);
+
+// The staging directory holds only what belongs in the package, so this
+// excludes nothing — it exists so `vsce` does not warn that an unbounded
+// directory is being packaged.
+await writeFile(
+  path.join(stageDir, ".vscodeignore"),
+  "# Staged by scripts/package-vsix.mjs; every file here is intentional.\n",
+  "utf8"
+);
+
+const vsixPath = path.join(outDir, `copilot-architect-${staged.version}.vsix`);
+run(
+  "npx",
+  [
+    "vsce",
+    "package",
+    "--no-dependencies",
+    "--allow-missing-repository",
+    "--out",
+    vsixPath
+  ],
+  stageDir
+);
+
+console.log(`\nVSIX: ${path.relative(rootDir, vsixPath)}`);
+console.log("Install with: code --install-extension <path>, or");
+console.log("VS Code > Extensions > ... > Install from VSIX...");
+
+function run(command, args, cwd = rootDir) {
+  const result = spawnSync(command, args, { cwd, stdio: "inherit", shell: false });
+
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} failed (exit ${result.status})`);
+  }
+}
