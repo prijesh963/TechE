@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–5 merged. Phases 6–8 outstanding.
+**Status:** Phases 0–6 merged. Phases 7–8 outstanding.
 
 ---
 
@@ -241,6 +241,29 @@ a live failure to learn. They are recoverable from git history.
 **Shape of the fix:** they are natural **aspects of the review phase** rather
 than separate agents. `/review` could run security, performance and API-design
 checks as passes over the same diff.
+
+### 4.9 Grounding checks paths and symbols, not statements
+
+**Phase 6.** Only backticked paths, `file:line` citations and qualified symbols
+are verified. A claim made in prose — "the service retries three times" — is
+not checked at all, and a bare PascalCase word is deliberately ignored to avoid
+flagging framework names.
+
+**Cost:** the most consequential claims, about behaviour rather than existence,
+are unverifiable by this mechanism. The precision trade is deliberate, and the
+report says so.
+
+### 4.10 Relation claims are not checked
+
+**Phase 6.** `verifyRelation` exists and uses the symbol graph, but
+`useSymbolGraph` defaults off and nothing calls it. A graph is only as current
+as its last build, and asserting a claim is wrong on stale data is the mistake
+this module exists to prevent.
+
+### 4.11 Grounding is wired into `/analyze` only
+
+**Phase 6.** `/create-plan` and `/review` produce claims about the repo too and
+do not verify them.
 
 ---
 

@@ -474,6 +474,38 @@ export class IndexingService {
     return hashes;
   }
 
+  /**
+   * Every indexed symbol name, uncapped.
+   *
+   * `listFiles` caps symbols per file for display, which is right for a model's
+   * context window and wrong for anything checking whether a symbol exists:
+   * verifying against a truncated view reports real symbols as missing. A
+   * presentation cap must not leak into a correctness check, so this is a
+   * separate method rather than an option on that one.
+   */
+  async symbolNames(options: ListFilesOptions = {}): Promise<Set<string>> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoRoot = await resolveRepoRoot(startPath, options.strictRoot);
+    const fanOut = await resolveRegisteredRepos(repoRoot);
+    const repos = fanOut.length > 0 ? fanOut : [{ name: "", repoRoot }];
+    const names = new Set<string>();
+
+    for (const repo of repos) {
+      const index = await this.readOrCreateIndex(
+        repo.repoRoot,
+        options.strictRoot
+      ).catch(() => undefined);
+
+      for (const document of index?.documents ?? []) {
+        for (const symbol of document.symbols) {
+          names.add(symbol.name);
+        }
+      }
+    }
+
+    return names;
+  }
+
   async status(startPath = process.cwd()): Promise<IndexStatus> {
     const repoRoot = await findRepoRoot(path.resolve(startPath));
     const indexPath = getIndexPath(repoRoot);

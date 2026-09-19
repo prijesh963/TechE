@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { renderRolePrompt } from "@copilot-architect/agents";
 import { SymbolGraphService } from "@copilot-architect/graph";
+import { GroundingService, summarizeGrounding } from "@copilot-architect/grounding";
 import { IndexingService, tokenize } from "@copilot-architect/indexer";
 import {
   buildPlannedChange,
@@ -1865,6 +1866,7 @@ async function runAnalyzePhase(
       "repository does or does not contain — you have not seen it.";
   }
 
+  let answer = "";
   if (vscode.lm) {
     stream.progress?.("Generating answer…");
     const lmPrompt = buildCommandLmPrompt(
@@ -1876,8 +1878,29 @@ async function runAnalyzePhase(
       formatChatHistory(context.history ?? [])
     );
     if (lmPrompt) {
-      await streamLmResponse(vscode, lmPrompt, stream, token);
+      // Streamed to the user and captured, so the same text can be checked
+      // against the index without asking the model a second time.
+      const captured: string[] = [];
+      const tee: ChatResponseStreamLike = {
+        markdown: (value: string) => {
+          captured.push(value);
+          stream.markdown(value);
+        },
+        progress: stream.progress?.bind(stream)
+      };
+      await streamLmResponse(vscode, lmPrompt, tee, token);
+      answer = captured.join("");
     }
+  }
+
+  // Verification is local and costs no tokens. An unverifiable claim is
+  // flagged, never removed — the developer decides what to do with it.
+  const grounding = await new GroundingService()
+    .verify(answer, { startPath: workspaceRoot })
+    .catch(() => undefined);
+  const warning = grounding ? summarizeGrounding(grounding) : undefined;
+  if (warning) {
+    stream.markdown(`\n\n${warning}`);
   }
 
   stream.markdown(`\n\n${await buildReceipts(workspaceRoot)}`);

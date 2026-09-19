@@ -143,6 +143,35 @@ checkpoint taken when implementation began, so review can separate this
 feature's changes from everything else in the tree — including in a workspace
 with no git repository.
 
+## Grounding
+
+`packages/grounding` checks a model's claims about the repository against what
+is actually indexed, and reports what it could not check.
+
+The failure it exists for is not bad code — reviewers catch bad code. It is the
+confident wrong answer: a file cited that does not exist, a line past the end
+of a file, a class described by a name it no longer has. None of those look
+wrong on the page.
+
+**The design constraint is precision, not recall.** A false "unverified" on
+something real teaches a developer to ignore the warnings, and a warning nobody
+reads is worse than no warning at all. So:
+
+- only backticked spans are treated as claims. "Spring", "React" and "Kafka"
+  are PascalCase words that will never appear in an index, and flagging them
+  would bury real findings under noise
+- an empty index reports "nothing was verified" rather than marking every claim
+  fabricated
+- symbols are checked against `IndexingService.symbolNames`, which is uncapped.
+  `listFiles` truncates symbols per file for display, and verifying against a
+  truncated list reported real symbols as missing — a presentation cap must not
+  leak into a correctness check
+- every report states what it did not check, so a clean pass is not mistaken
+  for a complete one
+
+Verification is local computation and costs no model tokens. An unverifiable
+claim is flagged, never removed: the developer decides what to do with it.
+
 ## Plan Contract
 
 `packages/planner/src/plan-contract.ts` owns the implementation contract:
