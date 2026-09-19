@@ -143,6 +143,42 @@ checkpoint taken when implementation began, so review can separate this
 feature's changes from everything else in the tree — including in a workspace
 with no git repository.
 
+## Plan Contract
+
+`packages/planner/src/plan-contract.ts` owns the implementation contract:
+everything `/implement` needs, so it never reads the repository again.
+
+This is the idea the product rests on. Retrieval happens once, during planning,
+and the contract is its durable output. If a later phase re-read the repo, the
+work would be paid for twice and the tool would be no better than using Copilot
+directly.
+
+Two properties follow, and both are enforced by code rather than requested:
+
+- **The model never writes the "before" code.** `buildPlannedChange` reads the
+  file itself and there is no API to pass snapshot text in. A model asked to
+  reproduce existing code paraphrases it, and a paraphrase applied as a patch
+  corrupts the file. Copying is also cheaper than paying a model to retype what
+  is already on disk.
+- **Excerpts are windows, not whole files.** `extractExcerpt` centres on the
+  symbol anchor the index already resolved. Whole files would make a twenty-file
+  plan the expensive prompt this design exists to avoid; a bare path would make
+  the plan useless without re-reading the repo.
+
+Each change carries a content hash of the file at plan time.
+`verifyPlanFreshness` compares those hashes before implementation — a
+verification, not a re-read, so it does not break the retrieve-once rule. Drift
+is small on same-day work but not zero, and patching a file that moved
+underneath corrupts it silently.
+
+Session decisions are embedded rather than referenced, so a plan can be read and
+defended by someone who never saw the session.
+
+`writeApprovedPlan` is called only on approval, to
+`.copilot-architect/plans/approved/vN.json` with a `latest.json` pointer. A
+draft lives in the session and nowhere else — the reverse of the previous order,
+where a plan was written first and marked approved afterwards.
+
 ## Feature Planning
 
 `packages/planner` owns feature plan generation. `FeaturePlanningService` reads or creates `.copilot-architect/repo-map.json`, reads optional workspace/custom command context, detects available instruction files, refreshes the local index, runs similar-feature search, and renders deterministic JSON and Markdown plan artifacts under `.copilot-architect/plans/`.

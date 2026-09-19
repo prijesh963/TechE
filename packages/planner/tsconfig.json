@@ -14,6 +14,7 @@
     { "path": "../graph" },
     { "path": "../indexer" },
     { "path": "../intent" },
+    { "path": "../session" },
     { "path": "../shared" },
     { "path": "../validator" }
   ]
