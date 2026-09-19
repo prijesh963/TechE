@@ -332,9 +332,20 @@ export interface VscodeApiLike {
       deleteCount: number,
       ...workspaceFoldersToAdd: { uri: UriLike; name?: string }[]
     ): boolean;
+    /**
+     * Serves the staged side of a diff. Registering a scheme is how VS Code
+     * shows content that is not on disk: staging to a temp file would mean
+     * writing before the write was agreed, which is the thing the preview
+     * exists to prevent.
+     */
+    registerTextDocumentContentProvider?(
+      scheme: string,
+      provider: { provideTextDocumentContent(uri: UriLike): string | undefined }
+    ): DisposableLike;
   };
   Uri?: {
     file(path: string): UriLike;
+    parse?(value: string): UriLike;
   };
   ViewColumn?: {
     One: number;
@@ -931,6 +942,29 @@ export function activate(
 
   const chatSessions = new SessionService();
 
+  if (vscode.workspace.registerTextDocumentContentProvider) {
+    context.subscriptions.push(
+      vscode.workspace.registerTextDocumentContentProvider(STAGED_SCHEME, {
+        // Read-only and in memory: the diff's right-hand side is content that
+        // has deliberately not been written yet.
+        provideTextDocumentContent: (uri) => {
+          const parsed = parseStagedUri(uri.toString());
+
+          if (!parsed || parsed.side === "empty") {
+            return "";
+          }
+
+          const staged = stagedWrites.get(parsed.workspaceRoot);
+          const change = staged?.changes.find(
+            (candidate) => candidate.relativePath === parsed.relativePath
+          );
+
+          return change?.afterText ?? "";
+        }
+      })
+    );
+  }
+
   context.subscriptions.push(
     /**
      * Approval is a command, not a phrase. It is the gate that authorizes
@@ -951,6 +985,47 @@ export function activate(
       dashboard.refresh();
       vscode.window.showInformationMessage(
         `Plan v${version} approved — run \`/implement\` when ready.`
+      );
+    }),
+    vscode.commands.registerCommand(SHOW_DIFF_COMMAND, async (...args) => {
+      const relativePath = String(args[0] ?? "");
+      const staged = stagedWrites.get(workspaceRoot);
+      const change = staged?.changes.find(
+        (candidate) => candidate.relativePath === relativePath
+      );
+
+      if (!change) {
+        vscode.window.showErrorMessage(
+          `\`${relativePath}\` is no longer staged. Run \`/implement\` again to regenerate it.`
+        );
+        return;
+      }
+
+      const parseUri = vscode.Uri?.parse;
+      const fileUri = vscode.Uri?.file;
+      if (!parseUri || !fileUri) {
+        vscode.window.showErrorMessage("This VS Code build cannot open a diff view.");
+        return;
+      }
+
+      // Left is what is on disk now; right is what would replace it. For an
+      // add the left side is an empty staged document rather than a missing
+      // file, so the diff opens instead of failing on a path that is not
+      // there yet.
+      const onDisk =
+        change.kind === "add"
+          ? parseUri(stagedUri(workspaceRoot, relativePath, "empty"))
+          : fileUri(path.join(workspaceRoot, relativePath));
+      const proposed =
+        change.kind === "delete"
+          ? parseUri(stagedUri(workspaceRoot, relativePath, "empty"))
+          : parseUri(stagedUri(workspaceRoot, relativePath));
+
+      await vscode.commands.executeCommand?.(
+        "vscode.diff",
+        onDisk,
+        proposed,
+        `${relativePath} — staged (not yet written)`
       );
     }),
     vscode.commands.registerCommand(APPLY_CHANGES_COMMAND, async (...args) => {
@@ -2092,6 +2167,66 @@ const MAX_PROPOSED_DECISIONS = 4;
 
 export const CONFIRM_DECISION_COMMAND = "copilotArchitect.confirmDecision";
 
+export const SHOW_DIFF_COMMAND = "copilotArchitect.showStagedDiff";
+
+/**
+ * The scheme staged content is served under.
+ *
+ * A diff needs a URI for each side, and the staged side is not on disk. A
+ * temp file would be writing before the write was agreed — the exact thing
+ * the preview exists to prevent — so it is served from memory instead.
+ */
+export const STAGED_SCHEME = "copilot-architect-staged";
+
+/**
+ * Builds the URI for one staged file.
+ *
+ * The path is carried in the query rather than the path component so a file
+ * that is being added shows its real name in the diff editor's title, which
+ * is the only place the developer can tell which file they are looking at.
+ */
+export function stagedUri(
+  workspaceRoot: string,
+  relativePath: string,
+  side: "staged" | "empty" = "staged"
+): string {
+  const query = new URLSearchParams({ root: workspaceRoot, side });
+  // The path keeps its real name so the diff editor's title says which file
+  // is being looked at; everything else rides in the query.
+  return `${STAGED_SCHEME}:/${relativePath}?${query.toString()}`;
+}
+
+/** Reads back what `stagedUri` encoded, or `undefined` if it was not one. */
+export function parseStagedUri(
+  value: string
+):
+  | { workspaceRoot: string; relativePath: string; side: "staged" | "empty" }
+  | undefined {
+  if (!value.startsWith(`${STAGED_SCHEME}:/`)) {
+    return undefined;
+  }
+
+  const withoutScheme = value.slice(`${STAGED_SCHEME}:/`.length);
+  const split = withoutScheme.indexOf("?");
+
+  if (split < 0) {
+    return undefined;
+  }
+
+  const query = new URLSearchParams(withoutScheme.slice(split + 1));
+  const root = query.get("root");
+
+  if (!root) {
+    return undefined;
+  }
+
+  return {
+    relativePath: withoutScheme.slice(0, split),
+    workspaceRoot: root,
+    side: query.get("side") === "empty" ? "empty" : "staged"
+  };
+}
+
 export const APPLY_CHANGES_COMMAND = "copilotArchitect.applyChanges";
 
 /**
@@ -2602,19 +2737,27 @@ async function runImplementPhase(
     unenforceable: constraints.unenforceable
   });
 
+  const previews = previewWrites(plan, changes);
   stream.markdown(`## Plan v${approved.version} — ready to write\n\n`);
-  stream.markdown(`${summarizeWrites(previewWrites(plan, changes))}\n\n`);
 
-  const suspect = previewWrites(plan, changes).filter(
-    (preview) => preview.suspectTruncation
-  );
-  if (suspect.length > 0) {
+  // One line and one button per file rather than a summary then a wall of
+  // buttons: the action belongs next to the thing it acts on.
+  for (const preview of previews) {
+    stream.markdown(`${summarizeWrites([preview])}\n`);
+    stream.button?.({
+      command: SHOW_DIFF_COMMAND,
+      title: `Show diff: ${truncate(preview.relativePath, 44)}`,
+      arguments: [preview.relativePath]
+    });
+  }
+
+  if (previews.some((preview) => preview.suspectTruncation)) {
     stream.markdown(
-      "⚠️ A replacement that is much shorter than the file it replaces is usually an answer that stopped early, not an edit. Check those before applying.\n\n"
+      "\n⚠️ A replacement much shorter than the file it replaces is usually an answer that stopped early, not an edit. Open that diff before applying.\n"
     );
   }
 
-  stream.markdown("Nothing has been written yet.\n");
+  stream.markdown("\nNothing has been written yet.\n");
   stream.button?.({
     command: APPLY_CHANGES_COMMAND,
     title: `Apply ${changes.length} change(s)`,

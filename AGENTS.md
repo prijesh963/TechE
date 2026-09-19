@@ -18,8 +18,8 @@ The tool walks one feature from question to reviewed change, in one session:
 3. Drafts a plan carrying the current contents of every file it would change.
 4. Takes the developer's corrections and redrafts, versioned.
 5. Waits for explicit approval — a button, not a phrase.
-6. Generates the changes, shows what they come to, and applies them on a
-   click — nothing reaches the working tree unseen.
+6. Generates the changes, offers a real diff of each against what is on disk,
+   and applies them on a click — nothing reaches the working tree unseen.
 7. Reviews what was built against what was approved.
 8. Exposes the same repo intelligence through a CLI and a local MCP server.
 
@@ -119,7 +119,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               43 files, 371 tests
+├── tests/               43 files, 380 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -291,7 +291,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 371 tests must pass before merging.
+Use Vitest. All 380 tests must pass before merging.
 
 Cover:
 
@@ -309,6 +309,7 @@ Cover:
 - new-file outlines (exports, unreal imports dropped, size bounds)
 - outline checked against the written file, end to end through the index
 - write previews (line deltas, truncation guard, staging lost on reload)
+- staged diff URIs and the read-only content provider behind them
 - grounding (claim extraction, verification, honest "not checked")
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)

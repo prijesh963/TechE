@@ -15,6 +15,9 @@ import {
   activate,
   createCliCommandLine,
   createDashboardHtml,
+  STAGED_SCHEME,
+  parseStagedUri,
+  stagedUri,
   formatSession,
   loadDashboardSession,
   parseProposedDecisions,
@@ -813,6 +816,9 @@ interface FakeVscode {
   /** Label the fake quick pick resolves to; undefined mimics a dismissed picker. */
   quickPickChoice: string | undefined;
   quickPickItems: QuickPickItemLike[][];
+  /** The staged-content provider the extension registered, if it did. */
+  contentProvider:
+    { provideTextDocumentContent(uri: UriLike): string | undefined } | undefined;
 }
 
 /** Writes just the index (and optionally plan) artifacts the insights card reads. */
@@ -855,6 +861,7 @@ function createFakeVscode(workspaceRoot = "/workspace/repo"): FakeVscode {
     addedFolders: [],
     quickPickChoice: undefined,
     quickPickItems: [],
+    contentProvider: undefined,
     vscode: {
       commands: {
         registerCommand: (command, callback): DisposableLike => {
@@ -913,6 +920,10 @@ function createFakeVscode(workspaceRoot = "/workspace/repo"): FakeVscode {
         updateWorkspaceFolders: (_start, _deleteCount, ...folders) => {
           fake.addedFolders.push(...folders);
           return true;
+        },
+        registerTextDocumentContentProvider: (_scheme, provider) => {
+          fake.contentProvider = provider;
+          return { dispose: () => undefined };
         }
       },
       Uri: {
@@ -1042,6 +1053,130 @@ describe("proposed decisions", () => {
     ).join("\n");
 
     expect(parseProposedDecisions(many)).toHaveLength(4);
+  });
+});
+
+describe("staged diff URIs", () => {
+  it("round-trips a workspace and path", () => {
+    const uri = stagedUri("/home/dev/my repo", "src/billing/InvoiceService.ts");
+
+    expect(uri.startsWith(`${STAGED_SCHEME}:/`)).toBe(true);
+    expect(parseStagedUri(uri)).toEqual({
+      workspaceRoot: "/home/dev/my repo",
+      relativePath: "src/billing/InvoiceService.ts",
+      side: "staged"
+    });
+  });
+
+  it("keeps the real filename in the path so the diff title names the file", () => {
+    // The title is the only place a developer can tell which file they are
+    // looking at, so the path component cannot be an opaque id.
+    const uri = stagedUri("/repo", "src/billing/ApprovalPolicy.ts");
+    expect(uri).toContain("src/billing/ApprovalPolicy.ts");
+  });
+
+  it("marks the empty side of an add or a delete", () => {
+    const empty = stagedUri("/repo", "src/new.ts", "empty");
+    expect(parseStagedUri(empty)?.side).toBe("empty");
+  });
+
+  it("survives a workspace path containing a query character", () => {
+    const uri = stagedUri("/home/dev/repo?weird&name", "src/a.ts");
+    expect(parseStagedUri(uri)?.workspaceRoot).toBe("/home/dev/repo?weird&name");
+  });
+
+  it("refuses anything that is not a staged URI", () => {
+    expect(parseStagedUri("file:///repo/src/a.ts")).toBeUndefined();
+    expect(parseStagedUri(`${STAGED_SCHEME}:/src/a.ts`)).toBeUndefined();
+    expect(parseStagedUri(`${STAGED_SCHEME}:/src/a.ts?side=staged`)).toBeUndefined();
+  });
+});
+
+describe("the staged content provider", () => {
+  it("serves an empty document for the other side of an add", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-provider-"));
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    const empty = stagedUri(workspaceRoot, "src/new.ts", "empty");
+    expect(
+      fake.contentProvider?.provideTextDocumentContent({
+        toString: () => empty
+      })
+    ).toBe("");
+  });
+
+  it("serves nothing rather than throwing for an unknown workspace", async () => {
+    // A diff editor left open after the staging is gone must render empty,
+    // not crash the provider.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-provider-none-"));
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    expect(
+      fake.contentProvider?.provideTextDocumentContent({
+        toString: () => stagedUri("/some/other/workspace", "src/a.ts")
+      })
+    ).toBe("");
+    expect(
+      fake.contentProvider?.provideTextDocumentContent({
+        toString: () => "file:///not/a/staged/uri.ts"
+      })
+    ).toBe("");
+  });
+});
+
+describe("showing a staged diff", () => {
+  it("says so when the file is no longer staged", async () => {
+    // A button from an old chat turn must not open a diff of nothing.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-diff-stale-"));
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.showStagedDiff")?.("src/gone.ts");
+
+    // No diff was opened; the developer was told why.
+    expect(
+      fake.executeCommandCalls.some((call) => call.command === "vscode.diff")
+    ).toBe(false);
+  });
+
+  it("contributes the command so the preview button resolves", async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(process.cwd(), "packages/vscode-extension/package.json"),
+        "utf8"
+      )
+    );
+    const ids = manifest.contributes.commands.map(
+      (c: { command: string }) => c.command
+    );
+
+    expect(ids).toContain("copilotArchitect.showStagedDiff");
+    expect(manifest.activationEvents).toContain(
+      "onCommand:copilotArchitect.showStagedDiff"
+    );
   });
 });
 

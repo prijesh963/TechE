@@ -36,6 +36,7 @@
     "onCommand:copilotArchitect.moreActions",
     "onCommand:copilotArchitect.approvePlan",
     "onCommand:copilotArchitect.confirmDecision",
+    "onCommand:copilotArchitect.showStagedDiff",
     "onCommand:copilotArchitect.applyChanges",
     "onCommand:copilotArchitect.endSession"
   ],
@@ -127,6 +128,10 @@
       {
         "command": "copilotArchitect.confirmDecision",
         "title": "Copilot Architect: Confirm Decision"
+      },
+      {
+        "command": "copilotArchitect.showStagedDiff",
+        "title": "Copilot Architect: Show Staged Diff"
       },
       {
         "command": "copilotArchitect.applyChanges",

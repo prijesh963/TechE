@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–16 merged. The redesign is complete; what is below is
+**Status:** Phases 0–17 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -95,17 +95,16 @@ renamed parameters, inferred types and whitespace; an equality test would
 report nearly every honest implementation as a broken contract, which is the
 failure mode these checks exist to avoid.
 
-### 1.8 The preview shows sizes, not the code itself
+### 1.8 A diff must be opened one file at a time
 
-**Phase 16.** `200 → 210 lines` tells a developer whether a replacement is the
-right shape. It does not show them the diff, which is what would tell them
-whether it is the right change.
+**Phase 17.** Each staged file gets its own button. A plan touching ten files
+is ten clicks to inspect fully, and nothing marks which ones have been
+looked at.
 
-**Cost:** the truncation guard catches the failure whole-file regeneration
-actually produces, and nothing catches a confident wrong rewrite. Showing a
-real diff means either diffing in the extension or opening VS Code's diff
-editor against staged content — the latter is the right answer and is a
-piece of work of its own.
+**Cost:** on a large plan the diffs most worth reading are the ones a
+developer is least likely to reach. A multi-file diff view — VS Code has one
+for source control — would show them together, and is a different piece of
+work from serving one staged document.
 
 ### 1.9 Staged changes are lost on reload
 

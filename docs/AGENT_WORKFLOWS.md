@@ -163,13 +163,24 @@ anything reaches your working tree:
 ## Plan v1 — ready to write
 
 - **update** `src/billing/InvoiceService.ts` — 200 → 210 lines
+  [ Show diff: src/billing/InvoiceService.ts ]
 - **add** `src/billing/ApprovalPolicy.ts` — 84 lines
+  [ Show diff: src/billing/ApprovalPolicy.ts ]
 - **update** `src/billing/Ledger.ts` — 12 lines replacing 180 ⚠️ the answer
   may have stopped early rather than edited the file
+  [ Show diff: src/billing/Ledger.ts ]
 
 Nothing has been written yet.
 [ Apply 3 change(s) ]
 ```
+
+**Show diff** opens VS Code's own diff editor: your file on the left, what
+would replace it on the right. The right-hand side is served from memory
+under a `copilot-architect-staged:` scheme rather than written to a temp file
+— staging to disk would be writing before the write was agreed, which is the
+thing this step exists to prevent. An added file diffs against an empty
+document, so the diff opens instead of failing on a path that is not there
+yet.
 
 You approved a plan — a file list, reasons, an outline. What the model returns
 is code nobody has seen, and this is the one moment where showing it costs
