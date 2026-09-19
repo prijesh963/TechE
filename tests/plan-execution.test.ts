@@ -11,8 +11,10 @@ import {
 import {
   applyPlanChanges,
   buildPlannedChange,
+  checkOutlines,
   compareAgainstPlan,
   createPlanContract,
+  summarizeOutlineChecks,
   plannedPaths,
   verifyPlanFreshness
 } from "../packages/planner/src/index.js";
@@ -153,6 +155,157 @@ describe("compareAgainstPlan", () => {
 
     expect(comparison.asPlanned).toEqual(["svc-billing/src/Ledger.java"]);
     expect(comparison.unplanned).toEqual([]);
+  });
+});
+
+describe("checkOutlines", () => {
+  const plan = createPlanContract({
+    request: "Add invoice approval",
+    version: 1,
+    decisions: [],
+    changes: [
+      {
+        kind: "add",
+        relativePath: "src/billing/ApprovalPolicy.ts",
+        rationale: "new approval rules",
+        outline: {
+          exports: ["ApprovalPolicy", "ApprovalDecision"],
+          dependsOn: [],
+          estimatedLines: 80
+        }
+      },
+      {
+        kind: "update",
+        relativePath: "src/billing/InvoiceService.ts",
+        rationale: "hooks approval into the lifecycle"
+      }
+    ]
+  });
+
+  it("passes a file that declares what was approved", () => {
+    const checks = checkOutlines(
+      plan,
+      new Map([
+        [
+          "src/billing/ApprovalPolicy.ts",
+          new Set(["ApprovalPolicy", "ApprovalDecision", "internalHelper"])
+        ]
+      ])
+    );
+
+    expect(checks).toEqual([
+      { relativePath: "src/billing/ApprovalPolicy.ts", status: "met", missing: [] }
+    ]);
+    expect(summarizeOutlineChecks(checks)).toBeUndefined();
+  });
+
+  it("reports an export the developer approved that is not there", () => {
+    // The outline was a contract. A file missing what was agreed is not the
+    // file that was approved, and until this ran nothing said so.
+    const checks = checkOutlines(
+      plan,
+      new Map([["src/billing/ApprovalPolicy.ts", new Set(["ApprovalPolicy"])]])
+    );
+
+    expect(checks[0].status).toBe("diverged");
+    expect(checks[0].missing).toEqual(["ApprovalDecision"]);
+
+    const summary = summarizeOutlineChecks(checks);
+    expect(summary).toContain("ApprovalDecision");
+    expect(summary).toContain("not the file you approved");
+  });
+
+  it("ignores symbols beyond the outline", () => {
+    // The index records every symbol a file declares, not just the exported
+    // ones, so extra names could equally be internal helpers. Flagging them
+    // would bury the real findings under noise on nearly every file.
+    const checks = checkOutlines(
+      plan,
+      new Map([
+        [
+          "src/billing/ApprovalPolicy.ts",
+          new Set(["ApprovalPolicy", "ApprovalDecision", "cache", "Normalizer"])
+        ]
+      ])
+    );
+
+    expect(checks[0].status).toBe("met");
+  });
+
+  it("checks only added files that carried an outline", () => {
+    const checks = checkOutlines(
+      plan,
+      new Map([
+        [
+          "src/billing/ApprovalPolicy.ts",
+          new Set(["ApprovalPolicy", "ApprovalDecision"])
+        ],
+        ["src/billing/InvoiceService.ts", new Set(["InvoiceService"])]
+      ])
+    );
+
+    expect(checks.map((check) => check.relativePath)).toEqual([
+      "src/billing/ApprovalPolicy.ts"
+    ]);
+  });
+
+  it("says it could not check, rather than calling it divergence", () => {
+    // Plenty of real files declare nothing the indexer recognizes. Reporting
+    // those as a broken contract would make the check worthless.
+    const missingFromIndex = checkOutlines(plan, new Map());
+    const noSymbols = checkOutlines(
+      plan,
+      new Map([["src/billing/ApprovalPolicy.ts", new Set<string>()]])
+    );
+
+    expect(missingFromIndex[0].status).toBe("not-checked");
+    expect(missingFromIndex[0].reason).toContain("not in the index");
+    expect(noSymbols[0].status).toBe("not-checked");
+    expect(noSymbols[0].reason).toContain("no symbols are indexed");
+    expect(summarizeOutlineChecks(missingFromIndex)).toBeUndefined();
+  });
+});
+
+describe("checkOutlines against a real file", () => {
+  it("reads what the written file actually declares", async () => {
+    // End to end: the plan promised two exports, the file that landed has
+    // one, and the index — not a mock — is what catches it.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-outline-e2e-"));
+    resetIndexFreshnessCache();
+
+    await mkdir(path.join(workspaceRoot, "src"), { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, "src", "ApprovalPolicy.ts"),
+      "export class ApprovalPolicy {\n  decide(): void {}\n}\n",
+      "utf8"
+    );
+
+    const plan = createPlanContract({
+      request: "Add invoice approval",
+      version: 1,
+      decisions: [],
+      changes: [
+        {
+          kind: "add",
+          relativePath: "src/ApprovalPolicy.ts",
+          rationale: "new approval rules",
+          outline: {
+            exports: ["ApprovalPolicy", "ApprovalDecision"],
+            dependsOn: [],
+            estimatedLines: 40
+          }
+        }
+      ]
+    });
+
+    const indexing = new IndexingService();
+    await indexing.index({ startPath: workspaceRoot });
+    const symbolsByFile = await indexing.symbolsByFile({ startPath: workspaceRoot });
+
+    const checks = checkOutlines(plan, symbolsByFile);
+
+    expect(checks[0].status).toBe("diverged");
+    expect(checks[0].missing).toEqual(["ApprovalDecision"]);
   });
 });
 

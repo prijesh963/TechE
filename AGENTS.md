@@ -118,7 +118,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               43 files, 354 tests
+├── tests/               43 files, 360 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -171,7 +171,8 @@ the other. If a shell needs repo intelligence, it imports the service.
     cites a symbol checked against the index, so a reason about the wrong file
     is flagged rather than read as fact. A new file carries an outline —
     exports, imports, rough size — so an `add` is approved as something
-    concrete rather than a sentence.
+    concrete rather than a sentence, and `/implement` checks the file that
+    landed against it.
 11. Grounding: claims verified against the index, unverified ones flagged.
 12. Safe validation runner with timeouts, retries and streaming.
 13. Safety policy engine with blocked patterns and approval gates.
@@ -289,7 +290,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 354 tests must pass before merging.
+Use Vitest. All 360 tests must pass before merging.
 
 Cover:
 
@@ -305,6 +306,7 @@ Cover:
 - change selection (invented paths, add-of-existing, traversal, caps)
 - rationale evidence (verified, unverified, and honestly unchecked)
 - new-file outlines (exports, unreal imports dropped, size bounds)
+- outline checked against the written file, end to end through the index
 - grounding (claim extraction, verification, honest "not checked")
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)

@@ -149,6 +149,20 @@ moved underneath it and stop rather than overwrite work it never saw.
 Afterwards the index and symbol graph rebuild, so a later question in the same
 session is not answered from a snapshot taken before the edit.
 
+Each new file is then checked against the outline you approved. If the file
+that landed does not declare what was agreed, it says so:
+
+```text
+⚠️ Written but off the approved outline: `src/billing/ApprovalPolicy.ts`
+(missing ApprovalDecision). That is not the file you approved.
+```
+
+Reported, never reverted — the file is on disk and you decide what to do about
+it. Only missing exports are reported: the index records every symbol a file
+declares, not only the exported ones, so a name beyond the outline could
+equally be an internal helper, and flagging those would put a warning on
+nearly every file.
+
 ### `/review`
 
 Compares what was built against what was approved. A change the plan did not

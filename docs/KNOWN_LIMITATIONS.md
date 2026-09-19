@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–13 merged. The redesign is complete; what is below is
+**Status:** Phases 0–14 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -72,16 +72,16 @@ file has no indexed symbols", and neither is visible unless the developer looks
 for absence. Requiring a citation would instead punish honest uncertainty,
 which is the worse trade — but the asymmetry is real and unmeasured.
 
-### 1.6 Nothing checks the file against the outline it was approved under
+### 1.6 Only missing exports are checked, not extra ones
 
-**Phase 13.** The outline is passed to implementation as a contract, and
-`/review` compares the diff against the plan — but nothing compares the new
-file's actual exports to the ones the developer approved. A file that exports
-something else is not the file they said yes to, and nothing says so.
+**Phase 14.** The index records every symbol a file declares, not just the
+exported ones, so a name beyond the outline could equally be an internal
+helper. Flagging those would put a warning on nearly every file, which is how
+a warning stops being read.
 
-**Cost:** the outline binds by persuasion rather than by check. The data to
-close this is already there: the index records what the written file declares,
-and the plan records what it should have.
+**Cost:** a new file that quietly grows a second public surface is not
+reported. Closing it means the index distinguishing exported symbols from
+declared ones — a change in the indexer, not the planner.
 
 ### 1.7 An outline describes shape, not behaviour
 

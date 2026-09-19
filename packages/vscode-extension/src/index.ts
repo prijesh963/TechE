@@ -17,8 +17,10 @@ import {
   createPlanContract,
   writeApprovedPlan,
   applyPlanChanges,
+  checkOutlines,
   compareAgainstPlan,
   plannedPaths,
+  summarizeOutlineChecks,
   verifyPlanFreshness,
   type ApplyChangeInput,
   DEFAULT_MAX_CHANGES,
@@ -2595,6 +2597,8 @@ async function runImplementPhase(
     );
   }
 
+  await reportOutlineDivergence(plan, workspaceRoot, applied.written, stream);
+
   stream.markdown("Run `/review` to compare this against the approved plan.\n");
 }
 
@@ -3400,6 +3404,63 @@ function describeNewFile(change: PlannedChange): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Compares each new file against the outline it was approved under.
+ *
+ * The outline was a contract, and until this ran it bound by persuasion: the
+ * developer approved a file exporting particular names, and nothing checked
+ * whether the file that landed exports them. Both halves were already
+ * recorded — the plan says what was promised, the index says what was
+ * written.
+ *
+ * Reported, never reverted. The file is on disk and the developer decides
+ * what to do about it; silently rewriting what they can see would be a
+ * worse surprise than the divergence.
+ */
+async function reportOutlineDivergence(
+  plan: PlanContract,
+  workspaceRoot: string,
+  written: string[],
+  stream: ChatResponseStreamLike
+): Promise<void> {
+  const hasOutlinedAdd = plan.changes.some(
+    (change) =>
+      change.kind === "add" && change.outline && written.includes(change.relativePath)
+  );
+
+  if (!hasOutlinedAdd) {
+    return;
+  }
+
+  const symbolsByFile = await new IndexingService()
+    .symbolsByFile({ startPath: workspaceRoot })
+    .catch(() => undefined);
+
+  if (!symbolsByFile) {
+    stream.markdown(
+      "_The new files could not be checked against their approved outlines: the index could not be read._\n\n"
+    );
+    return;
+  }
+
+  const checks = checkOutlines(plan, symbolsByFile);
+  const summary = summarizeOutlineChecks(checks);
+
+  if (summary) {
+    stream.markdown(`${summary}\n\n`);
+  }
+
+  // "Could not check" is not "checked and fine", and saying nothing would
+  // read as the latter.
+  const unchecked = checks.filter((check) => check.status === "not-checked");
+  if (unchecked.length > 0) {
+    const rows = unchecked
+      .map((check) => `\`${check.relativePath}\` (${check.reason})`)
+      .join(", ");
+    stream.markdown(`_Outline not checked for ${rows}._\n\n`);
+  }
 }
 
 /**

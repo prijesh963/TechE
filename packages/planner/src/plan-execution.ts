@@ -133,6 +133,86 @@ export function compareAgainstPlan(
   };
 }
 
+export interface OutlineCheck {
+  relativePath: string;
+  status: OutlineCheckStatus;
+  /** Exports the developer approved that the written file does not declare. */
+  missing: string[];
+  /** Why it could not be checked. Set only when `status` is `not-checked`. */
+  reason?: string;
+}
+
+export type OutlineCheckStatus = "met" | "diverged" | "not-checked";
+
+/**
+ * Checks each new file against the outline it was approved under.
+ *
+ * The outline was a contract: the developer said yes to a file exporting
+ * particular names. A file exporting something else is not the file they
+ * approved, and until this ran, nothing said so — the outline bound by
+ * persuasion rather than by check, while both halves of the comparison were
+ * already recorded.
+ *
+ * Only missing exports are reported. The index records every symbol a file
+ * declares, not just the exported ones, so anything beyond the outline could
+ * equally be an internal helper — and flagging those would bury the real
+ * findings under noise on nearly every file.
+ */
+export function checkOutlines(
+  plan: PlanContract,
+  symbolsByFile: Map<string, Set<string>>
+): OutlineCheck[] {
+  const checks: OutlineCheck[] = [];
+
+  for (const change of plan.changes) {
+    if (change.kind !== "add" || !change.outline) {
+      continue;
+    }
+
+    const declared = symbolsByFile.get(change.relativePath);
+
+    // Not the same as a file that failed to declare them: plenty of real
+    // files declare nothing the indexer recognizes, and reporting those as
+    // divergence would make the check worthless.
+    if (!declared || declared.size === 0) {
+      checks.push({
+        relativePath: change.relativePath,
+        status: "not-checked",
+        missing: [],
+        reason: declared
+          ? "no symbols are indexed for this file"
+          : "the file is not in the index"
+      });
+      continue;
+    }
+
+    const missing = change.outline.exports.filter((name) => !declared.has(name)).sort();
+
+    checks.push({
+      relativePath: change.relativePath,
+      status: missing.length === 0 ? "met" : "diverged",
+      missing
+    });
+  }
+
+  return checks;
+}
+
+/** A line for the developer, or `undefined` when every outline was met. */
+export function summarizeOutlineChecks(checks: OutlineCheck[]): string | undefined {
+  const diverged = checks.filter((check) => check.status === "diverged");
+
+  if (diverged.length === 0) {
+    return undefined;
+  }
+
+  const rows = diverged
+    .map((check) => `\`${check.relativePath}\` (missing ${check.missing.join(", ")})`)
+    .join(", ");
+
+  return `⚠️ Written but off the approved outline: ${rows}. That is not the file you approved.`;
+}
+
 function isInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return (
