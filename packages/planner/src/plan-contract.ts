@@ -72,8 +72,8 @@ export interface PlannedChange {
 }
 
 export interface PlannedOutline {
-  /** Symbols the new file will declare. */
-  exports: string[];
+  /** What the new file will expose, and what each of those things is for. */
+  exports: PlannedExport[];
   /**
    * Existing repo files it will import. Verified to exist when the outline is
    * parsed — an import of a file that is not there is a checkable claim, and
@@ -82,6 +82,28 @@ export interface PlannedOutline {
   dependsOn: string[];
   /** Rough size, so a one-line rationale cannot quietly mean a large file. */
   estimatedLines?: number;
+}
+
+/**
+ * One thing a new file will expose.
+ *
+ * A bare list of names bounds a file's shape and says nothing about what it
+ * does: `ApprovalPolicy, ApprovalDecision · ~80 lines` tells a developer the
+ * file is not secretly huge, and leaves them unable to tell a correct
+ * implementation from a plausible one. The signature says what goes in and
+ * what comes out; the purpose says what it is for. Both are what someone
+ * actually needs to answer "yes, that is the thing I want".
+ */
+export interface PlannedExport {
+  name: string;
+  /**
+   * How it is called, roughly — `decide(invoice, approver): ApprovalDecision`.
+   * Written loosely on purpose: an exact signature agreed before the code
+   * exists would be a guess dressed as a contract.
+   */
+  signature?: string;
+  /** What it is for, in one line. */
+  purpose?: string;
 }
 
 export type ChangeKind = "add" | "update" | "delete";

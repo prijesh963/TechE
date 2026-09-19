@@ -98,15 +98,30 @@ describe("buildPlannedChange", () => {
       kind: "add",
       rationale: "New approval handler",
       outline: {
-        exports: ["ApprovalHandler"],
+        exports: [
+          {
+            name: "ApprovalHandler",
+            signature: "handle(invoice): ApprovalDecision",
+            purpose: "applies the approval rules to one invoice"
+          }
+        ],
         dependsOn: ["src/existing.ts"],
         estimatedLines: 60
       }
     });
 
     expect(change.before).toBeUndefined();
+    // Signature and purpose survive into the artifact, because they are what
+    // the developer read before approving — a name alone leaves them unable
+    // to tell a correct implementation from a plausible one.
     expect(change.outline).toEqual({
-      exports: ["ApprovalHandler"],
+      exports: [
+        {
+          name: "ApprovalHandler",
+          signature: "handle(invoice): ApprovalDecision",
+          purpose: "applies the approval rules to one invoice"
+        }
+      ],
       dependsOn: ["src/existing.ts"],
       estimatedLines: 60
     });
@@ -122,7 +137,7 @@ describe("buildPlannedChange", () => {
       relativePath: "src/existing.ts",
       kind: "update",
       rationale: "holds the value this changes",
-      outline: { exports: ["Nonsense"], dependsOn: [] }
+      outline: { exports: [{ name: "Nonsense" }], dependsOn: [] }
     });
 
     expect(change.outline).toBeUndefined();

@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–14 merged. The redesign is complete; what is below is
+**Status:** Phases 0–15 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -83,15 +83,17 @@ a warning stops being read.
 reported. Closing it means the index distinguishing exported symbols from
 declared ones — a change in the indexer, not the planner.
 
-### 1.7 An outline describes shape, not behaviour
+### 1.7 A planned signature is never compared to the written one
 
-**Phase 13.** `ApprovalPolicy, ApprovalDecision · ~80 lines` bounds how big a
-new file is and what it exposes. It says nothing about what those exports do.
+**Phase 15.** An outline now says how each export is called, and the index
+records the signature of what was actually written — but `checkOutlines`
+compares names only.
 
-**Cost:** a developer approving an add still cannot tell a correct
-implementation from a plausible one — only an oversized or mis-shaped one.
-Going further means generating the file at plan time, which front-loads
-implementation into planning and pays for it again on every redraft.
+**Cost:** a file can export everything it promised with entirely different
+parameters and pass the check. Comparing them properly means tolerating
+renamed parameters, inferred types and whitespace; an equality test would
+report nearly every honest implementation as a broken contract, which is the
+failure mode these checks exist to avoid.
 
 ### 1.8 `/implement` regenerates whole files, with no dry run
 

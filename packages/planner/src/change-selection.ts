@@ -17,7 +17,7 @@
 
 import path from "node:path";
 
-import type { ChangeKind, PlannedOutline } from "./plan-contract.js";
+import type { ChangeKind, PlannedExport, PlannedOutline } from "./plan-contract.js";
 
 export interface SelectedChange {
   kind: ChangeKind;
@@ -275,42 +275,40 @@ export function parseAddOutlines(
   text: string,
   options: ParseOutlinesOptions
 ): Map<string, PlannedOutline> {
-  const outlines = new Map<string, PlannedOutline>();
+  const files = new Map<string, { dependsOn: string[]; estimatedLines?: number }>();
+  const exportsByPath = new Map<string, PlannedExport[]>();
 
   for (const line of text.split("\n")) {
     const trimmed = line.trim().replace(/^[-*]\s*/, "");
     if (!trimmed) continue;
 
-    // path | exports | files it imports | rough line count
     const parts = trimmed.split("|").map((part) => part.trim());
-    if (parts.length < 2) continue;
+    const record = parts[0].toLowerCase();
 
-    const relativePath = normalizeSelectedPath(parts[0]);
-    if (!relativePath || !options.addPaths.has(relativePath)) continue;
-    if (outlines.has(relativePath)) continue;
+    // Two record kinds rather than one wide line: a signature contains commas
+    // and parentheses, so packing exports into a comma-separated field would
+    // make every signature unparseable.
+    if (record === "file") {
+      readFileRecord(parts, options, files);
+    } else if (record === "export") {
+      readExportRecord(parts, options, exportsByPath);
+    }
+  }
 
-    const exports = splitList(parts[1])
-      .map(normalizeExportName)
-      .filter((name): name is string => name !== undefined)
-      .slice(0, MAX_OUTLINE_EXPORTS);
+  const outlines = new Map<string, PlannedOutline>();
 
+  for (const [relativePath, exports] of exportsByPath) {
     // An outline with nothing in it bounds nothing, and showing it would
-    // imply the add had been thought about when it had not.
+    // imply the add had been thought about when it had not. A file record on
+    // its own is exactly that.
     if (exports.length === 0) continue;
 
-    // Imports are kept only where the file exists. A dependency on something
-    // that is not there is the outline describing a different repository, and
-    // showing it would put a false fact in front of the developer.
-    const dependsOn = splitList(parts[2])
-      .map((value) => normalizeSelectedPath(value))
-      .filter((value): value is string => value !== undefined)
-      .filter((value) => options.indexedPaths.has(value));
-
+    const file = files.get(relativePath);
     outlines.set(relativePath, {
       exports,
-      dependsOn,
-      ...(parseEstimatedLines(parts[3]) !== undefined
-        ? { estimatedLines: parseEstimatedLines(parts[3]) }
+      dependsOn: file?.dependsOn ?? [],
+      ...(file?.estimatedLines !== undefined
+        ? { estimatedLines: file.estimatedLines }
         : {})
     });
   }
@@ -318,21 +316,95 @@ export function parseAddOutlines(
   return outlines;
 }
 
-/** One line for the plan, or `undefined` when there is nothing to say. */
+/** `file | path | imports | rough line count` */
+function readFileRecord(
+  parts: string[],
+  options: ParseOutlinesOptions,
+  files: Map<string, { dependsOn: string[]; estimatedLines?: number }>
+): void {
+  const relativePath = normalizeSelectedPath(parts[1] ?? "");
+  if (!relativePath || !options.addPaths.has(relativePath)) return;
+  if (files.has(relativePath)) return;
+
+  // Imports are kept only where the file exists. A dependency on something
+  // that is not there is the outline describing a different repository, and
+  // showing it would put a false fact in front of the developer.
+  const dependsOn = splitList(parts[2])
+    .map((value) => normalizeSelectedPath(value))
+    .filter((value): value is string => value !== undefined)
+    .filter((value) => options.indexedPaths.has(value));
+
+  const estimatedLines = parseEstimatedLines(parts[3]);
+
+  files.set(relativePath, {
+    dependsOn,
+    ...(estimatedLines !== undefined ? { estimatedLines } : {})
+  });
+}
+
+/** `export | path | name | signature | purpose` */
+function readExportRecord(
+  parts: string[],
+  options: ParseOutlinesOptions,
+  exportsByPath: Map<string, PlannedExport[]>
+): void {
+  const relativePath = normalizeSelectedPath(parts[1] ?? "");
+  if (!relativePath || !options.addPaths.has(relativePath)) return;
+
+  const name = normalizeExportName(parts[2] ?? "");
+  if (!name) return;
+
+  const existing = exportsByPath.get(relativePath) ?? [];
+  if (existing.length >= MAX_OUTLINE_EXPORTS) return;
+  if (existing.some((entry) => entry.name === name)) return;
+
+  existing.push({
+    name,
+    ...(describable(parts[3]) ? { signature: parts[3] } : {}),
+    ...(describable(parts[4]) ? { purpose: parts[4] } : {})
+  });
+  exportsByPath.set(relativePath, existing);
+}
+
+/**
+ * Whether a free-text field says anything.
+ *
+ * A one-character field is a placeholder the model left behind, and a very
+ * long one is prose that will not fit on the line the plan shows.
+ */
+function describable(value: string | undefined): value is string {
+  return value !== undefined && value.length > 2 && value.length <= 200;
+}
+
+/** Lines for the plan, or `undefined` when there is nothing to say. */
 export function renderOutline(outline: PlannedOutline | undefined): string | undefined {
   if (!outline) return undefined;
 
-  const parts = [`will export ${outline.exports.join(", ")}`];
+  const header: string[] = [];
 
   if (outline.dependsOn.length > 0) {
-    parts.push(`imports ${outline.dependsOn.join(", ")}`);
+    header.push(`imports ${outline.dependsOn.join(", ")}`);
   }
 
   if (outline.estimatedLines !== undefined) {
-    parts.push(`~${outline.estimatedLines} lines`);
+    header.push(`~${outline.estimatedLines} lines`);
   }
 
-  return parts.join(" · ");
+  // Each export on its own line: a signature and a purpose do not fit
+  // readably in a comma-separated run, and cramming them there is how a
+  // developer ends up skimming past the thing they were meant to approve.
+  const rows = outline.exports.map((entry) => {
+    const called = entry.signature ? ` \`${entry.signature}\`` : "";
+    const why = entry.purpose ? ` — ${entry.purpose}` : "";
+    return `    · **${entry.name}**${called}${why}`;
+  });
+
+  return [
+    header.length > 0
+      ? `will export ${outline.exports.length}, ${header.join(" · ")}`
+      : `will export ${outline.exports.length}`,
+    ...rows
+  ].join("\n");
 }
 
 function splitList(value: string | undefined): string[] {

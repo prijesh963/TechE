@@ -169,7 +169,7 @@ describe("checkOutlines", () => {
         relativePath: "src/billing/ApprovalPolicy.ts",
         rationale: "new approval rules",
         outline: {
-          exports: ["ApprovalPolicy", "ApprovalDecision"],
+          exports: [{ name: "ApprovalPolicy" }, { name: "ApprovalDecision" }],
           dependsOn: [],
           estimatedLines: 80
         }
@@ -290,7 +290,7 @@ describe("checkOutlines against a real file", () => {
           relativePath: "src/ApprovalPolicy.ts",
           rationale: "new approval rules",
           outline: {
-            exports: ["ApprovalPolicy", "ApprovalDecision"],
+            exports: [{ name: "ApprovalPolicy" }, { name: "ApprovalDecision" }],
             dependsOn: [],
             estimatedLines: 40
           }

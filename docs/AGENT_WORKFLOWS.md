@@ -79,12 +79,22 @@ Nothing is dropped over a failed check. A wrong reason on a right file is
 still the right file, and you are the one who decides.
 
 A new file has no code to show you, so it carries an outline instead — what it
-will export, which existing files it will import, roughly how long it will be:
+will export, how each of those is called and what it is for, which existing
+files it will import, roughly how long it will be:
 
 ```text
 - **add** `src/billing/ApprovalPolicy.ts` — new rules deciding who may approve _(new file)_
-  ↳ will export ApprovalPolicy, ApprovalDecision · imports src/billing/InvoiceService.ts · ~80 lines
+  ↳ will export 2, imports src/billing/InvoiceService.ts · ~80 lines
+    · **ApprovalPolicy** `decide(invoice, approver): ApprovalDecision` — applies the approval rules to one invoice
+    · **ApprovalDecision** `{ approved, reason }` — the outcome, with why it was reached
 ```
+
+A list of names alone bounds a file's shape and says nothing about what it
+does, which leaves you able to spot an oversized or mis-shaped file and
+nothing else. The signature says what goes in and what comes out; the purpose
+says what it is for. Signatures are deliberately loose — one agreed before the
+code exists is a guess, and writing it precisely would dress that guess up as
+a contract.
 
 An import of a file that does not exist is dropped from the outline: it means
 the outline was written about a different repository, and a false fact at the

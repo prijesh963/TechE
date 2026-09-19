@@ -186,7 +186,13 @@ export function checkOutlines(
       continue;
     }
 
-    const missing = change.outline.exports.filter((name) => !declared.has(name)).sort();
+    // Names only. The signature and purpose recorded beside them are prose
+    // agreed before the code existed, and comparing them to what was written
+    // would report every reworded parameter as a broken contract.
+    const missing = change.outline.exports
+      .map((entry) => entry.name)
+      .filter((name) => !declared.has(name))
+      .sort();
 
     checks.push({
       relativePath: change.relativePath,

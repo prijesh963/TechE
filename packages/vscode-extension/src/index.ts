@@ -3390,7 +3390,12 @@ function describeNewFile(change: PlannedChange): string {
 
   const lines = [
     "This is a new file. The developer approved this outline for it — treat it as the contract:",
-    `- Must export: ${change.outline.exports.join(", ")}`
+    "- Must export:",
+    ...change.outline.exports.map((entry) => {
+      const called = entry.signature ? `, called as ${entry.signature}` : "";
+      const why = entry.purpose ? ` — ${entry.purpose}` : "";
+      return `  - ${entry.name}${called}${why}`;
+    })
   ];
 
   if (change.outline.dependsOn.length > 0) {
@@ -3506,17 +3511,26 @@ async function requestAddOutlines(
         ? ["It also changes these existing files:", ...existing, ""]
         : []),
       "Say what each new file will contain, so the developer can approve",
-      "something concrete rather than a description.",
+      "something concrete rather than a description. They need to be able to",
+      "tell a correct implementation from a merely plausible one, so say what",
+      "each export takes, returns and is for — not just its name.",
       "",
-      "One per line, pipe-separated, nothing else — no prose, no numbering:",
-      "path | exported names, comma-separated | repo files it imports | rough line count",
+      "Two record kinds, pipe-separated, nothing else — no prose, no numbering.",
+      "One `file` line per new file, then one `export` line per thing it exposes:",
+      "",
+      "file | path | repo files it imports | rough line count",
+      "export | path | name | how it is called | what it is for",
       "",
       "Import only files that already exist in this repository; leave that",
       "field empty rather than guessing at a path.",
       "Give the line count as a number — an honest estimate, not a target.",
+      "Keep the signature loose: it is agreed before the code exists, so an",
+      "exact one would be a guess dressed as a contract.",
       "",
       "Example:",
-      "src/billing/ApprovalPolicy.ts | ApprovalPolicy, ApprovalDecision | src/billing/InvoiceService.ts | 80"
+      "file | src/billing/ApprovalPolicy.ts | src/billing/InvoiceService.ts | 80",
+      "export | src/billing/ApprovalPolicy.ts | ApprovalPolicy | decide(invoice, approver): ApprovalDecision | applies the approval rules to one invoice",
+      "export | src/billing/ApprovalPolicy.ts | ApprovalDecision | { approved, reason } | the outcome, with why it was reached"
     ].join("\n"),
     token
   );
