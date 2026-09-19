@@ -131,18 +131,25 @@ Open the Command Palette (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Windows/Linu
 | `Copilot Architect: Analyze Repo` | `analyze`      | Detects languages, frameworks, entry points, and routes. Writes `.copilot-architect/repo-map.json`. |
 | `Copilot Architect: Build Index`  | `index`        | Builds a searchable local file index. Writes `.copilot-architect/index/index.json`.                 |
 
-### Planning
+### Planning, validation and review
 
-| Command                            | CLI equivalent     | What it does                                                                                         |
-| ---------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
-| `Copilot Architect: Generate Plan` | `plan "<request>"` | Prompts for a feature description, then generates a plan artifact under `.copilot-architect/plans/`. |
+These are not Command Palette commands. They belong to `@architect`, where a
+session can hold a plan, the decisions behind it, and the review of what was
+built from it together:
 
-### Validation and Review
+| Instead of a command | Use                                             |
+| -------------------- | ----------------------------------------------- |
+| Generate Plan        | `@architect /create-plan`                       |
+| Validate             | The **Run checks** button after applying a plan |
+| Review               | `@architect /review`                            |
 
-| Command                       | CLI equivalent                             | What it does                                                                                              |
-| ----------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `Copilot Architect: Validate` | `validate`                                 | Runs build, test, lint, and format commands. Writes a validation report under `.copilot-architect/runs/`. |
-| `Copilot Architect: Review`   | `review --plan latest --validation latest` | Generates a review report from the latest git diff. Writes under `.copilot-architect/reviews/`.           |
+They were Command Palette commands once, and that was the problem. They ran
+the CLI and wrote a `FeaturePlan` to `plans/latest-plan.json`, while
+`/create-plan` writes a `PlanContract` to `plans/approved/`. The two never
+met: a developer could produce two unrelated plans for one feature, and
+`/review` would only ever know about one of them.
+
+The CLI still has `plan`, `validate` and `review` for terminal and CI use.
 
 ### Agents and Instructions
 

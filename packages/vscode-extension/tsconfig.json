@@ -10,10 +10,26 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../agents" },
-    { "path": "../grounding" },
-    { "path": "../indexer" },
-    { "path": "../planner" },
-    { "path": "../session" }
+    {
+      "path": "../agents"
+    },
+    {
+      "path": "../grounding"
+    },
+    {
+      "path": "../indexer"
+    },
+    {
+      "path": "../planner"
+    },
+    {
+      "path": "../reviewer"
+    },
+    {
+      "path": "../session"
+    },
+    {
+      "path": "../validator"
+    }
   ]
 }

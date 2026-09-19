@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–18 merged. The redesign is complete; what is below is
+**Status:** Phases 0–19 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -139,7 +139,28 @@ that information.
 would close most of these, at the cost of a second model call whenever the
 first was sloppy.
 
-### 1.12 The CLI shell-outs are still subprocesses
+### 1.12 Validation runs, but nothing reads its result
+
+**Phase 19.** The plan commits to checks, the button runs them safely, and the
+outcome goes to the output channel and the dashboard. `/review` does not load
+the validation report, so a failing test does not become a review finding
+even though `ReviewService` accepts one.
+
+**Cost:** the loop's last two steps do not meet. Passing `validation:` to the
+review call would close it, and needs the run's path threaded through the
+session.
+
+### 1.13 Review reads a diff summary, not the diff
+
+**Phase 19.** The model is given `ReviewService`'s diff summary — file names
+and line counts — plus the automated findings, not the hunks. It is told to
+say so, and does.
+
+**Cost:** it cannot see a wrong change inside a file the plan expected, which
+is the failure most worth catching. Sending real hunks means choosing which,
+since a large diff is the context cost this design exists to avoid.
+
+### 1.14 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —
@@ -343,32 +364,22 @@ would ship the same bytes as `node_modules`.
 
 ## 6. Documentation debt
 
-### 6.3 Two plan formats coexist — and should
+### 6.3 Two plan formats coexist, in different surfaces
 
-**Raised Phase 2, assessed Phase 8: not a duplication.** `FeaturePlan` and
-`PlanContract` looked like two formats for one thing. They are not.
+**Raised Phase 2, assessed Phase 8, narrowed Phase 19.** `FeaturePlan` is the
+narrative plan the CLI produces and `handoff`, `measure` and four MCP tools
+consume. `PlanContract` is the executable contract `/implement` applies. They
+are different things and both are needed.
 
-`FeaturePlan` is a narrative plan — steps, assumptions, impact analysis,
-validation strategy — written for a human or another agent to act on. It is
-what `handoff`, `measure`, `review` and four MCP tools consume, and it is the
-CLI's plan surface. `PlanContract` is an executable contract: per-file changes
-with before-snapshots and content hashes, versioned, carrying the decisions it
-was approved under, which `/implement` applies directly.
+Phase 19 removed the part that actually hurt: the dashboard offered Generate
+Plan, Validate and Review as buttons that wrote a `FeaturePlan`, so a
+developer could produce two unrelated plans for one feature and `/review`
+would only know about one. Those verbs now belong to `@architect` alone, and
+`ReviewService` takes expected paths directly so it works from either format.
 
-Retiring `FeaturePlan` as originally intended would remove the CLI `plan`
-command, `handoff`, `measure`, workspace planning and four MCP tools — the
-surfaces that matter most where policy forbids installing an extension.
-
-**Cost, which is real:** `/review` in the extension reads the approved
-contract while the CLI's `review` reads `plans/latest-plan.json`, so a
-developer using both can get different answers to "what was approved". They
-write to different paths (`plans/approved/` and `plans/latest-plan.json`) so
-nothing collides, but nothing reconciles them either.
-
-**Shape of the fix:** have the CLI's `review` prefer an approved contract when
-one exists, falling back to the narrative plan. Not a format retirement.
-
----
+**Cost, still real:** a developer who uses the CLI `plan` command and
+`@architect /create-plan` on the same feature still has two plans that do not
+reference each other. Nothing stops that; nothing surfaces it either.
 
 ### 6.4 Seven specialist role instruction sets were dropped
 

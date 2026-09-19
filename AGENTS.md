@@ -112,7 +112,7 @@ copilot-architect/
 │   ├── reviewer/        review report generation
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 27 tools
+│   ├── mcp-server/      MCP server and 30 tools
 │   ├── cli/             CLI entry point and command routing
 │   ├── vscode-extension the @architect chat participant and dashboard
 │   └── web/             optional local web UI shell (thin)
@@ -120,7 +120,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               44 files, 398 tests
+├── tests/               44 files, 410 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -152,7 +152,8 @@ the other. If a shell needs repo intelligence, it imports the service.
 ## Implemented
 
 1. TypeScript CLI with 24 commands including `demo`.
-2. Local MCP server with 27 tools.
+2. Local MCP server with 30 tools, including the session, plan contract and
+   grounding — so a policy-blocked developer gets the same product.
 3. VS Code extension with the `@architect` chat participant and four phases.
 4. Repo analysis and discovery; language/framework/package-manager detection.
 5. Adapter architecture with registry, confidence scoring, generic fallback.
@@ -292,7 +293,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 398 tests must pass before merging.
+Use Vitest. All 410 tests must pass before merging.
 
 Cover:
 
@@ -316,7 +317,7 @@ Cover:
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
-- MCP tools (all 27 tools)
+- MCP tools (all 30 tools)
 - role prompt rendering
 - instructions generation and validation
 - handoff generation (approval gating, git checkpoint)

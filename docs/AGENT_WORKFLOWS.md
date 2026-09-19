@@ -105,6 +105,21 @@ specified.
 
 What you approve becomes the contract `/implement` works to.
 
+A plan also commits to the checks that will run afterwards, taken from the
+test and lint commands your repo already has:
+
+```text
+**Checks this plan commits to** — `npm test`, `npm run lint`
+```
+
+Build and format are left out deliberately: they are slow enough that a plan
+committing to everything is one you learn to skip. If nothing is detected the
+plan says so, because a plan that quietly commits to nothing looks exactly
+like one whose checks all passed.
+
+Those checks run after **Apply**, behind their own button. Approving a plan
+that names a command is not the same as agreeing to execute it this second.
+
 Where no language model is available it falls back to the top search matches
 and says so, in those words, rather than presenting them as a judged
 selection. Your corrections outrank its first proposal — say what
@@ -233,10 +248,20 @@ nearly every file.
 
 ### `/review`
 
-Compares what was built against what was approved. A change the plan did not
-mention is a finding, not a detail. It separates what blocks a merge from what
-is worth a follow-up, and says what it could not inspect rather than implying
-the whole change was reviewed.
+Compares what was built against what was approved, in two passes.
+
+First the file list: changed as planned, planned but unchanged, changed but
+never mentioned. A change the plan did not mention is a finding, not a detail.
+
+Then the code itself. Automated checks look for missing tests, touched
+security-sensitive files, dependency and config changes, and validation
+failures; the model then reads those alongside the diff summary and says what
+blocks a merge and what is worth a follow-up. It says what it could not
+inspect — it is given a summary, not the whole diff — rather than implying the
+whole change was reviewed.
+
+Where no language model is available the automated findings still stand, and
+the answer says that nothing read the change itself.
 
 ---
 
@@ -274,8 +299,14 @@ a warning nobody reads is worse than no warning.
 ## Using this without the extension
 
 Where policy forbids installing extensions, the MCP server exposes the same
-repo intelligence as 27 tools to plain Copilot agent mode, Codex, Claude Code
-or any other MCP client:
+repo intelligence as 30 tools to plain Copilot agent mode, Codex, Claude Code
+or any other MCP client — including the session model itself:
+
+| Tool                         | What it gives a client that is not the extension                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| `get_session`                | The feature, phase, confirmed decisions and plan versions. Reads without parking the session.     |
+| `get_approved_plan_contract` | The approved plan: files, reasons, each file's content at plan time, and the decisions behind it. |
+| `verify_claims`              | Checks an answer's paths, citations and symbols against the index.                                |
 
 ```bash
 npm run cli -- mcp config --path /path/to/repo   # writes .vscode/mcp.json

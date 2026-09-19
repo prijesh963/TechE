@@ -3328,10 +3328,13 @@ async function runDemo(options: {
   const failedCount = steps.filter((s) => !s.ok).length;
   const success = failedCount === 0;
 
+  // Kept in step with the commands that exist: `agents install` was deleted
+  // in the redesign, and a demo that ends by naming a command the CLI refuses
+  // is the first thing a new developer sees.
   const nextSteps = [
     `npm run cli -- plan "Describe your feature here"`,
-    "npm run cli -- agents install",
     "npm run cli -- instructions generate",
+    "npm run cli -- mcp config",
     "npm run cli -- validate --test",
     "npm run cli -- review"
   ];

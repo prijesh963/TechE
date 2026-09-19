@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { renderRolePrompt } from "@copilot-architect/agents";
 import { GroundingService, summarizeGrounding } from "@copilot-architect/grounding";
+import { ReviewService } from "@copilot-architect/reviewer";
+import { ValidationService } from "@copilot-architect/validator";
 import {
   IndexingService,
   tokenize,
@@ -19,6 +21,7 @@ import {
   applyPlanChanges,
   checkOutlines,
   compareAgainstPlan,
+  planValidationCommands,
   plannedPaths,
   applyFileEdits,
   describeRefusals,
@@ -80,24 +83,9 @@ export const COPILOT_ARCHITECT_COMMANDS: CopilotArchitectCommand[] = [
     cliArgs: ["index"]
   },
   {
-    id: "copilotArchitect.generatePlan",
-    title: "Copilot Architect: Generate Plan",
-    cliArgs: ["plan"],
-    prompt: {
-      title: "Copilot Architect",
-      prompt: "Feature request",
-      placeHolder: "Add invoice approval workflow"
-    }
-  },
-  {
-    id: "copilotArchitect.validate",
-    title: "Copilot Architect: Validate",
-    cliArgs: ["validate"]
-  },
-  {
-    id: "copilotArchitect.review",
-    title: "Copilot Architect: Review",
-    cliArgs: ["review", "--plan", "latest", "--validation", "latest"]
+    id: "copilotArchitect.buildGraph",
+    title: "Copilot Architect: Build Symbol Graph",
+    cliArgs: ["graph"]
   },
   {
     id: "copilotArchitect.startMcp",
@@ -126,10 +114,14 @@ export const DASHBOARD_PRIMARY_ACTIONS: { id: string; label: string }[] = [
 
 /**
  * Commands reachable from the dashboard's "More actions…" quick pick rather
- * than as their own link. The dashboard row itself stays at five entries
- * (Setup Repo, Start & Setup MCP, Stop MCP, Install Agents, Generate
- * Instructions) — everything here is either a step Setup Repo already runs
- * or a lower-frequency action.
+ * than as their own link: setup steps and lower-frequency actions.
+ *
+ * Plan, Validate and Review are deliberately not here. They were buttons that
+ * ran the CLI and wrote a `FeaturePlan` to `plans/latest-plan.json`, while
+ * `/create-plan` writes a `PlanContract` to `plans/approved/`. The two never
+ * met, so a developer could produce two unrelated plans for one feature and
+ * `/review` would only ever know about one of them. Those verbs belong to
+ * `@architect`, where the session can hold them together.
  */
 export const COPILOT_ARCHITECT_SECONDARY_ACTIONS: {
   id: string;
@@ -157,19 +149,9 @@ export const COPILOT_ARCHITECT_SECONDARY_ACTIONS: {
     description: "Rebuild the searchable index only"
   },
   {
-    id: "copilotArchitect.generatePlan",
-    label: "Generate Plan",
-    description: "Plan a feature request against this repo"
-  },
-  {
-    id: "copilotArchitect.validate",
-    label: "Validate",
-    description: "Run the detected build/test/lint commands"
-  },
-  {
-    id: "copilotArchitect.review",
-    label: "Review",
-    description: "Review the working diff against the latest plan"
+    id: "copilotArchitect.buildGraph",
+    label: "Build Symbol Graph",
+    description: "Rebuild graph.json — call and import edges used by search"
   }
 ];
 
@@ -595,99 +577,6 @@ export function activate(
       }
     }
 
-    if (command.id === "copilotArchitect.generatePlan") {
-      const repoRoots = await getRegisteredRepoRoots(workspaceRoot);
-      if (repoRoots.length > 0) {
-        // workspace plan produces a cross-repo plan; feature request is args[1]
-        const wsArgs = ["workspace", "plan", ...args.slice(1), "--path", workspaceRoot];
-        outputChannel.appendLine(`[workspace mode] $ ${createCliCommandLine(wsArgs)}`);
-        const r = await runner.run({
-          args: wsArgs,
-          cwd: extensionRoot,
-          onOutput: (stream, text) => outputChannel.appendLine(`[${stream}] ${text}`)
-        });
-        state.lastCommand = createCliCommandLine(wsArgs);
-        state.lastExitCode = r.exitCode;
-        dashboard.refresh();
-        if (r.exitCode === 0) {
-          vscode.window.showInformationMessage(
-            `Workspace plan generated across ${repoRoots.length} repos.`
-          );
-        } else {
-          vscode.window.showErrorMessage("Workspace plan failed. See output.");
-        }
-        return r;
-      }
-    }
-
-    if (command.id === "copilotArchitect.validate") {
-      const repoRoots = await getRegisteredRepoRoots(workspaceRoot);
-      if (repoRoots.length > 0) {
-        outputChannel.appendLine(
-          `[workspace mode] validating ${repoRoots.length} repo(s)…`
-        );
-        let passed = 0;
-        for (const repoRoot of repoRoots) {
-          const repoArgs = ["validate", "--path", repoRoot];
-          outputChannel.appendLine(`$ ${createCliCommandLine(repoArgs)}`);
-          const r = await runner.run({
-            args: repoArgs,
-            cwd: extensionRoot,
-            onOutput: (stream, text) => outputChannel.appendLine(`[${stream}] ${text}`)
-          });
-          if (r.exitCode === 0) passed++;
-        }
-        state.lastCommand = `validate (workspace, ${repoRoots.length} repos)`;
-        state.lastExitCode = passed === repoRoots.length ? 0 : 1;
-        dashboard.refresh();
-        if (passed === repoRoots.length) {
-          vscode.window.showInformationMessage(
-            `Validation passed: all ${repoRoots.length} repos.`
-          );
-        } else {
-          vscode.window.showErrorMessage(
-            `Validation: ${passed}/${repoRoots.length} repos passed. See output for details.`
-          );
-        }
-        return undefined;
-      }
-    }
-
-    if (command.id === "copilotArchitect.review") {
-      const repoRoots = await getRegisteredRepoRoots(workspaceRoot);
-      if (repoRoots.length > 0) {
-        outputChannel.appendLine(
-          `[workspace mode] reviewing ${repoRoots.length} repo(s)…`
-        );
-        let passed = 0;
-        for (const repoRoot of repoRoots) {
-          const repoArgs = [
-            "review",
-            "--plan",
-            "latest",
-            "--validation",
-            "latest",
-            "--path",
-            repoRoot
-          ];
-          outputChannel.appendLine(`$ ${createCliCommandLine(repoArgs)}`);
-          const r = await runner.run({
-            args: repoArgs,
-            cwd: extensionRoot,
-            onOutput: (stream, text) => outputChannel.appendLine(`[${stream}] ${text}`)
-          });
-          if (r.exitCode === 0) passed++;
-        }
-        state.lastCommand = `review (workspace, ${repoRoots.length} repos)`;
-        state.lastExitCode = passed > 0 ? 0 : 1;
-        dashboard.refresh();
-        vscode.window.showInformationMessage(
-          `Review complete: ${passed}/${repoRoots.length} repos reviewed. See .copilot-architect/reviews/ in each repo.`
-        );
-        return undefined;
-      }
-    }
-
     // Single-repo (default) path
     const argsWithPath = [...args, "--path", workspaceRoot];
     const commandLine = createCliCommandLine(argsWithPath);
@@ -989,6 +878,34 @@ export function activate(
       vscode.window.showInformationMessage(
         `Plan v${version} approved — run \`/implement\` when ready.`
       );
+    }),
+    vscode.commands.registerCommand(RUN_VALIDATION_COMMAND, async () => {
+      const channel = outputChannel;
+      channel.appendLine("$ validation");
+      channel.show?.(true);
+
+      try {
+        const result = await new ValidationService().validate({
+          startPath: workspaceRoot,
+          categories: ["test", "lint"],
+          onOutput: (event) => channel.appendLine(`[${event.stream}] ${event.text}`)
+        });
+
+        const { passed, failed, blocked, timedOut } = summarizeValidation(result);
+        state.lastCommand = "validation";
+        state.lastExitCode = failed + blocked + timedOut > 0 ? 1 : 0;
+        dashboard.refresh();
+
+        vscode.window.showInformationMessage(
+          `Validation: ${passed} passed, ${failed} failed, ${blocked} blocked, ${timedOut} timed out.`
+        );
+      } catch (error) {
+        // Reported rather than swallowed: "no validation ran" and "validation
+        // passed" must not look the same.
+        const message = error instanceof Error ? error.message : String(error);
+        channel.appendLine(`[error] ${message}`);
+        vscode.window.showErrorMessage(`Validation could not run: ${message}`);
+      }
     }),
     vscode.commands.registerCommand(SHOW_DIFF_COMMAND, async (...args) => {
       const relativePath = String(args[0] ?? "");
@@ -1318,7 +1235,7 @@ export function activate(
             await runImplementPhase(vscode, sessions, workspaceRoot, stream, token);
             break;
           case "review":
-            await runReviewPhase(sessions, workspaceRoot, stream);
+            await runReviewPhase(vscode, sessions, workspaceRoot, stream, token);
             break;
         }
       } catch (error) {
@@ -2170,6 +2087,8 @@ const MAX_PROPOSED_DECISIONS = 4;
 
 export const CONFIRM_DECISION_COMMAND = "copilotArchitect.confirmDecision";
 
+export const RUN_VALIDATION_COMMAND = "copilotArchitect.runValidation";
+
 export const SHOW_DIFF_COMMAND = "copilotArchitect.showStagedDiff";
 
 /**
@@ -2498,7 +2417,14 @@ async function runPlanPhase(
     request: prompt,
     version,
     decisions: sessions.activeDecisions(session),
-    changes
+    changes,
+    // What the plan commits to running afterwards, taken from what the repo
+    // already has. Approving a plan should mean agreeing to the checks too.
+    validation: planValidationCommands(
+      await readJsonSafe<unknown>(
+        path.join(workspaceRoot, ".copilot-architect", "repo-map.json")
+      )
+    )
   });
   const withDraft = await sessions.addPlanVersion({ workspaceRoot }, { ...plan });
 
@@ -2556,6 +2482,18 @@ async function runPlanPhase(
   const recorded = sessions.activeDecisions(withDraft);
   const proposals = await proposeDecisions(vscode, prompt, changes, recorded, token);
   renderProposedDecisions(proposals, recorded, stream);
+
+  if (plan.validation.length > 0) {
+    stream.markdown(
+      `\n**Checks this plan commits to** — ${plan.validation.map((entry) => `\`${entry.command}\``).join(", ")}\n`
+    );
+  } else {
+    // Stated, because a plan that quietly commits to nothing looks the same
+    // as one whose checks all passed.
+    stream.markdown(
+      "\n_No test or lint command was detected, so this plan commits to no automated check. Run `analyze` first if that looks wrong._\n"
+    );
+  }
 
   stream.markdown(`\n${await buildReceipts(workspaceRoot)}\n`);
   stream.markdown(
@@ -2814,8 +2752,24 @@ async function applyStagedWrites(
     return;
   }
 
+  // Re-checked here, not only before generating. Between the preview and
+  // this click the developer may have edited one of these files themselves —
+  // and the staged content is a *complete* replacement computed from the
+  // version they had before, so writing it would silently destroy their work.
+  const { plan } = staged;
+  const freshness = await verifyPlanFreshness(plan, workspaceRoot);
+
+  if (!freshness.ok) {
+    const moved = [...freshness.drifted, ...freshness.missing];
+    stream.markdown(
+      `**Nothing written — ${list(moved)} changed since the preview was built.**\n\n` +
+        "Applying now would overwrite whatever changed. Run `/implement` again to regenerate against the current files.\n"
+    );
+    return;
+  }
+
   stagedWrites.delete(workspaceRoot);
-  const { plan, changes, unenforceable } = staged;
+  const { changes, unenforceable } = staged;
   const applied = await applyPlanChanges({ workspaceRoot, changes });
 
   if (applied.written.length > 0 || applied.deleted.length > 0) {
@@ -2862,7 +2816,21 @@ async function applyStagedWrites(
 
   await reportOutlineDivergence(plan, workspaceRoot, applied.written, stream);
 
-  stream.markdown("Run `/review` to compare this against the approved plan.\n");
+  if (plan.validation.length > 0 && applied.written.length > 0) {
+    // A button, not automatic. The plan named these checks and the developer
+    // approved the plan — but approving a plan that mentions a command is not
+    // agreeing to execute it this second, and validation runs real repo
+    // commands.
+    stream.markdown(
+      `This plan committed to ${plan.validation.map((entry) => `\`${entry.command}\``).join(", ")}.\n`
+    );
+    stream.button?.({
+      command: RUN_VALIDATION_COMMAND,
+      title: `Run ${plan.validation.length} check(s)`
+    });
+  }
+
+  stream.markdown("\nRun `/review` to compare this against the approved plan.\n");
 }
 
 /**
@@ -2873,9 +2841,11 @@ async function applyStagedWrites(
  * partial review as a complete one.
  */
 async function runReviewPhase(
+  vscode: VscodeApiLike,
   sessions: SessionService,
   workspaceRoot: string,
-  stream: ChatResponseStreamLike
+  stream: ChatResponseStreamLike,
+  token: unknown
 ): Promise<void> {
   const session = await sessions.current({ workspaceRoot });
 
@@ -2939,8 +2909,122 @@ async function runReviewPhase(
     );
   }
 
+  await reportReviewFindings(vscode, plan, workspaceRoot, stream, token);
+
   stream.markdown(await buildReceipts(workspaceRoot));
   stream.button?.({ command: END_SESSION_COMMAND, title: "End session" });
+}
+
+/**
+ * The half of review that looks at the code rather than the file list.
+ *
+ * Comparing paths against the plan says what moved. It does not say whether
+ * what landed is any good — missing tests, a touched security-sensitive file,
+ * a dependency change, a validation failure. `ReviewService` already detects
+ * all of those and was, until now, reachable only from the CLI: the chat
+ * phase that calls itself review made no model call and read no diff.
+ */
+async function reportReviewFindings(
+  vscode: VscodeApiLike,
+  plan: PlanContract,
+  workspaceRoot: string,
+  stream: ChatResponseStreamLike,
+  token: unknown
+): Promise<void> {
+  stream.progress?.("Looking at what changed…");
+
+  const result = await new ReviewService()
+    .review({
+      startPath: workspaceRoot,
+      // From the contract, not a FeaturePlan on disk: without them every
+      // changed file would be reported as unexpected.
+      expectedFiles: plannedPaths(plan)
+    })
+    .catch(() => undefined);
+
+  if (!result) {
+    stream.markdown(
+      "_No findings: the diff could not be read, so nothing was inspected. This is not a clean review._\n\n"
+    );
+    return;
+  }
+
+  const open = result.report.findings.filter((finding) => finding.status === "open");
+
+  if (open.length > 0) {
+    stream.markdown("**Findings**\n");
+    for (const finding of open) {
+      const where = finding.filePath
+        ? ` — \`${finding.filePath}${finding.line ? `:${finding.line}` : ""}\``
+        : "";
+      stream.markdown(`- **${finding.severity}** ${finding.title}${where}\n`);
+    }
+    stream.markdown("\n");
+  }
+
+  stream.markdown(`_Report: ${path.relative(workspaceRoot, result.markdownPath)}_\n\n`);
+
+  // The role prompt exists and, until now, nothing sent it: /review made no
+  // model call at all, so it could never give a line, a severity or a
+  // remediation the way the role says it must.
+  const assessment = await requestLmText(
+    vscode,
+    [
+      renderRolePrompt("review"),
+      "",
+      `The developer asked for: ${plan.request}`,
+      "",
+      "The plan approved these files:",
+      ...plan.changes.map(
+        (change) => `- ${change.kind} ${change.relativePath} — ${change.rationale}`
+      ),
+      "",
+      ...(open.length > 0
+        ? [
+            "Automated checks raised these:",
+            ...open.map(
+              (finding) => `- ${finding.severity}: ${finding.title} ${finding.details}`
+            ),
+            ""
+          ]
+        : ["Automated checks raised nothing.", ""]),
+      "Diff summary:",
+      result.report.diffSummary ?? "(none)",
+      "",
+      "Say what blocks a merge and what is worth a follow-up. Be specific about",
+      "the file. Say what you could not inspect rather than implying you read",
+      "everything — you were given a summary, not the full diff."
+    ].join("\n"),
+    token
+  );
+
+  if (assessment === undefined) {
+    stream.markdown(
+      "_No language model was available, so the findings above are the automated checks only — nothing read the change itself._\n\n"
+    );
+    return;
+  }
+
+  stream.markdown(`${assessment.trim()}\n\n`);
+}
+
+/** Counts by outcome, for a one-line result the developer can act on. */
+function summarizeValidation(result: { report: { results?: { status?: string }[] } }): {
+  passed: number;
+  failed: number;
+  blocked: number;
+  timedOut: number;
+} {
+  const results = result.report.results ?? [];
+  const count = (status: string) =>
+    results.filter((entry) => entry.status === status).length;
+
+  return {
+    passed: count("passed"),
+    failed: count("failed"),
+    blocked: count("blocked"),
+    timedOut: count("timed-out")
+  };
 }
 
 function list(paths: string[]): string {

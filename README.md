@@ -10,7 +10,7 @@ Nothing leaves your machine except what Copilot itself sends.
 
 Two surfaces, for different situations: the **`@architect` VS Code extension**,
 which walks one feature from analysis to review in a single session, and a
-**local MCP server** exposing the same intelligence as 27 tools to any MCP
+**local MCP server** exposing the same intelligence as 30 tools to any MCP
 client.
 
 ---
@@ -245,7 +245,7 @@ can skip it. The four phases are code, and code cannot skip its steps.
 
 ### MCP: everything outside the extension
 
-The MCP server exposes the same repo intelligence as 27 tools, for plain
+The MCP server exposes the same repo intelligence as 30 tools, for plain
 Copilot agent mode, Codex, Claude Code, or any other MCP client. This is the
 interoperability surface, and the path that still works where policy forbids
 installing extensions.
@@ -451,7 +451,7 @@ GitHub Copilot Chat artifacts:
 
 ```bash
 npm run build     # compile all TypeScript packages
-npm test          # run all 398 Vitest tests
+npm test          # run all 410 Vitest tests
 npm run lint      # ESLint
 npm run format    # Prettier check
 npm run format:write  # Prettier fix
@@ -478,7 +478,7 @@ copilot-architect/
 │   ├── grounding/        verifies the model's claims against the index
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 27 tools
+│   ├── mcp-server/      MCP server and 30 tools
 │   ├── cli/             CLI entry point
 │   ├── vscode-extension VS Code extension: the @architect chat participant
 │   └── web/             optional local web UI shell

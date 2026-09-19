@@ -31,6 +31,35 @@ function createCapture() {
   };
 }
 
+describe("ReviewService expectations", () => {
+  it("takes expected files directly, for a plan that is not a FeaturePlan", async () => {
+    // The session's PlanContract is not a FeaturePlan on disk, so a review
+    // driven from @architect had no expectations at all and reported every
+    // changed file as unexpected.
+    const repoRoot = await createRepo({ "README.md": "# repo\n" });
+    await initializeGitRepo(repoRoot);
+    await writeFile(
+      path.join(repoRoot, "src-planned.ts"),
+      "export const planned = 1;",
+      "utf8"
+    );
+    await writeFile(
+      path.join(repoRoot, "src-surprise.ts"),
+      "export const surprise = 1;",
+      "utf8"
+    );
+
+    const result = await new ReviewService().review({
+      startPath: repoRoot,
+      expectedFiles: ["src-planned.ts"]
+    });
+
+    expect(result.report.expectedFiles).toEqual(["src-planned.ts"]);
+    expect(result.report.unexpectedFiles).toContain("src-surprise.ts");
+    expect(result.report.unexpectedFiles).not.toContain("src-planned.ts");
+  });
+});
+
 describe("ReviewService", () => {
   it("generates review artifacts and flags unexpected files and missing tests", async () => {
     if (!(await gitAvailable())) {

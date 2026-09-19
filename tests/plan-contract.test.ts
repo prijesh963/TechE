@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  planValidationCommands,
   buildPlannedChange,
   createPlanContract,
   extractExcerpt,
@@ -303,3 +304,70 @@ async function createRepo(files: Record<string, string>): Promise<string> {
 
   return repoRoot;
 }
+
+describe("planValidationCommands", () => {
+  it("commits a plan to the tests and lint the repo already has", () => {
+    // PlanContract.validation existed from the start and was never populated,
+    // so every plan carried an empty list and the validator package was
+    // unreachable from the product's main path.
+    const commands = planValidationCommands({
+      repos: [
+        {
+          root: "/repo",
+          commands: {
+            test: [{ command: "npm test" }],
+            lint: [{ command: "npm run lint" }],
+            build: [{ command: "npm run build" }]
+          }
+        }
+      ]
+    });
+
+    expect(commands).toEqual([
+      { command: "npm test", cwd: "/repo" },
+      { command: "npm run lint", cwd: "/repo" }
+    ]);
+  });
+
+  it("leaves out build, which is slow enough that a plan committing to it gets skipped", () => {
+    const commands = planValidationCommands({
+      repos: [{ commands: { build: [{ command: "npm run build" }] } }]
+    });
+
+    expect(commands).toEqual([]);
+  });
+
+  it("does not repeat a command shared by two repos", () => {
+    const commands = planValidationCommands({
+      repos: [
+        { root: "/a", commands: { test: [{ command: "npm test" }] } },
+        { root: "/b", commands: { test: [{ command: "npm test" }] } }
+      ]
+    });
+
+    expect(commands).toHaveLength(1);
+  });
+
+  it("caps the list so a plan commits to checks, not a build pipeline", () => {
+    const commands = planValidationCommands({
+      repos: [
+        {
+          commands: {
+            test: Array.from({ length: 10 }, (_, i) => ({ command: `test-${i}` }))
+          }
+        }
+      ]
+    });
+
+    expect(commands).toHaveLength(4);
+  });
+
+  it("returns nothing rather than throwing on a missing or malformed repo map", () => {
+    expect(planValidationCommands(undefined)).toEqual([]);
+    expect(planValidationCommands({})).toEqual([]);
+    expect(planValidationCommands({ repos: "not an array" })).toEqual([]);
+    expect(planValidationCommands({ repos: [{ commands: { test: [{}] } }] })).toEqual(
+      []
+    );
+  });
+});

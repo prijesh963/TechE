@@ -22,9 +22,7 @@
     "onCommand:copilotArchitect.refreshDashboard",
     "onCommand:copilotArchitect.analyzeRepo",
     "onCommand:copilotArchitect.buildIndex",
-    "onCommand:copilotArchitect.generatePlan",
-    "onCommand:copilotArchitect.validate",
-    "onCommand:copilotArchitect.review",
+    "onCommand:copilotArchitect.buildGraph",
     "onCommand:copilotArchitect.startMcp",
     "onCommand:copilotArchitect.generateInstructions",
     "onCommand:copilotArchitect.openRepoInNewWindow",
@@ -36,6 +34,7 @@
     "onCommand:copilotArchitect.moreActions",
     "onCommand:copilotArchitect.approvePlan",
     "onCommand:copilotArchitect.confirmDecision",
+    "onCommand:copilotArchitect.runValidation",
     "onCommand:copilotArchitect.showStagedDiff",
     "onCommand:copilotArchitect.applyChanges",
     "onCommand:copilotArchitect.endSession"
@@ -62,19 +61,8 @@
         "icon": "$(database)"
       },
       {
-        "command": "copilotArchitect.generatePlan",
-        "title": "Copilot Architect: Generate Plan",
-        "icon": "$(list-tree)"
-      },
-      {
-        "command": "copilotArchitect.validate",
-        "title": "Copilot Architect: Validate",
-        "icon": "$(pass)"
-      },
-      {
-        "command": "copilotArchitect.review",
-        "title": "Copilot Architect: Review",
-        "icon": "$(comment-discussion)"
+        "command": "copilotArchitect.buildGraph",
+        "title": "Copilot Architect: Build Symbol Graph"
       },
       {
         "command": "copilotArchitect.startMcp",
@@ -128,6 +116,10 @@
       {
         "command": "copilotArchitect.confirmDecision",
         "title": "Copilot Architect: Confirm Decision"
+      },
+      {
+        "command": "copilotArchitect.runValidation",
+        "title": "Copilot Architect: Run Plan Validation"
       },
       {
         "command": "copilotArchitect.showStagedDiff",
@@ -212,6 +204,8 @@
     "@copilot-architect/grounding": "0.1.0",
     "@copilot-architect/indexer": "0.1.0",
     "@copilot-architect/planner": "0.1.0",
-    "@copilot-architect/session": "0.1.0"
+    "@copilot-architect/reviewer": "0.1.0",
+    "@copilot-architect/session": "0.1.0",
+    "@copilot-architect/validator": "0.1.0"
   }
 }

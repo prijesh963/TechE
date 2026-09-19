@@ -351,3 +351,52 @@ export function plannedPaths(plan: PlanContract): string[] {
 function hashContent(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
+
+/**
+ * The checks a plan commits to running, chosen from what the repo already has.
+ *
+ * `PlanContract.validation` existed from the start and was never populated,
+ * so every plan carried an empty list and the validator package — a whole
+ * safe-execution engine with allowlists, timeouts and blocked patterns — was
+ * unreachable from the product's main path.
+ *
+ * Tests and lint only. Build and format are useful and slow, and a plan that
+ * commits to running everything is one a developer learns to skip.
+ */
+export function planValidationCommands(repoMap: unknown): PlanCommand[] {
+  const repos = (repoMap as { repos?: unknown[] } | undefined)?.repos;
+
+  if (!Array.isArray(repos)) {
+    return [];
+  }
+
+  const commands: PlanCommand[] = [];
+  const seen = new Set<string>();
+
+  for (const repo of repos) {
+    const detected = (
+      repo as {
+        root?: string;
+        commands?: { test?: unknown[]; lint?: unknown[] };
+      }
+    ).commands;
+
+    for (const entry of [...(detected?.test ?? []), ...(detected?.lint ?? [])]) {
+      const command = (entry as { command?: string }).command?.trim();
+      if (!command || seen.has(command)) continue;
+
+      seen.add(command);
+      const cwd = (repo as { root?: string }).root;
+      commands.push({ command, ...(cwd ? { cwd } : {}) });
+
+      if (commands.length === MAX_PLAN_VALIDATION_COMMANDS) {
+        return commands;
+      }
+    }
+  }
+
+  return commands;
+}
+
+/** Past this, the plan is committing to a build rather than a check. */
+const MAX_PLAN_VALIDATION_COMMANDS = 4;

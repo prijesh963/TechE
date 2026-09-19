@@ -10,15 +10,41 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../agents" },
-    { "path": "../core" },
-    { "path": "../graph" },
-    { "path": "../indexer" },
-    { "path": "../intent" },
-    { "path": "../measurement" },
-    { "path": "../planner" },
-    { "path": "../reviewer" },
-    { "path": "../shared" },
-    { "path": "../validator" }
+    {
+      "path": "../agents"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../graph"
+    },
+    {
+      "path": "../grounding"
+    },
+    {
+      "path": "../indexer"
+    },
+    {
+      "path": "../intent"
+    },
+    {
+      "path": "../measurement"
+    },
+    {
+      "path": "../planner"
+    },
+    {
+      "path": "../reviewer"
+    },
+    {
+      "path": "../session"
+    },
+    {
+      "path": "../shared"
+    },
+    {
+      "path": "../validator"
+    }
   ]
 }

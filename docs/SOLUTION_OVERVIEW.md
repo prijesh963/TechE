@@ -202,7 +202,7 @@ real tokenizer will differ, and these are this repo's numbers, not yours.
 | `search_repo` response, before payload shaping  | ≈ 36,950 tokens            |
 | `search_repo` response, after shaping (Phase 0) | ≈ 6,440 tokens             |
 | **Reduction from shaping alone**                | **82.6%**                  |
-| 27 MCP tool definitions, resent every turn      | ≈ 2,940 tokens/turn        |
+| 30 MCP tool definitions, resent every turn      | ≈ 3,190 tokens/turn        |
 
 The shaping figure is the clearest single win: symbol lists and text previews
 were 96% of a search response, and capping them cost nothing a model could use.
@@ -301,5 +301,5 @@ per session matches how developers actually work; whether the plan format
 survives contact with a large legacy repo; and whether the measured savings
 hold on a codebase that is not this one.
 
-The open items are in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — 39 of
+The open items are in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — 41 of
 them, recorded as they were traded rather than discovered later.

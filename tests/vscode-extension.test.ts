@@ -130,8 +130,7 @@ describe("VS Code extension shell", () => {
 
     const api = activate(context, fake.vscode, { runner, mcpStarter });
     await fake.commands.get("copilotArchitect.analyzeRepo")?.();
-    fake.input = "Add invoice approval workflow";
-    await fake.commands.get("copilotArchitect.generatePlan")?.();
+    await fake.commands.get("copilotArchitect.buildGraph")?.();
     await fake.commands.get("copilotArchitect.startMcp")?.();
 
     expect(fake.viewProviderId).toBe(DASHBOARD_VIEW_ID);
@@ -140,7 +139,7 @@ describe("VS Code extension shell", () => {
     );
     expect(cliRequests.map((request) => request.args)).toEqual([
       ["analyze", "--path", "/workspace/repo"],
-      ["plan", "Add invoice approval workflow", "--path", "/workspace/repo"]
+      ["graph", "--path", "/workspace/repo"]
     ]);
     // Use path.resolve so the expected value matches platform-specific separator/drive letter
     expect(cliRequests[0]?.cwd).toBe(
@@ -430,7 +429,7 @@ describe("VS Code extension shell", () => {
 
   it("routes the More actions quick pick to the chosen command", async () => {
     const fake = createFakeVscode();
-    fake.quickPickChoice = "Generate Plan";
+    fake.quickPickChoice = "Build Symbol Graph";
     const context: ExtensionContextLike = {
       subscriptions: [],
       extensionPath: "/workspace/ext-root/packages/vscode-extension"
@@ -444,7 +443,7 @@ describe("VS Code extension shell", () => {
     );
     expect(
       fake.executeCommandCalls.some(
-        (call) => call.command === "copilotArchitect.generatePlan"
+        (call) => call.command === "copilotArchitect.buildGraph"
       )
     ).toBe(true);
 
@@ -1202,6 +1201,33 @@ describe("applying staged changes", () => {
     // Untouched: nothing was staged, so nothing was written.
     await expect(readFile(path.join(workspaceRoot, "app.ts"), "utf8")).resolves.toBe(
       "export const a = 1;"
+    );
+  });
+
+  it("refuses to write over a file edited since the preview", async () => {
+    // The defect: generation checked freshness, then Phase 16 split
+    // generation from writing and nothing re-checked. The staged content is
+    // a complete replacement built from the version the developer had before
+    // they touched it, so applying it destroys whatever they did.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-stale-write-"));
+    await writeFile(path.join(workspaceRoot, "app.ts"), "export const a = 1;", "utf8");
+
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    // The developer's own edit, after the preview was built.
+    await writeFile(path.join(workspaceRoot, "app.ts"), "export const a = 99;", "utf8");
+    await fake.commands.get("copilotArchitect.applyChanges")?.(1);
+
+    await expect(readFile(path.join(workspaceRoot, "app.ts"), "utf8")).resolves.toBe(
+      "export const a = 99;"
     );
   });
 

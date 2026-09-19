@@ -24,6 +24,15 @@ export interface ReviewServiceOptions {
   startPath?: string;
   plan?: string;
   validation?: string;
+  /**
+   * Repo-relative paths the change was expected to touch, supplied directly.
+   *
+   * Without this, expectations can only be read from a `FeaturePlan` on disk,
+   * which the session's `PlanContract` is not — so a review driven from
+   * `@architect` had no expectations at all and reported every changed file
+   * as unexpected. Given here, the review works from either plan format.
+   */
+  expectedFiles?: string[];
 }
 
 export interface ResolveReviewFindingOptions {
@@ -101,7 +110,8 @@ export class ReviewService {
     const changedFiles = await getChangedFiles(repoRoot);
     const diffSummary = await getDiffSummary(repoRoot);
     const diffText = await getDiffText(repoRoot);
-    const expectedFiles = getExpectedFiles(loadedPlan.plan, repoRoot);
+    const expectedFiles =
+      options.expectedFiles ?? getExpectedFiles(loadedPlan.plan, repoRoot);
     const unexpectedFiles = inferUnexpectedFiles(changedFiles, expectedFiles);
     const missingTests = inferMissingTests(changedFiles);
     const configChanges = changedFiles.filter(isConfigFile);

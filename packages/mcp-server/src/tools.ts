@@ -11,9 +11,12 @@ import { QueryIntentService } from "@copilot-architect/intent";
 import { ContextMeasurementService } from "@copilot-architect/measurement";
 import {
   FeaturePlanningService,
-  WorkspacePlanningService
+  WorkspacePlanningService,
+  readApprovedPlan
 } from "@copilot-architect/planner";
+import { GroundingService } from "@copilot-architect/grounding";
 import { ReviewService } from "@copilot-architect/reviewer";
+import { SessionService } from "@copilot-architect/session";
 import {
   CURRENT_SCHEMA_VERSION,
   type DetectedCommand,
@@ -411,6 +414,77 @@ export function createCopilotArchitectTools(
       true,
       async (args) =>
         readOptionalArtifact(resolveStartPath(args, options), "plans/latest-plan.json")
+    ),
+    /**
+     * The session model, for clients that are not the extension.
+     *
+     * Everything the redesign built — sessions, decisions, plan contracts,
+     * grounding — was reachable only from `@architect`. Where policy forbids
+     * installing an extension, MCP is the whole product, and it was still
+     * serving the pre-redesign surface.
+     */
+    tool(
+      "get_session",
+      "Read the active Copilot Architect session: feature, phase, confirmed decisions, and plan versions. Returns null when no session is open.",
+      commonSchema,
+      true,
+      async (args) => {
+        const workspaceRoot = resolveStartPath(args, options);
+        // peek, not current: reading a session must not park it. A caller
+        // asking what the session is has not asked to end it.
+        const peeked = await new SessionService().peek({ workspaceRoot });
+
+        if (!peeked) {
+          return { session: null, reason: "no active session in this workspace" };
+        }
+
+        const { session, staleBranch } = peeked;
+        return {
+          session: {
+            title: session.title,
+            phase: session.phase,
+            status: session.status,
+            decisions: new SessionService().activeDecisions(session),
+            plans: session.plans.map((plan) => ({
+              version: plan.version,
+              status: plan.status,
+              approvedAt: plan.approvedAt,
+              implementedAt: plan.implementedAt
+            }))
+          },
+          staleBranch
+        };
+      }
+    ),
+    tool(
+      "get_approved_plan_contract",
+      "Read the latest approved plan contract: the files it changes, why, each file's content at plan time, and the decisions it was approved under.",
+      commonSchema,
+      true,
+      async (args) => {
+        const workspaceRoot = resolveStartPath(args, options);
+        const plan = await readApprovedPlan(workspaceRoot);
+
+        return plan
+          ? { plan }
+          : {
+              plan: null,
+              // Distinct from an empty plan: no plan has been approved, which
+              // means nothing authorizes writing code.
+              reason: "no plan has been approved in this workspace"
+            };
+      }
+    ),
+    tool(
+      "verify_claims",
+      "Check an answer's claims about this repository against the index. Backticked paths, file:line citations and qualified symbols are verified; prose is not, and the report says so.",
+      { ...commonSchema, text: z.string() },
+      true,
+      async (args) => {
+        const startPath = resolveStartPath(args, options);
+        const text = String((args as { text?: unknown }).text ?? "");
+        return new GroundingService().verify(text, { startPath });
+      }
     ),
     tool(
       "get_latest_validation",

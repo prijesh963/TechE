@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { SessionService } from "../packages/session/src/index.js";
+
 import {
   CopilotChatMcpConfigService,
   createCopilotArchitectMcpServer,
@@ -422,6 +424,89 @@ describe("Copilot Architect MCP server", () => {
     for (const command of testCommands.data as Array<{ cwd?: string }>) {
       expect(command.cwd).toBeDefined();
     }
+  });
+});
+
+describe("the session model over MCP", () => {
+  it("reports no session rather than an empty one", async () => {
+    // "No session" and "a session with nothing in it" are different states,
+    // and a client that cannot tell them apart will report the wrong thing.
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "get_session", {});
+    const data = result.data as { session: unknown; reason?: string };
+
+    expect(data.session).toBeNull();
+    expect(data.reason).toContain("no active session");
+  });
+
+  it("returns the feature, phase, decisions and plan versions", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot: repoRoot, title: "Add invoice approval" });
+    await sessions.recordDecision(
+      { workspaceRoot: repoRoot },
+      { kind: "scope", statement: "Billing service only" }
+    );
+
+    const { client } = await createConnectedServer(repoRoot);
+    const result = await callJsonTool(client, "get_session", {});
+    const data = result.data as {
+      session: { title: string; phase: string; decisions: { statement: string }[] };
+    };
+
+    expect(data.session.title).toBe("Add invoice approval");
+    expect(data.session.phase).toBe("analyze");
+    expect(data.session.decisions[0].statement).toBe("Billing service only");
+  });
+
+  it("does not park a session just because it was read", async () => {
+    // peek, not current. A caller asking what the session is has not asked
+    // to end it.
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot: repoRoot, title: "Add invoice approval" });
+
+    const { client } = await createConnectedServer(repoRoot);
+    await callJsonTool(client, "get_session", {});
+    await callJsonTool(client, "get_session", {});
+
+    expect(await sessions.current({ workspaceRoot: repoRoot })).toBeDefined();
+  });
+
+  it("says no plan is approved rather than returning an empty one", async () => {
+    // An empty plan would read as "approved, changes nothing". Nothing
+    // approved means nothing authorizes writing code.
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "get_approved_plan_contract", {});
+    const data = result.data as { plan: unknown; reason?: string };
+
+    expect(data.plan).toBeNull();
+    expect(data.reason).toContain("no plan has been approved");
+  });
+
+  it("verifies claims against the index for a client that is not the extension", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+    await callJsonTool(client, "list_repo_files", {});
+
+    const result = await callJsonTool(client, "verify_claims", {
+      text: "The logic is in `src/OrderService.ts`, with a helper in `src/Ghost.ts`."
+    });
+    const data = result.data as {
+      verified: { claim: { text: string } }[];
+      unverified: { claim: { text: string } }[];
+    };
+
+    expect(data.verified.map((entry) => entry.claim.text)).toEqual([
+      "src/OrderService.ts"
+    ]);
+    expect(data.unverified.map((entry) => entry.claim.text)).toEqual(["src/Ghost.ts"]);
   });
 });
 
