@@ -1,6 +1,8 @@
 # VS Code Extension
 
-The `@copilot-architect/vscode-extension` package is a thin VS Code shell around the Copilot Architect CLI. It contributes a sidebar dashboard, Command Palette commands, and a GitHub Copilot Chat participant (`@architect`). All behavior delegates to `npm run cli -- ...`; no business logic lives in the extension itself.
+The `@copilot-architect/vscode-extension` package is a thin VS Code shell. It contributes a sidebar dashboard, Command Palette commands, and a GitHub Copilot Chat participant (`@architect`).
+
+Repo retrieval calls `IndexingService` directly — the same engine the MCP tools and CLI use — so every surface answers the same question the same way. Command workflows still delegate to `npm run cli -- ...`. No business logic lives in the extension itself.
 
 ---
 

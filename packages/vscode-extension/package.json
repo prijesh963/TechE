@@ -168,7 +168,7 @@
           },
           {
             "name": "plan",
-            "description": "Generate a feature implementation plan — follow with your feature description"
+            "description": "Generate a feature implementation plan \u2014 follow with your feature description"
           },
           {
             "name": "validate",
@@ -180,7 +180,7 @@
           },
           {
             "name": "search",
-            "description": "Search the repo index — follow with your search query"
+            "description": "Search the repo index \u2014 follow with your search query"
           },
           {
             "name": "diagnostics",
@@ -207,5 +207,8 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "dependencies": {
+    "@copilot-architect/indexer": "0.1.0"
   }
 }

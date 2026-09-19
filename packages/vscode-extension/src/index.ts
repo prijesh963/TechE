@@ -3,6 +3,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import { IndexingService, tokenize } from "@copilot-architect/indexer";
+
 export const EXTENSION_ID = "copilotArchitect";
 export const VIEW_CONTAINER_ID = "copilotArchitect";
 export const DASHBOARD_VIEW_ID = "copilotArchitect.dashboard";
@@ -300,15 +302,6 @@ export interface VscodeApiLike {
       vendor?: string;
       family?: string;
     }): Promise<LanguageModelLike[]>;
-    /**
-     * Available in VS Code 1.94+ with GitHub Copilot.
-     * Returns a float embedding vector for each input string.
-     */
-    computeEmbeddings?(
-      embeddingsModel: string,
-      input: string[],
-      token?: unknown
-    ): Promise<{ values: Array<{ values: number[] | Float32Array }> }>;
   };
   LanguageModelChatMessage?: {
     User(content: string): LanguageModelChatMessageLike;
@@ -1081,7 +1074,7 @@ export function activate(
         stream.progress?.("Searching your codebase…");
         const userPrompt = request.prompt.trim();
         const userTerms = [...new Set(tokenize(userPrompt))];
-        const repoResult = await buildRepoContext(workspaceRoot, userPrompt, vscode);
+        const repoResult = await buildRepoContext(workspaceRoot, userPrompt);
         let fileCtx = await readFilesForLmContext(
           workspaceRoot,
           repoResult.fileAnchors,
@@ -1159,7 +1152,7 @@ export function activate(
 
         const repoResult =
           cliCommand === "plan"
-            ? await buildRepoContext(workspaceRoot, userPrompt, vscode)
+            ? await buildRepoContext(workspaceRoot, userPrompt)
             : { contextText: "", fileAnchors: [] as FileAnchor[] };
         const repoCtx = repoResult.contextText;
 
@@ -2021,41 +2014,6 @@ function extractFilesFromPlan(markdown: string): string[] {
     .filter(Boolean);
 }
 
-/**
- * Tokenize text into lowercase terms — splits on non-alphanumeric boundaries
- * AND camelCase/acronym/digit boundaries so "UserService" → ["user", "service"]
- * and "R2D2Service" → ["r2d2", "service"].
- * Must stay identical to the BM25 indexer's tokenizer: a query tokenized one
- * way cannot match a corpus tokenized another.
- */
-function tokenize(text: string): string[] {
-  const tokens: string[] = [];
-  for (const chunk of text.split(/[^a-zA-Z0-9]+/)) {
-    if (!chunk) continue;
-    for (const sub of chunk.split(
-      /(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[0-9])(?=[A-Z][a-z])/
-    )) {
-      const lower = sub.toLowerCase();
-      if (lower.length >= 2) tokens.push(lower);
-    }
-  }
-  return tokens;
-}
-
-/** Cosine similarity between two numeric vectors. Returns 0 for zero-norm inputs. */
-function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
-  let dot = 0,
-    normA = 0,
-    normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom > 0 ? dot / denom : 0;
-}
-
 /** A file with an optional 1-based anchor line (best-matching symbol location). */
 interface FileAnchor {
   relativePath: string;
@@ -2226,23 +2184,6 @@ function formatChatHistory(history: ChatHistoryTurnLike[] | undefined): string {
   return lines.length > 1 ? lines.join("\n") : "";
 }
 
-interface IndexSymbol {
-  name: string;
-  kind: string;
-  startLine?: number;
-  endLine?: number;
-}
-
-interface IndexDoc {
-  relativePath: string;
-  symbols: IndexSymbol[];
-  textPreview?: string;
-  extension: string;
-  fileSizeBytes: number;
-  isConfigFile: boolean;
-  isDocFile: boolean;
-}
-
 interface RepoMapEntry {
   name?: string;
   displayName?: string;
@@ -2250,49 +2191,6 @@ interface RepoMapEntry {
   frameworks?: Array<{ name: string }>;
   entryPoints?: Array<{ filePath: string }>;
   commands?: { test?: Array<{ command: string }> };
-}
-
-/**
- * Indexed documents for every repo registered in the workspace, with each
- * `relativePath` rewritten relative to the WORKSPACE root.
- *
- * That rewrite is what lets the rest of the pipeline stay unchanged:
- * readFilesForLmContext resolves anchors with `path.join(workspaceRoot, rel)`,
- * and a path relative to a sub-repo would silently fail to open. It also makes
- * paths unambiguous for the model — `svc-orders/src/Main.java` rather than a
- * bare `src/Main.java` that two repos could both claim.
- */
-export async function loadWorkspaceIndexDocuments(
-  workspaceRoot: string
-): Promise<IndexDoc[]> {
-  const registered = await getRegisteredRepoRoots(workspaceRoot);
-  // No registration means a plain single repo — read its own index, as before.
-  const repoRoots = registered.length > 0 ? registered : [workspaceRoot];
-  const merged: IndexDoc[] = [];
-  const seen = new Set<string>();
-
-  for (const repoRoot of repoRoots) {
-    let docs: IndexDoc[];
-    try {
-      const raw = await readFile(
-        path.join(repoRoot, ".copilot-architect", "index", "index.json"),
-        "utf8"
-      );
-      docs = (JSON.parse(raw).documents as IndexDoc[]) ?? [];
-    } catch {
-      // One repo missing an index must not blank the whole context.
-      continue;
-    }
-
-    for (const doc of docs) {
-      const absolute = path.join(repoRoot, doc.relativePath);
-      if (seen.has(absolute)) continue;
-      seen.add(absolute);
-      merged.push({ ...doc, relativePath: path.relative(workspaceRoot, absolute) });
-    }
-  }
-
-  return merged;
 }
 
 /**
@@ -2380,149 +2278,6 @@ interface RepoContextResult {
 }
 
 // ─── Claude-inspired retrieval mechanisms ────────────────────────────────────
-
-/**
- * HyDE — Hypothetical Document Embedding.
- *
- * Instead of embedding the user's natural-language question (which lives far
- * from code in embedding space), we ask the LM to write a short hypothetical
- * code snippet that *would* implement what the user is asking for, then search
- * for the real code that looks most like that snippet.
- *
- * "how is access controlled?" → LM generates a plausible middleware/guard
- * snippet → we tokenize THAT and score against the index → recall for
- * AuthMiddleware / checkPermission / RoleGuard dramatically improves.
- *
- * Returns an empty string on any failure so callers can fall back gracefully.
- */
-async function generateHypotheticalSnippet(
-  vscodeApi: VscodeApiLike,
-  userQuery: string,
-  token: unknown
-): Promise<string> {
-  if (!vscodeApi.lm) return "";
-  try {
-    let models: LanguageModelLike[] = [];
-    for (const selector of [
-      { vendor: "copilot", family: "gpt-4o" },
-      { vendor: "copilot" },
-      {}
-    ]) {
-      models = await vscodeApi.lm.selectChatModels(selector);
-      if (models.length) break;
-    }
-    if (!models.length) return "";
-
-    const hydePrompt =
-      `You are a code search assistant. The developer asked: "${userQuery}"\n` +
-      "Write a SHORT (10-20 line) hypothetical code snippet — a function, class, or middleware — " +
-      "that would implement what they are looking for. Use realistic variable and function names. " +
-      "Output ONLY the code, no explanation, no markdown fences.";
-
-    const msg = vscodeApi.LanguageModelChatMessage?.User(hydePrompt);
-    if (!msg) return "";
-    const response = await models[0].sendRequest([msg], {}, token);
-    const parts: string[] = [];
-    for await (const chunk of response.text) parts.push(chunk);
-    return parts.join("").slice(0, 800);
-  } catch {
-    return "";
-  }
-}
-
-/**
- * Multi-query expansion.
- *
- * A single query misses synonyms and paraphrases: "add user" doesn't match
- * createAccount, registerMember, or POST /signup. We ask the LM to produce
- * four reformulations then merge all results with Reciprocal Rank Fusion (RRF)
- * so every variant contributes — whichever query finds the right file first
- * "wins" the ranking.
- *
- * Returns the original query list on any failure.
- */
-async function expandQuery(
-  vscodeApi: VscodeApiLike,
-  userQuery: string,
-  token: unknown
-): Promise<string[]> {
-  if (!vscodeApi.lm) return [userQuery];
-  try {
-    let models: LanguageModelLike[] = [];
-    for (const selector of [
-      { vendor: "copilot", family: "gpt-4o" },
-      { vendor: "copilot" },
-      {}
-    ]) {
-      models = await vscodeApi.lm.selectChatModels(selector);
-      if (models.length) break;
-    }
-    if (!models.length) return [userQuery];
-
-    const expandPrompt =
-      `Rephrase this code search query in 4 different ways that a developer might express the same intent. ` +
-      `Use technical synonyms, alternate function/class names, and API terms. ` +
-      `Output ONLY the 4 queries, one per line, no numbering, no extra text.\n\nQuery: ${userQuery}`;
-
-    const msg = vscodeApi.LanguageModelChatMessage?.User(expandPrompt);
-    if (!msg) return [userQuery];
-    const response = await models[0].sendRequest([msg], {}, token);
-    const parts: string[] = [];
-    for await (const chunk of response.text) parts.push(chunk);
-    const expanded = parts
-      .join("")
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 3)
-      .slice(0, 4);
-    return [userQuery, ...expanded];
-  } catch {
-    return [userQuery];
-  }
-}
-
-/**
- * Score a set of documents against multiple query variants and merge with
- * Reciprocal Rank Fusion (RRF, k=60). Each variant produces its own ranked
- * list; a document that ranks highly in *any* variant gets a strong combined
- * score — so synonyms and paraphrases all contribute.
- */
-function multiQueryRrfScore(
-  docs: Array<{
-    relativePath: string;
-    symbols: Array<{ name: string; startLine?: number }>;
-    textPreview?: string;
-  }>,
-  queryVariants: string[]
-): Map<string, number> {
-  const K = 60;
-  const totals = new Map<string, number>();
-
-  for (const variant of queryVariants) {
-    const terms = [...new Set(tokenize(variant))];
-    const ranked = docs
-      .map((d) => {
-        const pathTokens = new Set(tokenize(d.relativePath));
-        const symTokenSet = new Set(d.symbols.flatMap((s) => tokenize(s.name)));
-        const preview = (d.textPreview ?? "").toLowerCase();
-        let score = 0;
-        for (const t of terms) {
-          if (pathTokens.has(t)) score += 3;
-          if (symTokenSet.has(t)) score += 5;
-          if (preview.includes(t)) score += 1;
-        }
-        return { path: d.relativePath, score };
-      })
-      .sort((a, b) => b.score - a.score);
-
-    for (let rank = 0; rank < ranked.length; rank++) {
-      const rrf = 1 / (K + rank + 1);
-      totals.set(ranked[rank].path, (totals.get(ranked[rank].path) ?? 0) + rrf);
-    }
-  }
-
-  return totals;
-}
 
 /**
  * Agentic tool-use loop.
@@ -2650,7 +2405,6 @@ async function runAgenticPlanLoop(
 
       // Collect streamed text and tool calls
       const textParts: string[] = [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const toolCalls: Array<{ name: string; input: Record<string, unknown> }> = [];
 
       for await (const chunk of response.text) {
@@ -2731,10 +2485,18 @@ async function runAgenticPlanLoop(
   return false;
 }
 
-async function buildRepoContext(
+/**
+ * Repo facts plus the files most relevant to a request.
+ *
+ * Retrieval is delegated to `IndexingService`, the same path the MCP tools and
+ * CLI use. It used to be re-implemented here — its own tokenizer, its own RRF,
+ * query expansion and embedding reranking — which meant `@architect` and the
+ * agents could give different answers to the same question and neither was
+ * wrong. One engine is the fix; the shell asks, it does not rank.
+ */
+export async function buildRepoContext(
   workspaceRoot: string,
-  request?: string,
-  vscodeApi?: VscodeApiLike
+  request?: string
 ): Promise<RepoContextResult> {
   const lines: string[] = [];
   let fileAnchors: FileAnchor[] = [];
@@ -2762,194 +2524,50 @@ async function buildRepoContext(
     /* no repo-map yet */
   }
 
-  try {
-    // Every registered repo, not just the workspace root. A workspace root
-    // holds registration rather than code, so reading only its own index is
-    // what produced "the context is empty" on a perfectly well-indexed
-    // multi-repo workspace.
-    const docs = await loadWorkspaceIndexDocuments(workspaceRoot);
-    if (docs.length === 0) {
-      throw new Error("no indexed documents");
+  if (!request?.trim()) {
+    return { contextText: lines.join("\n"), fileAnchors };
+  }
+
+  const response = await new IndexingService()
+    .search({ startPath: workspaceRoot, query: request, limit: 25 })
+    // A failed search must not take the repo facts down with it.
+    .catch(() => undefined);
+  const results = response?.results ?? [];
+
+  // Paths relative to the WORKSPACE root, since that is what
+  // readFilesForLmContext resolves against. Derived from the absolute path so a
+  // repo registered outside the workspace (`../billing-service`) still opens.
+  const relativeToWorkspace = (filePath: string): string =>
+    path.relative(workspaceRoot, filePath);
+
+  fileAnchors = results.slice(0, 8).map((result) => ({
+    relativePath: relativeToWorkspace(result.filePath),
+    anchorLine: result.anchor?.line
+  }));
+
+  if (results.length > 0) {
+    lines.push("\nSource files:");
+    for (const result of results) {
+      const symbols = result.symbols
+        .slice(0, 6)
+        .map((symbol) => symbol.name)
+        .join(", ");
+      const hint = result.anchor?.line ? `:${result.anchor.line}` : "";
+      lines.push(
+        `- ${relativeToWorkspace(result.filePath)}${hint}${symbols ? ` [${symbols}]` : ""}`
+      );
     }
 
-    const SOURCE_EXTS = new Set([
-      ".py",
-      ".ts",
-      ".js",
-      ".tsx",
-      ".jsx",
-      ".java",
-      ".go",
-      ".rb",
-      ".cs"
-    ]);
-    const sourceDocs = docs.filter(
-      (d) =>
-        !d.isConfigFile &&
-        !d.isDocFile &&
-        d.fileSizeBytes > 0 &&
-        SOURCE_EXTS.has(d.extension)
-    );
-
-    // --- Symbol registry: token → {file, anchorLine} ----------------------------
-    // Built from every symbol in the index. Gives us "go-to-definition" resolution
-    // without a language server: when a query term matches a symbol name token, we
-    // know exactly which file and line to read.
-    const symbolRegistry = new Map<
-      string,
-      { relativePath: string; anchorLine?: number }[]
-    >();
-    for (const doc of docs) {
-      for (const sym of doc.symbols) {
-        for (const tok of tokenize(sym.name)) {
-          const entries = symbolRegistry.get(tok) ?? [];
-          entries.push({ relativePath: doc.relativePath, anchorLine: sym.startLine });
-          symbolRegistry.set(tok, entries);
-        }
-      }
+    lines.push("\nExisting code (index previews):");
+    let totalChars = 0;
+    for (const result of results.slice(0, 5)) {
+      if (totalChars >= 6_000) break;
+      const preview = result.textPreview.slice(0, 2_000);
+      if (!preview) continue;
+      lines.push(`\n--- ${relativeToWorkspace(result.filePath)} ---`);
+      lines.push(preview);
+      totalChars += preview.length;
     }
-
-    // --- Multi-query + HyDE scoring ----------------------------------------------
-    // queryVariants: [original] + LM-generated paraphrases (async, best-effort)
-    // hydeSnippet: hypothetical code snippet matching the query (HyDE mechanism)
-    // Both run in parallel; failures fall back to the single original query.
-    const [queryVariants, hydeSnippet] = await Promise.all([
-      request && vscodeApi
-        ? expandQuery(vscodeApi, request, undefined)
-        : Promise.resolve(request ? [request] : []),
-      request && vscodeApi
-        ? generateHypotheticalSnippet(vscodeApi, request, undefined)
-        : Promise.resolve("")
-    ]);
-
-    // RRF over all query variants gives every synonym/paraphrase a voice.
-    const rrfScores =
-      queryVariants.length > 0
-        ? multiQueryRrfScore(sourceDocs, queryVariants)
-        : new Map<string, number>();
-
-    // Extra terms from the HyDE snippet boost matching files.
-    const hydeTerms = hydeSnippet ? [...new Set(tokenize(hydeSnippet))] : [];
-
-    const requestTerms = request ? [...new Set(tokenize(request))] : [];
-    const allQueryTerms = [...new Set([...requestTerms, ...hydeTerms])];
-
-    type Scored = { doc: IndexDoc; score: number; anchorLine?: number };
-    let scored: Scored[] = sourceDocs.map((d) => {
-      const pathTokens = new Set(tokenize(d.relativePath));
-      const symTokens = new Map<string, number | undefined>(); // token → startLine
-      for (const s of d.symbols) {
-        for (const tok of tokenize(s.name)) {
-          if (!symTokens.has(tok)) symTokens.set(tok, s.startLine);
-        }
-      }
-      const previewLower = (d.textPreview ?? "").toLowerCase();
-
-      let score = (rrfScores.get(d.relativePath) ?? 0) * 20; // RRF contribution (scaled)
-      let bestAnchorLine: number | undefined;
-      for (const term of allQueryTerms) {
-        // Path match (worth 3 points — strong structural signal)
-        if (pathTokens.has(term)) score += 3;
-        // Symbol name match (worth 5 points — most precise signal)
-        if (symTokens.has(term)) {
-          score += 5;
-          bestAnchorLine ??= symTokens.get(term);
-        }
-        // Preview body match (worth 1 point — content signal)
-        if (previewLower.includes(term)) score += 1;
-      }
-      return { doc: d, score, anchorLine: bestAnchorLine };
-    });
-
-    // --- LM embedding reranking (VS Code 1.94+, GitHub Copilot) ------------------
-    // Try to rerank the top-30 keyword candidates by cosine similarity.
-    // Falls back silently to keyword scoring when embeddings are unavailable.
-    if (vscodeApi?.lm?.computeEmbeddings && request && requestTerms.length > 0) {
-      const EMBEDDING_MODELS = [
-        "github:text-embedding-3-small",
-        "github:text-embedding-ada-002",
-        "text-embedding-3-small",
-        "text-embedding-ada-002"
-      ];
-      const candidates = scored
-        .filter((s) => s.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 30);
-
-      if (candidates.length > 1) {
-        for (const model of EMBEDDING_MODELS) {
-          try {
-            const docTexts = candidates.map(
-              (c) =>
-                `${c.doc.relativePath} ${c.doc.symbols.map((s) => s.name).join(" ")} ${c.doc.textPreview?.slice(0, 300) ?? ""}`
-            );
-            const result = await vscodeApi.lm.computeEmbeddings(model, [
-              request,
-              ...docTexts
-            ]);
-            const queryEmb = result.values[0].values;
-            for (let i = 0; i < candidates.length; i++) {
-              const sim = cosineSimilarity(queryEmb, result.values[i + 1].values);
-              // Blend: 70% embedding similarity, 30% keyword score (normalised to [0,1])
-              const maxKw = Math.max(...candidates.map((c) => c.score), 1);
-              candidates[i].score = 0.7 * sim + 0.3 * (candidates[i].score / maxKw);
-            }
-            // Re-sort the candidates slice; leave the zero-score tail unchanged.
-            candidates.sort((a, b) => b.score - a.score);
-            // Splice reranked candidates back into `scored`.
-            const rerankedPaths = new Set(candidates.map((c) => c.doc.relativePath));
-            scored = [
-              ...candidates,
-              ...scored.filter((s) => !rerankedPaths.has(s.doc.relativePath))
-            ];
-            break; // Success — stop trying other model names.
-          } catch {
-            /* model not available, try next */
-          }
-        }
-      }
-    }
-
-    scored.sort(
-      (a, b) => b.score - a.score || b.doc.fileSizeBytes - a.doc.fileSizeBytes
-    );
-
-    // Top anchor files for disk reading.
-    fileAnchors = scored
-      .filter((s) => s.score > 0)
-      .slice(0, 8)
-      .map((s) => ({ relativePath: s.doc.relativePath, anchorLine: s.anchorLine }));
-
-    // File list — quick orientation table for the LM.
-    const topDocs = scored.slice(0, 25);
-    if (topDocs.length) {
-      lines.push("\nSource files:");
-      for (const { doc, anchorLine } of topDocs) {
-        const syms = doc.symbols
-          ?.slice(0, 6)
-          .map((s) => s.name)
-          .join(", ");
-        const hint = anchorLine ? `:${anchorLine}` : "";
-        lines.push(`- ${doc.relativePath}${hint}${syms ? ` [${syms}]` : ""}`);
-      }
-    }
-
-    // Index previews as a lightweight fallback for non-plan commands.
-    const previewDocs = scored.slice(0, 5);
-    if (previewDocs.length) {
-      lines.push("\nExisting code (index previews):");
-      let totalChars = 0;
-      for (const { doc } of previewDocs) {
-        if (totalChars >= 6_000) break;
-        const preview = doc.textPreview?.slice(0, 2_000);
-        if (!preview) continue;
-        lines.push(`\n--- ${doc.relativePath} ---`);
-        lines.push(preview);
-        totalChars += preview.length;
-      }
-    }
-  } catch {
-    /* no index yet */
   }
 
   return { contextText: lines.join("\n"), fileAnchors };

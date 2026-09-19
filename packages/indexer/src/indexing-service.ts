@@ -865,7 +865,13 @@ function createIndexedFile(input: {
 //               contain all query terms (e.g. a 3-word README beats a rich source file).
 // Results are fused via Reciprocal Rank Fusion (RRF).
 
-function tokenize(text: string): string[] {
+/**
+ * The one tokenizer. Exported because a second copy is not a duplication of
+ * code but a source of silent bugs: a query tokenized one way cannot match a
+ * corpus tokenized another, and the digit-boundary fix that made `R2D2` findable
+ * had to be applied twice before this was shared.
+ */
+export function tokenize(text: string): string[] {
   const tokens: string[] = [];
   for (const chunk of text.split(/[^a-zA-Z0-9]+/)) {
     if (!chunk) continue;

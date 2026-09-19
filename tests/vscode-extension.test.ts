@@ -14,7 +14,7 @@ import {
   createDashboardHtml,
   deactivate,
   diagnoseEmptyContext,
-  loadWorkspaceIndexDocuments,
+  buildRepoContext,
   shouldBuildWorkspaceGraph,
   formatAgentInsights,
   loadDashboardArtifacts,
@@ -682,27 +682,33 @@ describe("VS Code extension shell", () => {
     );
   });
 
-  it("reads the index of every registered repo, not just the workspace root", async () => {
+  it("sees every registered repo, not just the workspace root", async () => {
     // Regression: `@architect Analyze repo and explain more about R2D2` replied
     // "the provided context is empty — the only file shown is workspace.json".
-    // The Q&A path read workspaceRoot/.copilot-architect/index/index.json only,
-    // which on a multi-repo workspace indexes nothing but registration.
+    // The Q&A path read the workspace root's own index, which on a multi-repo
+    // workspace indexes nothing but registration. Retrieval now goes through
+    // IndexingService, but the guarantee this protects is unchanged.
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-ws-ctx-"));
     await writeWorkspace(workspaceRoot, ["svc-orders", "web-ui"]);
-    await writeRepoIndex(workspaceRoot, "svc-orders", [
-      "src/main/java/com/acme/R2D2Service.java"
-    ]);
-    await writeRepoIndex(workspaceRoot, "web-ui", ["src/app/r2d2.component.ts"]);
-
-    const docs = await loadWorkspaceIndexDocuments(workspaceRoot);
-
-    // Paths come back relative to the WORKSPACE root: readFilesForLmContext
-    // resolves them with path.join(workspaceRoot, rel), so a path relative to a
-    // sub-repo would silently fail to open.
-    expect(docs.map((doc) => doc.relativePath).sort()).toEqual([
+    await writeSource(
+      workspaceRoot,
       "svc-orders/src/main/java/com/acme/R2D2Service.java",
-      "web-ui/src/app/r2d2.component.ts"
-    ]);
+      "package com.acme;\npublic class R2D2Service { public void astromech() {} }"
+    );
+    await writeSource(
+      workspaceRoot,
+      "web-ui/src/app/r2d2.component.ts",
+      'export class R2d2Component { droid = "R2D2"; }'
+    );
+
+    const context = await buildRepoContext(workspaceRoot, "R2D2");
+
+    // Both repos reachable, and paths are relative to the WORKSPACE root —
+    // readFilesForLmContext resolves them with path.join(workspaceRoot, rel),
+    // so a path relative to a sub-repo would silently fail to open.
+    const anchored = context.fileAnchors.map((anchor) => anchor.relativePath);
+    expect(anchored).toContain("svc-orders/src/main/java/com/acme/R2D2Service.java");
+    expect(anchored).toContain("web-ui/src/app/r2d2.component.ts");
   });
 
   it("names why a context is empty instead of implying the repo is", async () => {
@@ -715,8 +721,8 @@ describe("VS Code extension shell", () => {
 
     // Once indexed, an empty result is a miss, not a missing setup step — the
     // two used to be indistinguishable to the user.
-    await writeRepoIndex(workspaceRoot, "svc-orders", ["src/Main.java"]);
-    await writeRepoIndex(workspaceRoot, "web-ui", ["src/app.ts"]);
+    await writeRepoIndex(workspaceRoot, "svc-orders");
+    await writeRepoIndex(workspaceRoot, "web-ui");
     const searched = await diagnoseEmptyContext(workspaceRoot);
     expect(searched).toContain("nothing matched");
     expect(searched).not.toContain("No searchable index");
@@ -884,26 +890,23 @@ async function writeWorkspace(workspaceRoot: string, repos: string[]): Promise<v
   );
 }
 
-async function writeRepoIndex(
-  workspaceRoot: string,
-  repo: string,
-  relativePaths: string[]
-): Promise<void> {
+/** diagnoseEmptyContext only checks whether an index file exists. */
+async function writeRepoIndex(workspaceRoot: string, repo: string): Promise<void> {
   const indexDir = path.join(workspaceRoot, repo, ".copilot-architect", "index");
   await mkdir(indexDir, { recursive: true });
   await writeFile(
     path.join(indexDir, "index.json"),
-    JSON.stringify({
-      documents: relativePaths.map((relativePath) => ({
-        relativePath,
-        symbols: [],
-        textPreview: "",
-        extension: path.extname(relativePath),
-        fileSizeBytes: 10,
-        isConfigFile: false,
-        isDocFile: false
-      }))
-    }),
+    JSON.stringify({ documents: [] }),
     "utf8"
   );
+}
+
+async function writeSource(
+  workspaceRoot: string,
+  relativePath: string,
+  contents: string
+): Promise<void> {
+  const fullPath = path.join(workspaceRoot, relativePath);
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, contents, "utf8");
 }
