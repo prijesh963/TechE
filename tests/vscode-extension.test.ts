@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { SessionService } from "../packages/session/src/index.js";
+import { renderRolePrompt } from "../packages/agents/src/index.js";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ import {
   DASHBOARD_PRIMARY_ACTIONS,
   DASHBOARD_VIEW_ID,
   activate,
+  buildCommandLmPrompt,
   createCliCommandLine,
   createDashboardHtml,
   STAGED_SCHEME,
@@ -1039,6 +1041,82 @@ async function writeWorkspace(workspaceRoot: string, repos: string[]): Promise<v
     "utf8"
   );
 }
+
+describe("the analyze prompt", () => {
+  it("sends the role, rather than computing it and dropping it", () => {
+    // The bug: the "question" branch — the one /analyze uses — never
+    // referenced the role it was handed. Phase 5 replaced the .agent.md files
+    // with roles invoked by code, on the argument that a role invoked by code
+    // cannot skip its steps. This branch skipped it for every answer.
+    const prompt = buildCommandLmPrompt(
+      "question",
+      "How does authentication work?",
+      renderRolePrompt("analyze"),
+      "Repository: 8 files"
+    );
+
+    expect(prompt).toContain("Cite `file:line`");
+    expect(prompt).toContain("Zero matches mean the query missed");
+    expect(prompt).toContain("Say what you did not see");
+  });
+
+  it("carries the question, the repo context and the file context", () => {
+    const prompt = buildCommandLmPrompt(
+      "question",
+      "How does authentication work?",
+      renderRolePrompt("analyze"),
+      "Repository: 8 files",
+      "src/Auth.java contents"
+    );
+
+    expect(prompt).toContain("How does authentication work?");
+    expect(prompt).toContain("Repository: 8 files");
+    expect(prompt).toContain("src/Auth.java contents");
+  });
+});
+
+describe("the analyze role", () => {
+  it("says the developer owns this code", () => {
+    // Without it, a request to audit one's own repository reads as a request
+    // to find weaknesses in someone else's, and gets declined.
+    const rendered = renderRolePrompt("analyze");
+
+    expect(rendered).toContain("developer owns this code");
+    expect(rendered).toContain("open in their editor");
+  });
+
+  it("treats reviewing for weaknesses as part of the job", () => {
+    // Reported: "/analyze identify the security gaps" returned "Sorry, I
+    // can't assist with that." Declining leaves the weakness in place.
+    const rendered = renderRolePrompt("analyze");
+
+    expect(rendered).toContain("part of the job, not outside it");
+    expect(rendered).toContain("security");
+  });
+
+  it("asks for the fix and not the exploit", () => {
+    const rendered = renderRolePrompt("analyze");
+
+    expect(rendered).toContain("Do not write an exploit");
+    expect(rendered).toContain("needs the fix, not the attack");
+  });
+
+  it("keeps the lesson that an empty search is not a clean repo", () => {
+    // Recovered from the SecurityReviewer role dropped in Phase 5: the
+    // costliest security answer is a confident "no issues found" produced by
+    // searching for the wrong words.
+    const rendered = renderRolePrompt("analyze");
+
+    expect(rendered).toContain("not the same as a clean repository");
+  });
+
+  it("locates a secret without quoting it", () => {
+    const rendered = renderRolePrompt("analyze");
+
+    expect(rendered).toContain("without quoting its value");
+    expect(rendered).toContain("rotated");
+  });
+});
 
 describe("proposed decisions", () => {
   it("reads well-formed proposals", () => {

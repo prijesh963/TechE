@@ -3434,7 +3434,7 @@ export async function buildRepoContext(
   return { contextText: lines.join("\n"), fileAnchors };
 }
 
-function buildCommandLmPrompt(
+export function buildCommandLmPrompt(
   command: string,
   userRequest: string,
   content: string,
@@ -3453,6 +3453,12 @@ function buildCommandLmPrompt(
     case "question":
       return [
         "You are Copilot Architect, an expert on the developer's specific codebase.",
+        // The role was computed and dropped here for every /analyze answer.
+        // Phase 5 replaced the .agent.md files with roles invoked by code, on
+        // the argument that a role invoked by code cannot skip its steps —
+        // and then this branch skipped it.
+        body,
+        "",
         "Answer the developer's question directly and concretely, using the actual code shown below.",
         "Rules:",
         "- Quote exact file paths, function names, class names, and patterns you can see.",

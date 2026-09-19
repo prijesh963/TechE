@@ -301,5 +301,5 @@ per session matches how developers actually work; whether the plan format
 survives contact with a large legacy repo; and whether the measured savings
 hold on a codebase that is not this one.
 
-The open items are in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — 43 of
+The open items are in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) — 44 of
 them, recorded as they were traded rather than discovered later.

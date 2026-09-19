@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–20 merged. The redesign is complete; what is below is
+**Status:** Phases 0–21 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -183,7 +183,19 @@ skipped.
 a developer can see why. But the list is a list, and the next unfamiliar
 build system is a support question rather than a detection.
 
-### 1.16 The CLI shell-outs are still subprocesses
+### 1.16 A refusal is indistinguishable from an answer
+
+**Phase 21.** When the model declines — as it did on "identify the security
+gaps", before the analyze role reached it — the refusal is streamed like any
+other answer, followed by the usual receipts and next-step line. Nothing
+notices that no question was answered.
+
+**Cost:** "Sorry, I can't assist with that. Looked at 371 files across 12
+repos." reads as though the tool worked and the repository had nothing to
+say. Detecting a refusal reliably is hard; detecting an answer that cites
+nothing at all is not, and would catch most of them.
+
+### 1.17 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —
@@ -418,6 +430,12 @@ a live failure to learn. They are recoverable from git history.
 **Shape of the fix:** they are natural **aspects of the review phase** rather
 than separate agents. `/review` could run security, performance and API-design
 checks as passes over the same diff.
+
+**Partly recovered in Phase 21:** the security role's most valuable line —
+that searching for the wrong words and finding nothing is not a clean
+repository — is now in the analyze role, along with the framing that
+reviewing your own code for weaknesses is ordinary work. The performance,
+API-design and dependency-audit knowledge is still only in git history.
 
 ### 6.5 Five docs describe the pre-redesign product
 
