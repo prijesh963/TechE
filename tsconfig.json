@@ -18,6 +18,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/adapters" },
     { "path": "./packages/indexer" },
+    { "path": "./packages/session" },
     { "path": "./packages/graph" },
     { "path": "./packages/intent" },
     { "path": "./packages/planner" },

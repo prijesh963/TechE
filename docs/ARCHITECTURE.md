@@ -34,6 +34,7 @@ Business logic lives in these packages:
 - `packages/core`
 - `packages/adapters`
 - `packages/indexer`
+- `packages/session`
 - `packages/planner`
 - `packages/validator`
 - `packages/reviewer`
@@ -108,6 +109,39 @@ The CLI `analyze` command calls this service. It does not duplicate discovery lo
 Indexed documents include relative path, extension, language guess, content hash, modified time, file size, text preview, extracted symbols, imports/includes, and test/config/doc flags. The indexer skips common dependency, build, cache, and IDE folders.
 
 The CLI `index` and `search` commands call `IndexingService`; they do not implement indexing logic directly.
+
+## Work Sessions
+
+`packages/session` owns the work session: one feature, from first question to
+finished review, stored under `.copilot-architect/sessions/<id>.json`.
+
+A session exists so that a planning conversation is reproducible. It records
+**decisions** — what the developer chose that the tool would not have chosen
+itself — rather than raw transcript, so a plan can be rebuilt from request plus
+repo facts plus decisions instead of from whatever the model happened to recall.
+Only deviations are recorded; defaults are the tool's suggestions, not the
+developer's decisions, and a confirmation list nobody reads is worse than none.
+
+Scope is the **workspace**, not the repo, because a feature can legitimately
+span several repos. One session is active at a time; opening another parks the
+previous one rather than discarding it. A session is bound to the branch it
+opened on, and `current()` parks it when the branch moves — a check every caller
+would otherwise have to remember.
+
+Plan versions live here too. A version is a `draft` until `approvePlan` is
+called, and `latestApprovedPlan` is what implementation applies, so a newer
+unapproved draft cannot be acted on. `markImplemented` refuses a version that
+was never approved.
+
+`checkConstraints` turns a confirmed constraint into something enforceable: "do
+not modify `InvoiceController`" becomes a rule with an answer rather than a
+sentence a model may overlook. Constraints carrying no machine-checkable
+enforcement are reported as **unenforceable** rather than counted as passing.
+
+`diffCheckpoint` compares the index's per-file content hashes against a
+checkpoint taken when implementation began, so review can separate this
+feature's changes from everything else in the tree — including in a workspace
+with no git repository.
 
 ## Feature Planning
 
@@ -253,6 +287,7 @@ All runtime artifacts are stored under `.copilot-architect/`:
   commands.json
   policy.json
   index/
+  sessions/
   plans/
   handoffs/
   runs/

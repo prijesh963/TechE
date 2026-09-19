@@ -17,6 +17,7 @@ export const ARTIFACT_FILE_NAMES = {
 
 export const ARTIFACT_DIRECTORY_NAMES = {
   index: "index",
+  sessions: "sessions",
   plans: "plans",
   handoffs: "handoffs",
   runs: "runs",
