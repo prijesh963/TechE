@@ -1045,6 +1045,51 @@ describe("proposed decisions", () => {
   });
 });
 
+describe("applying staged changes", () => {
+  it("writes nothing when the staging is gone", async () => {
+    // Staged in memory, so a window reload loses it. Writing content whose
+    // preview the developer can no longer see would defeat the preview.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-stale-stage-"));
+    await writeFile(path.join(workspaceRoot, "app.ts"), "export const a = 1;", "utf8");
+
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.applyChanges")?.(1);
+
+    // Untouched: nothing was staged, so nothing was written.
+    await expect(readFile(path.join(workspaceRoot, "app.ts"), "utf8")).resolves.toBe(
+      "export const a = 1;"
+    );
+  });
+
+  it("contributes the apply command so the preview button resolves", async () => {
+    // A button whose command is not contributed silently does nothing, which
+    // would leave the developer with a preview they cannot act on.
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(process.cwd(), "packages/vscode-extension/package.json"),
+        "utf8"
+      )
+    );
+    const ids = manifest.contributes.commands.map(
+      (c: { command: string }) => c.command
+    );
+
+    expect(ids).toContain("copilotArchitect.applyChanges");
+    expect(manifest.activationEvents).toContain(
+      "onCommand:copilotArchitect.applyChanges"
+    );
+  });
+});
+
 describe("confirming a proposed decision", () => {
   it("records it against the session", async () => {
     // The gap this closes: recordDecision existed and was tested, but no code

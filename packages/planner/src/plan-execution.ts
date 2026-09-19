@@ -133,6 +133,106 @@ export function compareAgainstPlan(
   };
 }
 
+export interface WritePreview {
+  relativePath: string;
+  kind: ChangeKind;
+  /** Lines the file will have after the write. Zero for a delete. */
+  afterLines: number;
+  /** Lines it had when the plan quoted it, where the plan knew. */
+  beforeLines?: number;
+  /**
+   * Set when the replacement looks like a truncated answer rather than an
+   * edit. Worded as a suspicion because it is one: a genuine large deletion
+   * looks identical from here, and the developer is the one who can tell.
+   */
+  suspectTruncation?: string;
+}
+
+/**
+ * Line counts for a set of pending writes, so a developer can see what an
+ * approved plan turned into before it reaches their working tree.
+ *
+ * Approving a plan authorizes the change it describes — a file list, reasons,
+ * an outline. What gets written is code nobody has seen. This does not add a
+ * second approval of the same decision; it makes the gap between the two
+ * visible at the moment it matters.
+ */
+export function previewWrites(
+  plan: PlanContract,
+  changes: ApplyChangeInput[]
+): WritePreview[] {
+  const beforeLines = new Map(
+    plan.changes
+      .filter((change) => change.before !== undefined)
+      .map((change) => [change.relativePath, change.before!.fileLines])
+  );
+
+  return changes.map((change) => {
+    const before = beforeLines.get(change.relativePath);
+    const afterLines =
+      change.kind === "delete" ? 0 : countLines(change.afterText ?? "");
+
+    return {
+      relativePath: change.relativePath,
+      kind: change.kind,
+      afterLines,
+      ...(before !== undefined ? { beforeLines: before } : {}),
+      ...(suspectTruncation(change, before, afterLines) ?? {})
+    };
+  });
+}
+
+/**
+ * Whether a replacement looks truncated.
+ *
+ * Whole-file regeneration's real danger is not a wrong edit — a reviewer
+ * catches those — it is an answer that stopped early and silently deleted the
+ * rest of the file. The thresholds are deliberately blunt: a small file that
+ * halves is ordinary, and flagging it would put a warning on routine work.
+ */
+function suspectTruncation(
+  change: ApplyChangeInput,
+  beforeLines: number | undefined,
+  afterLines: number
+): { suspectTruncation: string } | undefined {
+  if (change.kind !== "update" || beforeLines === undefined) {
+    return undefined;
+  }
+
+  if (beforeLines < MIN_LINES_TO_SUSPECT || afterLines >= beforeLines / 2) {
+    return undefined;
+  }
+
+  return {
+    suspectTruncation: `${afterLines} lines replacing ${beforeLines} — the answer may have stopped early rather than edited the file`
+  };
+}
+
+/** Below this, a file halving is ordinary rather than suspicious. */
+const MIN_LINES_TO_SUSPECT = 25;
+
+function countLines(text: string): number {
+  if (text.length === 0) return 0;
+  // A trailing newline ends the last line rather than starting a new one.
+  return text.replace(/\n$/, "").split("\n").length;
+}
+
+/** What the developer is shown before anything is written. */
+export function summarizeWrites(previews: WritePreview[]): string {
+  return previews
+    .map((preview) => {
+      const size =
+        preview.kind === "delete"
+          ? "removed"
+          : preview.beforeLines !== undefined
+            ? `${preview.beforeLines} → ${preview.afterLines} lines`
+            : `${preview.afterLines} lines`;
+      const flag = preview.suspectTruncation ? ` ⚠️ ${preview.suspectTruncation}` : "";
+      return `- **${preview.kind}** \`${preview.relativePath}\` — ${size}${flag}`;
+    })
+    .join("\n");
+}
+
 export interface OutlineCheck {
   relativePath: string;
   status: OutlineCheckStatus;

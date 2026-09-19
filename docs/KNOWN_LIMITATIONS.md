@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–15 merged. The redesign is complete; what is below is
+**Status:** Phases 0–16 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -95,16 +95,39 @@ renamed parameters, inferred types and whitespace; an equality test would
 report nearly every honest implementation as a broken contract, which is the
 failure mode these checks exist to avoid.
 
-### 1.8 `/implement` regenerates whole files, with no dry run
+### 1.8 The preview shows sizes, not the code itself
 
-**Phase 4b.** The model is asked for complete replacement contents from the
-before-snapshot. There is no preview before writing.
+**Phase 16.** `200 → 210 lines` tells a developer whether a replacement is the
+right shape. It does not show them the diff, which is what would tell them
+whether it is the right change.
 
-**Cost:** wasteful and risky on a large file — a patch-based approach would be
-safer, but needs the model to emit reliable diffs. Approval already gates the
-write, so a preview is a safety improvement rather than a missing gate.
+**Cost:** the truncation guard catches the failure whole-file regeneration
+actually produces, and nothing catches a confident wrong rewrite. Showing a
+real diff means either diffing in the extension or opening VS Code's diff
+editor against staged content — the latter is the right answer and is a
+piece of work of its own.
 
-### 1.9 The CLI shell-outs are still subprocesses
+### 1.9 Staged changes are lost on reload
+
+**Phase 16.** Staging lives in memory, keyed by workspace. A window reload
+loses it, and the apply button then says so and asks for `/implement` again.
+
+**Cost:** regenerating costs a model call. Staging to disk would mean writing
+before the write was agreed, and would leave stale content behind for every
+run that was never applied — so this is a deliberate trade rather than an
+oversight.
+
+### 1.10 Whole files are still regenerated
+
+**Phase 4b, unchanged by Phase 16.** The model is still asked for complete
+replacement contents. Phase 16 made the resulting failure visible rather than
+removing it.
+
+**Cost:** wasteful on a large file, and every untouched line is a line the
+model could paraphrase. A patch-based approach needs reliably applicable
+diffs, which is a larger piece of work than this one.
+
+### 1.11 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

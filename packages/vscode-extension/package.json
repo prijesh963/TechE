@@ -36,6 +36,7 @@
     "onCommand:copilotArchitect.moreActions",
     "onCommand:copilotArchitect.approvePlan",
     "onCommand:copilotArchitect.confirmDecision",
+    "onCommand:copilotArchitect.applyChanges",
     "onCommand:copilotArchitect.endSession"
   ],
   "contributes": {
@@ -126,6 +127,10 @@
       {
         "command": "copilotArchitect.confirmDecision",
         "title": "Copilot Architect: Confirm Decision"
+      },
+      {
+        "command": "copilotArchitect.applyChanges",
+        "title": "Copilot Architect: Apply Staged Changes"
       },
       {
         "command": "copilotArchitect.endSession",

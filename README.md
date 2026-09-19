@@ -221,7 +221,7 @@ Copilot Chat:
 | ------------------------- | -------------------------------------------------------------------- |
 | `@architect /analyze`     | Explains what is in the repo, grounded in a real index of the files. |
 | `@architect /create-plan` | Turns the request into a plan you can read, correct, and approve.    |
-| `@architect /implement`   | Applies the approved plan and nothing beyond it.                     |
+| `@architect /implement`   | Shows what the plan comes to, then applies it on a click.            |
 | `@architect /review`      | Compares what was built against what was approved.                   |
 
 A prompt with no slash command is treated as `/analyze`.
@@ -451,7 +451,7 @@ GitHub Copilot Chat artifacts:
 
 ```bash
 npm run build     # compile all TypeScript packages
-npm test          # run all 363 Vitest tests
+npm test          # run all 371 Vitest tests
 npm run lint      # ESLint
 npm run format    # Prettier check
 npm run format:write  # Prettier fix

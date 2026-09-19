@@ -13,6 +13,8 @@ import {
   buildPlannedChange,
   checkOutlines,
   compareAgainstPlan,
+  previewWrites,
+  summarizeWrites,
   createPlanContract,
   summarizeOutlineChecks,
   plannedPaths,
@@ -155,6 +157,150 @@ describe("compareAgainstPlan", () => {
 
     expect(comparison.asPlanned).toEqual(["svc-billing/src/Ledger.java"]);
     expect(comparison.unplanned).toEqual([]);
+  });
+});
+
+describe("previewWrites", () => {
+  const plan = createPlanContract({
+    request: "Add invoice approval",
+    version: 1,
+    decisions: [],
+    changes: [
+      {
+        kind: "update",
+        relativePath: "src/billing/InvoiceService.ts",
+        rationale: "hooks approval into the lifecycle",
+        before: { startLine: 1, endLine: 40, fileLines: 200, text: "…" }
+      },
+      {
+        kind: "add",
+        relativePath: "src/billing/ApprovalPolicy.ts",
+        rationale: "new approval rules"
+      },
+      {
+        kind: "delete",
+        relativePath: "src/billing/Legacy.ts",
+        rationale: "superseded",
+        before: { startLine: 1, endLine: 20, fileLines: 60, text: "…" }
+      }
+    ]
+  });
+
+  it("shows what each file becomes before anything is written", () => {
+    const previews = previewWrites(plan, [
+      {
+        relativePath: "src/billing/InvoiceService.ts",
+        kind: "update",
+        afterText: Array.from({ length: 210 }, () => "line").join("\n")
+      },
+      {
+        relativePath: "src/billing/ApprovalPolicy.ts",
+        kind: "add",
+        afterText: "export class ApprovalPolicy {}\n"
+      },
+      { relativePath: "src/billing/Legacy.ts", kind: "delete" }
+    ]);
+
+    expect(previews).toEqual([
+      {
+        relativePath: "src/billing/InvoiceService.ts",
+        kind: "update",
+        beforeLines: 200,
+        afterLines: 210
+      },
+      {
+        relativePath: "src/billing/ApprovalPolicy.ts",
+        kind: "add",
+        afterLines: 1
+      },
+      {
+        relativePath: "src/billing/Legacy.ts",
+        kind: "delete",
+        beforeLines: 60,
+        afterLines: 0
+      }
+    ]);
+  });
+
+  it("flags a replacement that looks like an answer that stopped early", () => {
+    // Whole-file regeneration's real danger is not a wrong edit — a reviewer
+    // catches those — it is a response that ran out and silently deleted the
+    // rest of the file.
+    const [preview] = previewWrites(plan, [
+      {
+        relativePath: "src/billing/InvoiceService.ts",
+        kind: "update",
+        afterText: Array.from({ length: 12 }, () => "line").join("\n")
+      }
+    ]);
+
+    expect(preview.suspectTruncation).toContain("12 lines replacing 200");
+    expect(summarizeWrites([preview])).toContain("⚠️");
+  });
+
+  it("does not flag ordinary shrinkage in a small file", () => {
+    // A short file halving is routine. Flagging it would put a warning on
+    // everyday work, and a warning on everyday work is one nobody reads.
+    const smallPlan = createPlanContract({
+      request: "tidy",
+      version: 1,
+      decisions: [],
+      changes: [
+        {
+          kind: "update",
+          relativePath: "src/small.ts",
+          rationale: "trim",
+          before: { startLine: 1, endLine: 20, fileLines: 20, text: "…" }
+        }
+      ]
+    });
+
+    const [preview] = previewWrites(smallPlan, [
+      { relativePath: "src/small.ts", kind: "update", afterText: "a\nb\nc\n" }
+    ]);
+
+    expect(preview.suspectTruncation).toBeUndefined();
+  });
+
+  it("never flags an add, which replaces nothing", () => {
+    const [preview] = previewWrites(plan, [
+      {
+        relativePath: "src/billing/ApprovalPolicy.ts",
+        kind: "add",
+        afterText: "export class ApprovalPolicy {}\n"
+      }
+    ]);
+
+    expect(preview.suspectTruncation).toBeUndefined();
+  });
+
+  it("never flags a delete, which is meant to remove everything", () => {
+    const [preview] = previewWrites(plan, [
+      { relativePath: "src/billing/Legacy.ts", kind: "delete" }
+    ]);
+
+    expect(preview.suspectTruncation).toBeUndefined();
+    expect(summarizeWrites([preview])).toContain("removed");
+  });
+
+  it("counts a trailing newline as ending a line, not starting one", () => {
+    const [withNewline] = previewWrites(plan, [
+      {
+        relativePath: "src/billing/ApprovalPolicy.ts",
+        kind: "add",
+        afterText: "a\nb\n"
+      }
+    ]);
+    const [without] = previewWrites(plan, [
+      { relativePath: "src/billing/ApprovalPolicy.ts", kind: "add", afterText: "a\nb" }
+    ]);
+    const [empty] = previewWrites(plan, [
+      { relativePath: "src/billing/ApprovalPolicy.ts", kind: "add", afterText: "" }
+    ]);
+
+    expect(withNewline.afterLines).toBe(2);
+    expect(without.afterLines).toBe(2);
+    expect(empty.afterLines).toBe(0);
   });
 });
 

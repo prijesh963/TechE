@@ -156,6 +156,34 @@ Applies the approved plan and nothing beyond it. The plan carries each file's
 content hash from plan time, so implementation can tell cheaply whether a file
 moved underneath it and stop rather than overwrite work it never saw.
 
+It generates the changes, then stops and shows you what they come to before
+anything reaches your working tree:
+
+```text
+## Plan v1 — ready to write
+
+- **update** `src/billing/InvoiceService.ts` — 200 → 210 lines
+- **add** `src/billing/ApprovalPolicy.ts` — 84 lines
+- **update** `src/billing/Ledger.ts` — 12 lines replacing 180 ⚠️ the answer
+  may have stopped early rather than edited the file
+
+Nothing has been written yet.
+[ Apply 3 change(s) ]
+```
+
+You approved a plan — a file list, reasons, an outline. What the model returns
+is code nobody has seen, and this is the one moment where showing it costs
+nothing, because it is already generated.
+
+The ⚠️ is the guard that matters. Whole-file regeneration's real danger is not
+a wrong edit — a reviewer catches those — it is an answer that ran out and
+silently deleted the rest of the file. A replacement much shorter than what it
+replaces is almost always that.
+
+Staging is in memory, so reloading the window loses it; the button then says
+so and asks you to run `/implement` again rather than writing content whose
+preview you can no longer see.
+
 Afterwards the index and symbol graph rebuild, so a later question in the same
 session is not answered from a snapshot taken before the edit.
 
