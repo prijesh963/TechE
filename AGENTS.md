@@ -118,7 +118,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               42 files, 297 tests
+├── tests/               42 files, 311 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -159,7 +159,10 @@ the other. If a shell needs repo intelligence, it imports the service.
 7. Keyword search with scoring, cross-repo fan-out and symbol-graph expansion.
 8. Symbol/dependency graph for TS/JS (compiler API) and Java.
 9. Session model: one feature, recorded decisions, versioned plans, explicit
-   end, parked rather than deleted on a branch change.
+   end, parked rather than deleted on a branch change. `/create-plan` proposes
+   decisions for the developer to confirm; only confirmed ones are recorded.
+   The dashboard's Current work card shows the live session, read through
+   `peek` so a repaint never parks it.
 10. Plan contract carrying each changed file's content and hash at plan time.
 11. Grounding: claims verified against the index, unverified ones flagged.
 12. Safe validation runner with timeouts, retries and streaming.
@@ -278,7 +281,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 297 tests must pass before merging.
+Use Vitest. All 311 tests must pass before merging.
 
 Cover:
 
@@ -287,7 +290,9 @@ Cover:
 - indexing (full, incremental, rebuild, staleness)
 - search (scoring, filtering, cross-repo fan-out, graph expansion)
 - symbol graph construction and cross-repo edges
-- session lifecycle (phase, decisions, plan versions, park, end)
+- session lifecycle (phase, decisions, plan versions, park, end, read-only peek)
+- decision proposal parsing and confirmation wiring
+- dashboard session rendering, including the idle and moved-branch states
 - plan contract (freshness, approval gating, path constraints)
 - grounding (claim extraction, verification, honest "not checked")
 - feature planning (JSON + Markdown output)

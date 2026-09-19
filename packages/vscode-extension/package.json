@@ -35,6 +35,7 @@
     "onCommand:copilotArchitect.stopMcp",
     "onCommand:copilotArchitect.moreActions",
     "onCommand:copilotArchitect.approvePlan",
+    "onCommand:copilotArchitect.confirmDecision",
     "onCommand:copilotArchitect.endSession"
   ],
   "contributes": {
@@ -121,6 +122,10 @@
       {
         "command": "copilotArchitect.approvePlan",
         "title": "Copilot Architect: Approve Plan"
+      },
+      {
+        "command": "copilotArchitect.confirmDecision",
+        "title": "Copilot Architect: Confirm Decision"
       },
       {
         "command": "copilotArchitect.endSession",

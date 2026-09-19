@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–8 merged. The redesign is complete; what is below is
+**Status:** Phases 0–9 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -18,27 +18,35 @@ the backlog it leaves behind.
 
 These are the gaps a developer would actually notice.
 
-### 1.1 The dashboard is a button panel, not a session view
+### 1.1 Decisions are proposed only at `/create-plan`
 
-**Phase 4a/4b.** `DASHBOARD_PRIMARY_ACTIONS` still renders Setup Repo, MCP
-start/stop and agent install as links. The design calls for it to show the
-current work: feature, phase, decisions, plan version and which version is
-implemented, with an idle state showing readiness and insights.
+**Phase 9.** `/analyze` surfaces plenty worth deciding and proposes nothing;
+`/review` findings that change an approach are not offered as decisions
+either.
 
-**Cost:** the session's state is invisible unless you scroll the chat. Phases
-1–4b now produce real state with nowhere to display it.
+**Cost:** a developer who settles something during analysis has to wait until
+planning for it to be recordable, or say it again.
 
-### 1.2 Nothing proposes decisions for the developer to confirm
+### 1.2 A proposed decision cannot be amended in place
 
-**Phase 1/4a.** `recordDecision` exists, is tested, and renders in a plan draft
-— but **no code path calls it**. Confirmed with a search: the only reference
-outside the service is its own test.
+**Phase 9.** Confirm is a button; rejecting is not clicking; amending means
+saying what is wrong so it lands in the next draft. There is no "edit this
+wording and record it".
 
-**Cost:** the Decisions block always renders empty, so the mechanism the whole
-session model rests on is inert. The model-proposes / developer-confirms flow
-is the missing half.
+**Cost:** a proposal that is 90% right costs a redraft. An input box on
+confirm would close it, at the price of a modal in the middle of a chat
+turn.
 
-### 1.3 `/create-plan` picks files by search relevance alone
+### 1.3 Nothing supersedes a decision from the UI
+
+**Phase 9.** `recordDecision` takes `supersedes` and the service handles the
+history correctly, but the confirm command never sets it. A developer who
+changes their mind gets two contradictory decisions, both active.
+
+**Cost:** `activeDecisions` returns both, so a contradiction reaches the plan
+and the dashboard with nothing marking which is current.
+
+### 1.4 `/create-plan` picks files by search relevance alone
 
 **Phase 4a.** Every change is marked `update`; nothing reasons about additions
 or deletions, and nothing asks the model which files genuinely need changing.
@@ -46,7 +54,7 @@ or deletions, and nothing asks the model which files genuinely need changing.
 **Cost:** plans name plausible files rather than correct ones. This is the
 planning intelligence, and it needs the model in the loop.
 
-### 1.4 `/implement` regenerates whole files, with no dry run
+### 1.5 `/implement` regenerates whole files, with no dry run
 
 **Phase 4b.** The model is asked for complete replacement contents from the
 before-snapshot. There is no preview before writing.
@@ -55,7 +63,7 @@ before-snapshot. There is no preview before writing.
 safer, but needs the model to emit reliable diffs. Approval already gates the
 write, so a preview is a safety improvement rather than a missing gate.
 
-### 1.5 The CLI shell-outs are still subprocesses
+### 1.6 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —
@@ -329,18 +337,20 @@ Fixing it means threading the actual invocation through `getHelpText` and
 
 Kept so the record shows what was traded and when.
 
-| Limitation                                             | Raised    | Closed                                         |
-| ------------------------------------------------------ | --------- | ---------------------------------------------- |
-| `resetIndexFreshnessCache` exported but unwired        | pre-phase | Phase 0 — `.git/HEAD` checked before the cache |
-| Plan body opaque in the session                        | Phase 1   | Phase 2 — `PlanContract`                       |
-| Nothing builds a plan contract end to end              | Phase 2   | Phase 4a                                       |
-| `checkConstraints` never called against `plannedPaths` | Phase 2   | Phase 4b                                       |
-| `runAgenticPlanLoop` — a third retrieval mechanism     | Phase 3   | Phase 4a                                       |
-| No checkpoint captured                                 | Phase 4a  | Phase 4b                                       |
-| Two tokenizers that had to be fixed twice              | pre-phase | Phase 3 — one exported tokenizer               |
-| Extension unusable without a monorepo clone            | pre-phase | Phase 7 — CLI bundled into the VSIX            |
-| Generated artifacts named deleted agents               | Phase 5   | Phase 8 — `CHAT_COMMANDS` as one source        |
-| `AGENTS.md` behind the built product                   | Phase 2   | Phase 8 — rewritten against measured figures   |
-| No solution overview on main                           | Phase 6   | Phase 8 — written with re-measured numbers     |
-| Phase 6 entries misfiled under documentation debt      | Phase 6   | Phase 8 — refiled under correctness edges      |
-| `templates/agents/` left empty after Phase 5           | Phase 5   | Phase 8 — directory removed                    |
+| Limitation                                             | Raised    | Closed                                            |
+| ------------------------------------------------------ | --------- | ------------------------------------------------- |
+| `resetIndexFreshnessCache` exported but unwired        | pre-phase | Phase 0 — `.git/HEAD` checked before the cache    |
+| Plan body opaque in the session                        | Phase 1   | Phase 2 — `PlanContract`                          |
+| Nothing builds a plan contract end to end              | Phase 2   | Phase 4a                                          |
+| `checkConstraints` never called against `plannedPaths` | Phase 2   | Phase 4b                                          |
+| `runAgenticPlanLoop` — a third retrieval mechanism     | Phase 3   | Phase 4a                                          |
+| No checkpoint captured                                 | Phase 4a  | Phase 4b                                          |
+| Two tokenizers that had to be fixed twice              | pre-phase | Phase 3 — one exported tokenizer                  |
+| Extension unusable without a monorepo clone            | pre-phase | Phase 7 — CLI bundled into the VSIX               |
+| Generated artifacts named deleted agents               | Phase 5   | Phase 8 — `CHAT_COMMANDS` as one source           |
+| `AGENTS.md` behind the built product                   | Phase 2   | Phase 8 — rewritten against measured figures      |
+| No solution overview on main                           | Phase 6   | Phase 8 — written with re-measured numbers        |
+| Phase 6 entries misfiled under documentation debt      | Phase 6   | Phase 8 — refiled under correctness edges         |
+| Dashboard showed artifacts, never the session          | Phase 4a  | Phase 9 — Current work card, read via `peek`      |
+| Nothing ever called `recordDecision`                   | Phase 1   | Phase 9 — proposals confirmed from `/create-plan` |
+| `templates/agents/` left empty after Phase 5           | Phase 5   | Phase 8 — directory removed                       |

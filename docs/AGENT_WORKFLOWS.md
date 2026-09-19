@@ -47,6 +47,16 @@ what it could not see. Your corrections outrank its first proposal — say what
 is wrong and it redrafts, versioned, so you can point at which version was
 approved.
 
+It also names the choices the plan is quietly making — where the work lands,
+what was chosen over what, which boundaries hold — each with a **Confirm**
+button. Confirming records it against the session so later phases stop
+re-asking; not clicking rejects it; saying what is wrong lands in the next
+draft. Only what you confirm is recorded, because a decision nobody agreed to
+would bind implementation to a choice you never made.
+
+If no language model is reachable, it says so rather than showing an empty
+list as though the plan made no choices worth confirming.
+
 The plan is deliberately comprehensive. If implementation has to go back and
 re-read the repository to act on it, the plan was not a plan — it was a
 suggestion, and you are back to paying for context on every turn.
@@ -82,7 +92,9 @@ the whole change was reviewed.
 
 A session belongs to a workspace and holds one feature: its phase, the
 decisions recorded along the way, every plan version, and which version was
-implemented.
+implemented. All of it is visible in the **Current work** card at the top of
+the Copilot Architect sidebar, so the session's state is never something you
+have to reconstruct by scrolling.
 
 It ends when you say so — **End Session**, not a timeout and not a guess from
 wording. A session that is still open when you switch branches is parked rather

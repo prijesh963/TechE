@@ -24,6 +24,8 @@ import {
   SessionService,
   checkConstraints,
   diffCheckpoint,
+  type Decision,
+  type DecisionKind,
   type SessionPhase
 } from "@copilot-architect/session";
 
@@ -369,6 +371,29 @@ export interface ExtensionState {
   lastStdout?: string;
   lastStderr?: string;
   artifacts?: DashboardArtifacts;
+  /** The work in progress. Absent when no session is open. */
+  session?: DashboardSession;
+}
+
+/**
+ * The session, flattened for display.
+ *
+ * The dashboard used to show only artifacts on disk — plan paths, validation
+ * paths, a row of buttons — while the session model tracked the feature, the
+ * phase, the decisions and which plan version was implemented, with nowhere to
+ * appear. A developer could only find out where they were by scrolling the
+ * chat.
+ */
+export interface DashboardSession {
+  title: string;
+  phase: SessionPhase;
+  decisions: { kind: string; statement: string }[];
+  plans: { version: number; status: string; implemented: boolean }[];
+  /**
+   * The branch moved since this session opened. Shown rather than acted on:
+   * the next phase will park it, and a repaint must not.
+   */
+  staleBranch: boolean;
 }
 
 /** Live values read from `.copilot-architect/` artifacts to populate the dashboard. */
@@ -911,6 +936,38 @@ export function activate(
         `Plan v${version} approved — run \`/implement\` when ready.`
       );
     }),
+    vscode.commands.registerCommand(CONFIRM_DECISION_COMMAND, async (...args) => {
+      const proposal = args[0] as ProposedDecision | undefined;
+
+      if (!proposal?.statement) {
+        return;
+      }
+
+      // Through current(), not peek(): this writes, so a session whose branch
+      // moved should be parked rather than quietly extended.
+      const session = await chatSessions.current({ workspaceRoot });
+
+      if (!session) {
+        vscode.window.showErrorMessage(
+          "No active session — that decision has nowhere to be recorded. Start with `/create-plan`."
+        );
+        return;
+      }
+
+      await chatSessions.recordDecision(
+        { workspaceRoot },
+        {
+          kind: proposal.kind,
+          statement: proposal.statement,
+          ...(proposal.rejected ? { rejected: proposal.rejected } : {})
+        }
+      );
+
+      dashboard.refresh();
+      vscode.window.showInformationMessage(
+        `Recorded: ${truncate(proposal.statement, 60)}`
+      );
+    }),
     vscode.commands.registerCommand(END_SESSION_COMMAND, async () => {
       await chatSessions.end({ workspaceRoot });
       dashboard.refresh();
@@ -1136,7 +1193,7 @@ export function activate(
             );
             break;
           case "plan":
-            await runPlanPhase(vscode, sessions, workspaceRoot, prompt, stream);
+            await runPlanPhase(vscode, sessions, workspaceRoot, prompt, stream, token);
             break;
           case "implement":
             await runImplementPhase(vscode, sessions, workspaceRoot, stream, token);
@@ -1318,6 +1375,13 @@ class DashboardController implements WebviewViewProviderLike {
     } catch {
       // Keep the previously loaded artifacts on any read failure.
     }
+
+    try {
+      this.state.session = await loadDashboardSession(this.state.workspaceRoot);
+    } catch {
+      // Same: a session that cannot be read is not a session that ended.
+    }
+
     this.render();
   }
 
@@ -1343,9 +1407,90 @@ class DashboardController implements WebviewViewProviderLike {
   }
 }
 
+/**
+ * The session as a card.
+ *
+ * Idle is a real state with real content, not a blank panel: a developer with
+ * no session open should be told what to type, not left guessing whether the
+ * extension is working.
+ */
+export function formatSession(session: DashboardSession | undefined): string {
+  if (!session) {
+    return [
+      "<em>No session open.</em>",
+      "Start one in Copilot Chat with <code>@architect /create-plan &lt;what you want&gt;</code>,",
+      "or ask a question with <code>@architect /analyze</code>."
+    ].join(" ");
+  }
+
+  const lines = [
+    `<strong>${escapeHtml(session.title)}</strong>`,
+    `Phase: ${escapeHtml(session.phase)}`
+  ];
+
+  if (session.staleBranch) {
+    lines.push(
+      "<em>The branch has moved since this session opened — the next phase will park it.</em>"
+    );
+  }
+
+  lines.push(formatSessionPlans(session.plans));
+  lines.push(formatSessionDecisions(session.decisions));
+
+  return lines.join("<br>");
+}
+
+function formatSessionPlans(plans: DashboardSession["plans"]): string {
+  if (plans.length === 0) {
+    return "Plans: none drafted yet";
+  }
+
+  const latest = plans[plans.length - 1];
+  const implemented = plans.filter((plan) => plan.implemented).map((p) => p.version);
+  const approved = plans.filter((plan) => plan.status === "approved").length;
+
+  const parts = [
+    `Plans: v${latest.version} ${latest.status}`,
+    `${approved} of ${plans.length} approved`
+  ];
+
+  // Which version is running matters more than how many exist: it is what
+  // /review compares against.
+  parts.push(
+    implemented.length > 0
+      ? `implemented v${implemented.join(", v")}`
+      : "none implemented"
+  );
+
+  return escapeHtml(parts.join(" · "));
+}
+
+function formatSessionDecisions(decisions: DashboardSession["decisions"]): string {
+  if (decisions.length === 0) {
+    return "Decisions: none recorded — <code>/create-plan</code> proposes them to confirm";
+  }
+
+  // Joined with <br> rather than a <ul>: each section body is rendered inside
+  // a <p>, and a list nested in a paragraph is invalid and lays out badly.
+  const rows = decisions
+    .map(
+      (decision) =>
+        `&nbsp;&nbsp;· ${escapeHtml(decision.kind)} — ${escapeHtml(decision.statement)}`
+    )
+    .join("<br>");
+
+  return `Decisions (${decisions.length}):<br>${rows}`;
+}
+
 export function createDashboardHtml(state: ExtensionState): string {
   const artifacts = state.artifacts;
   const sections = [
+    {
+      // First, because it is the answer to "where am I?" — the question the
+      // dashboard exists to answer and previously could not.
+      title: "Current work",
+      body: formatSession(state.session)
+    },
     {
       title: "Repo summary",
       body: escapeHtml(
@@ -1437,6 +1582,42 @@ export function createCliCommandLine(args: string[]): string {
 }
 
 // --- Dashboard artifact loading + formatting ---
+
+/**
+ * Reads the session for display.
+ *
+ * Deliberately `peek` and not `current`: `current` parks a session whose
+ * branch has moved, and a dashboard repaint must never end the developer's
+ * session as a side effect of being looked at. Staleness is reported instead,
+ * and the next phase — which does act — parks it.
+ */
+export async function loadDashboardSession(
+  workspaceRoot: string,
+  sessions: SessionService = new SessionService()
+): Promise<DashboardSession | undefined> {
+  const peeked = await sessions.peek({ workspaceRoot }).catch(() => undefined);
+
+  if (!peeked) {
+    return undefined;
+  }
+
+  const { session, staleBranch } = peeked;
+
+  return {
+    title: session.title,
+    phase: session.phase,
+    decisions: sessions.activeDecisions(session).map((decision) => ({
+      kind: decision.kind,
+      statement: decision.statement
+    })),
+    plans: session.plans.map((plan) => ({
+      version: plan.version,
+      status: plan.status,
+      implemented: Boolean(plan.implementedAt)
+    })),
+    staleBranch
+  };
+}
 
 export async function loadDashboardArtifacts(
   workspaceRoot: string
@@ -1827,6 +2008,31 @@ const CHAT_PHASES: Record<string, SessionPhase | undefined> = {
   review: "review"
 };
 
+/**
+ * Proposing decisions for the developer to confirm.
+ *
+ * The session model rests on recorded decisions — they are what stops
+ * `/implement` re-asking what `/create-plan` already settled. Until now
+ * nothing produced them: `recordDecision` existed and was tested, but no code
+ * path called it, so the Decisions block rendered empty forever.
+ *
+ * The model proposes; the developer confirms. Only a confirmed proposal is
+ * recorded, because a decision nobody agreed to is worse than no decision —
+ * it would bind implementation to a choice the developer never made.
+ */
+export interface ProposedDecision {
+  kind: DecisionKind;
+  statement: string;
+  rejected?: string;
+}
+
+const DECISION_KINDS: DecisionKind[] = ["design", "scope", "constraint", "fact"];
+
+/** How many proposals to show. More than this is a wall of buttons nobody reads. */
+const MAX_PROPOSED_DECISIONS = 4;
+
+export const CONFIRM_DECISION_COMMAND = "copilotArchitect.confirmDecision";
+
 export const APPROVE_PLAN_COMMAND = "copilotArchitect.approvePlan";
 export const END_SESSION_COMMAND = "copilotArchitect.endSession";
 
@@ -1980,7 +2186,8 @@ async function runPlanPhase(
   sessions: SessionService,
   workspaceRoot: string,
   prompt: string,
-  stream: ChatResponseStreamLike
+  stream: ChatResponseStreamLike,
+  token: unknown
 ): Promise<void> {
   if (!prompt) {
     stream.markdown(
@@ -2037,6 +2244,16 @@ async function runPlanPhase(
       : "no snapshot — file could not be read";
     stream.markdown(`- \`${change.relativePath}\` — ${quoted}\n`);
   }
+  stream.progress?.("Looking for choices worth confirming…");
+  const proposals = await proposeDecisions(
+    vscode,
+    prompt,
+    changes,
+    sessions.activeDecisions(withDraft),
+    token
+  );
+  renderProposedDecisions(proposals, stream);
+
   stream.markdown(`\n${await buildReceipts(workspaceRoot)}\n`);
   stream.markdown(
     "\nThis is a draft. Nothing is written until you approve it — tell me what to change, or:\n"
@@ -2046,6 +2263,45 @@ async function runPlanPhase(
     title: `Approve plan v${version}`,
     arguments: [version]
   });
+}
+
+/**
+ * Renders proposals as buttons, one per decision.
+ *
+ * Confirming is a click; rejecting is not clicking; amending is saying what is
+ * wrong, which lands in the next draft. Only the first has a button, because
+ * only the first writes anything.
+ */
+function renderProposedDecisions(
+  proposals: ProposedDecision[] | undefined,
+  stream: ChatResponseStreamLike
+): void {
+  if (proposals === undefined) {
+    // Not the same as "no choices worth confirming", and not shown as if it
+    // were: no model was reachable, so nothing was even asked.
+    stream.markdown(
+      "\n**Decisions to confirm** — none proposed: no language model was available to ask.\n"
+    );
+    return;
+  }
+
+  if (proposals.length === 0) {
+    return;
+  }
+
+  stream.markdown(
+    "\n**Decisions to confirm** — these shape the plan. Confirm the ones you agree with; say so if any are wrong.\n"
+  );
+
+  for (const proposal of proposals) {
+    const rejected = proposal.rejected ? ` _(over ${proposal.rejected})_` : "";
+    stream.markdown(`\n- **${proposal.kind}** — ${proposal.statement}${rejected}\n`);
+    stream.button?.({
+      command: CONFIRM_DECISION_COMMAND,
+      title: `Confirm: ${truncate(proposal.statement, 48)}`,
+      arguments: [proposal]
+    });
+  }
 }
 
 /**
@@ -2797,6 +3053,95 @@ function buildCommandLmPrompt(
  * Implementation needs the replacement code in hand so it can be checked and
  * written; showing it to the user is a separate decision.
  */
+/**
+ * Reads decision proposals out of a model response.
+ *
+ * Deliberately strict. A malformed line is dropped rather than guessed at:
+ * a proposal that becomes a recorded decision on one click must be something
+ * the model actually said, not something this parser reconstructed.
+ */
+export function parseProposedDecisions(text: string): ProposedDecision[] {
+  const proposals: ProposedDecision[] = [];
+  const seen = new Set<string>();
+
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim().replace(/^[-*]\s*/, "");
+    if (!trimmed) continue;
+
+    // kind | statement | optional rejected alternative
+    const parts = trimmed.split("|").map((part) => part.trim());
+    if (parts.length < 2) continue;
+
+    const kind = parts[0].toLowerCase() as DecisionKind;
+    if (!DECISION_KINDS.includes(kind)) continue;
+
+    const statement = parts[1];
+    // A one-word "decision" is noise, and a whole paragraph is not a decision.
+    if (statement.length < 8 || statement.length > 300) continue;
+
+    const key = `${kind}:${statement.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const rejected = parts[2];
+    proposals.push({
+      kind,
+      statement,
+      ...(rejected && rejected.length > 1 && rejected.length <= 300 ? { rejected } : {})
+    });
+
+    if (proposals.length === MAX_PROPOSED_DECISIONS) break;
+  }
+
+  return proposals;
+}
+
+/**
+ * Asks the model which choices this plan is quietly making.
+ *
+ * Returns `undefined` when no model was available, which the caller reports
+ * rather than papering over: "no decisions proposed" and "could not ask" are
+ * different states, and showing the first when the second is true is the
+ * silent-empty-context failure again in a new place.
+ */
+async function proposeDecisions(
+  vscode: VscodeApiLike,
+  request: string,
+  changes: PlannedChange[],
+  alreadyRecorded: Decision[],
+  token: unknown
+): Promise<ProposedDecision[] | undefined> {
+  const files = changes.map((change) => change.relativePath).join("\n");
+  const settled = alreadyRecorded.map((decision) => decision.statement).join("\n");
+
+  const prompt = [
+    "A developer asked for this change:",
+    request,
+    "",
+    "A plan proposes touching these files:",
+    files,
+    "",
+    ...(settled ? ["Already decided — do not repeat these:", settled, ""] : []),
+    "Name the choices this plan is making that a developer should confirm",
+    "before any code is written. A choice is worth naming when a reasonable",
+    `engineer could pick differently. At most ${MAX_PROPOSED_DECISIONS}.`,
+    "",
+    "One per line, pipe-separated, nothing else — no prose, no numbering:",
+    "kind | what is being decided | what it was chosen over (optional)",
+    "",
+    "kind is one of: design, scope, constraint, fact",
+    "",
+    "Example:",
+    "design | Approvals are recorded per invoice, not per batch | a batch-level approval table",
+    "scope | Changes stay inside the billing service | touching the orders service too",
+    "",
+    "If the plan makes no choice worth confirming, answer with nothing at all."
+  ].join("\n");
+
+  const text = await requestLmText(vscode, prompt, token);
+  return text === undefined ? undefined : parseProposedDecisions(text);
+}
+
 async function requestLmText(
   vscode: VscodeApiLike,
   prompt: string,

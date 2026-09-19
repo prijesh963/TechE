@@ -63,6 +63,31 @@ describe("SessionService", () => {
     expect(parked.closedReason).toContain("branch changed");
   });
 
+  it("peeks at a moved branch without parking the session", async () => {
+    if (!(await gitAvailable())) return;
+
+    const workspaceRoot = await createWorkspace();
+    await execFileAsync("git", ["init", "-b", "main"], { cwd: workspaceRoot });
+    await writeFile(path.join(workspaceRoot, "app.ts"), "export const a = 1;", "utf8");
+    await commitAll(workspaceRoot, "initial");
+
+    const service = new SessionService();
+    await service.open({ workspaceRoot, title: "Invoice approval" });
+    await execFileAsync("git", ["checkout", "-b", "other"], { cwd: workspaceRoot });
+
+    // Reporting staleness must not cause it. A dashboard repaint calls this,
+    // and ending the developer's session because a panel was drawn would be
+    // the worst kind of side effect.
+    const peeked = await service.peek({ workspaceRoot });
+    expect(peeked?.staleBranch).toBe(true);
+    expect(peeked?.session.status).toBe("active");
+    expect((await service.list({ workspaceRoot }))[0].status).toBe("active");
+
+    // current() still parks it, because it is about to act on it.
+    expect(await service.current({ workspaceRoot })).toBeUndefined();
+    expect((await service.list({ workspaceRoot }))[0].status).toBe("parked");
+  });
+
   it("survives being reloaded from disk", async () => {
     // Developers reload VS Code constantly. An in-memory session would lose a
     // half-built plan every time.

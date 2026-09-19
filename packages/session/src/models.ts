@@ -163,6 +163,17 @@ export interface SessionQuery {
   workspaceRoot: string;
 }
 
+/** What {@link SessionService.peek} reports, without changing anything. */
+export interface SessionPeek {
+  session: Session;
+  /**
+   * `.git/HEAD` has moved since the session opened. The session is still
+   * active here — peeking never parks it. A caller about to act on the
+   * session should go through `current()`, which does.
+   */
+  staleBranch: boolean;
+}
+
 export interface RecordDecisionInput {
   kind: DecisionKind;
   statement: string;

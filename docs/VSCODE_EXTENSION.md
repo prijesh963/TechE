@@ -96,16 +96,25 @@ picked up.
 
 After loading, the Copilot Architect icon appears in the VS Code activity bar. Click it to open the **Copilot Architect** sidebar panel. The panel shows:
 
-| Section              | Content                                                  |
-| -------------------- | -------------------------------------------------------- |
-| Repo summary         | Active workspace root path                               |
-| Languages/frameworks | Populated after `Analyze Repo` runs                      |
-| Plans                | Path to `.copilot-architect/plans/latest-plan.json`      |
-| Validation runs      | Path to `.copilot-architect/runs/latest-validation.json` |
-| Review reports       | Path to `.copilot-architect/reviews/latest-review.json`  |
-| Agent status         | Path to `.github/agents/`                                |
-| MCP status           | `stopped` / `starting` / `running`                       |
-| Last command         | The most recently run CLI command and its exit code      |
+| Section              | Content                                                        |
+| -------------------- | -------------------------------------------------------------- |
+| **Current work**     | Feature, phase, plan versions, and the decisions you confirmed |
+| Repo summary         | Active workspace root path                                     |
+| Languages/frameworks | Populated after `Analyze Repo` runs                            |
+| Plans                | Path to `.copilot-architect/plans/latest-plan.json`            |
+| Validation runs      | Path to `.copilot-architect/runs/latest-validation.json`       |
+| Review reports       | Path to `.copilot-architect/reviews/latest-review.json`        |
+| MCP status           | `stopped` / `starting` / `running`                             |
+| Last command         | The most recently run CLI command and its exit code            |
+
+**Current work** is the panel's reason to exist. With no session open it tells
+you what to type; with one open it shows the feature, the phase, which plan
+version is drafted, approved and implemented, and every decision you confirmed
+— so you do not have to scroll the chat to find out where you are.
+
+It reads the session without touching it. A repaint must never park a session
+whose branch has moved, which is why it goes through `SessionService.peek` and
+not `current`; it reports the moved branch and lets the next phase act on it.
 
 The **Refresh** button (↺) in the panel title bar refreshes the dashboard without running a command.
 

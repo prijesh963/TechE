@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { SessionService } from "../packages/session/src/index.js";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +15,9 @@ import {
   activate,
   createCliCommandLine,
   createDashboardHtml,
+  formatSession,
+  loadDashboardSession,
+  parseProposedDecisions,
   deactivate,
   diagnoseEmptyContext,
   buildRepoContext,
@@ -652,6 +656,7 @@ describe("VS Code extension shell", () => {
       lastStderr: ""
     });
 
+    expect(html).toContain("Current work");
     expect(html).toContain("Repo summary");
     expect(html).toContain("Languages/frameworks");
     expect(html).toContain("Plans");
@@ -799,7 +804,7 @@ describe("VS Code extension shell", () => {
 
 interface FakeVscode {
   vscode: VscodeApiLike;
-  commands: Map<string, () => Promise<unknown> | unknown>;
+  commands: Map<string, (...args: unknown[]) => Promise<unknown> | unknown>;
   input: string | undefined;
   viewProviderId: string | undefined;
   openDialogResult: UriLike[] | undefined;
@@ -836,8 +841,11 @@ async function createInsightsRepo(fixture: {
   return repoRoot;
 }
 
-function createFakeVscode(): FakeVscode {
-  const commands = new Map<string, () => Promise<unknown> | unknown>();
+function createFakeVscode(workspaceRoot = "/workspace/repo"): FakeVscode {
+  const commands = new Map<
+    string,
+    (...args: unknown[]) => Promise<unknown> | unknown
+  >();
   const fake: FakeVscode = {
     commands,
     input: undefined,
@@ -895,10 +903,10 @@ function createFakeVscode(): FakeVscode {
         workspaceFolders: [
           {
             uri: {
-              fsPath: "/workspace/repo",
-              toString: () => "/workspace/repo"
+              fsPath: workspaceRoot,
+              toString: () => workspaceRoot
             },
-            name: "repo",
+            name: path.basename(workspaceRoot),
             index: 0
           }
         ],
@@ -927,6 +935,225 @@ async function writeWorkspace(workspaceRoot: string, repos: string[]): Promise<v
     "utf8"
   );
 }
+
+describe("proposed decisions", () => {
+  it("reads well-formed proposals", () => {
+    const proposals = parseProposedDecisions(
+      [
+        "design | Approvals are recorded per invoice, not per batch | a batch-level table",
+        "scope | Changes stay inside the billing service"
+      ].join("\n")
+    );
+
+    expect(proposals).toEqual([
+      {
+        kind: "design",
+        statement: "Approvals are recorded per invoice, not per batch",
+        rejected: "a batch-level table"
+      },
+      { kind: "scope", statement: "Changes stay inside the billing service" }
+    ]);
+  });
+
+  it("drops anything it cannot read rather than guessing", () => {
+    // One click turns a proposal into a recorded decision that binds
+    // implementation. A parser that reconstructs meaning from a malformed
+    // line would put words in the developer's mouth.
+    const proposals = parseProposedDecisions(
+      [
+        "Here are the decisions I propose:",
+        "1. We should probably use Kafka",
+        "urgency | Ship it by Friday",
+        "design | short",
+        "design |",
+        "| Approvals are per invoice"
+      ].join("\n")
+    );
+
+    expect(proposals).toEqual([]);
+  });
+
+  it("tolerates the bullets and fences models add anyway", () => {
+    const proposals = parseProposedDecisions(
+      "- constraint | Do not modify the shared schema package\n" +
+        "* fact | OrderService is deprecated and should not gain callers"
+    );
+
+    expect(proposals.map((p) => p.kind)).toEqual(["constraint", "fact"]);
+  });
+
+  it("does not propose the same decision twice", () => {
+    const proposals = parseProposedDecisions(
+      [
+        "scope | Changes stay inside the billing service",
+        "scope | changes stay inside the billing service"
+      ].join("\n")
+    );
+
+    expect(proposals).toHaveLength(1);
+  });
+
+  it("caps the list so it stays a decision, not a survey", () => {
+    const many = Array.from(
+      { length: 12 },
+      (_, i) => `design | Decision number ${i} about the service layer`
+    ).join("\n");
+
+    expect(parseProposedDecisions(many)).toHaveLength(4);
+  });
+});
+
+describe("confirming a proposed decision", () => {
+  it("records it against the session", async () => {
+    // The gap this closes: recordDecision existed and was tested, but no code
+    // path called it, so the Decisions block rendered empty forever. This
+    // asserts the button actually reaches the session.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-confirm-"));
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.confirmDecision")?.({
+      kind: "scope",
+      statement: "Changes stay inside the billing service",
+      rejected: "touching the orders service too"
+    });
+
+    const session = await sessions.current({ workspaceRoot });
+    expect(session?.decisions).toHaveLength(1);
+    expect(session?.decisions[0]).toEqual(
+      expect.objectContaining({
+        kind: "scope",
+        statement: "Changes stay inside the billing service",
+        rejected: "touching the orders service too"
+      })
+    );
+  });
+
+  it("ignores a click carrying nothing to record", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-confirm-empty-"));
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.confirmDecision")?.(undefined);
+    await fake.commands.get("copilotArchitect.confirmDecision")?.({ kind: "scope" });
+
+    expect((await sessions.current({ workspaceRoot }))?.decisions).toEqual([]);
+  });
+});
+
+describe("dashboard session card", () => {
+  it("tells an idle developer what to type", () => {
+    // A blank panel reads as a broken extension.
+    const html = formatSession(undefined);
+
+    expect(html).toContain("No session open");
+    expect(html).toContain("/create-plan");
+  });
+
+  it("shows the feature, phase, plan version and decisions", () => {
+    const html = formatSession({
+      title: "Add invoice approval",
+      phase: "implement",
+      decisions: [
+        { kind: "design", statement: "Approvals are per invoice" },
+        { kind: "scope", statement: "Billing service only" }
+      ],
+      plans: [
+        { version: 1, status: "approved", implemented: true },
+        { version: 2, status: "draft", implemented: false }
+      ],
+      staleBranch: false
+    });
+
+    expect(html).toContain("Add invoice approval");
+    expect(html).toContain("implement");
+    expect(html).toContain("v2 draft");
+    expect(html).toContain("1 of 2 approved");
+    // Which version is running is what /review compares against.
+    expect(html).toContain("implemented v1");
+    expect(html).toContain("Decisions (2)");
+    expect(html).toContain("Approvals are per invoice");
+  });
+
+  it("says a moved branch will park the session, without parking it", () => {
+    const html = formatSession({
+      title: "Add invoice approval",
+      phase: "plan",
+      decisions: [],
+      plans: [],
+      staleBranch: true
+    });
+
+    expect(html).toContain("branch has moved");
+    expect(html).toContain("none drafted yet");
+    expect(html).toContain("none recorded");
+  });
+
+  it("escapes session text", () => {
+    const html = formatSession({
+      title: "<img src=x onerror=alert(1)>",
+      phase: "analyze",
+      decisions: [{ kind: "fact", statement: "<script>bad()</script>" }],
+      plans: [],
+      staleBranch: false
+    });
+
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;img");
+  });
+});
+
+describe("loadDashboardSession", () => {
+  it("reports a session without ending it", async () => {
+    // The bug this guards: reading the dashboard used to mean calling
+    // current(), which parks a session whose branch moved. Repainting a
+    // panel must never end the developer's work.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-dash-session-"));
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+    await sessions.recordDecision(
+      { workspaceRoot },
+      { kind: "scope", statement: "Billing service only" }
+    );
+
+    const card = await loadDashboardSession(workspaceRoot, sessions);
+
+    expect(card?.title).toBe("Add invoice approval");
+    expect(card?.decisions).toEqual([
+      { kind: "scope", statement: "Billing service only" }
+    ]);
+
+    // Still active after being looked at, twice.
+    await loadDashboardSession(workspaceRoot, sessions);
+    expect(await sessions.current({ workspaceRoot })).toBeDefined();
+  });
+
+  it("returns nothing when no session is open", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-dash-none-"));
+    expect(await loadDashboardSession(workspaceRoot)).toBeUndefined();
+  });
+});
 
 describe("packaged CLI invocation", () => {
   it("names a command that exists on disk rather than an npm script", () => {

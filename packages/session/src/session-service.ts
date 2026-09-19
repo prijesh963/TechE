@@ -18,6 +18,7 @@ import type {
   PlanVersion,
   RecordDecisionInput,
   Session,
+  SessionPeek,
   SessionPhase,
   SessionQuery,
   UnenforceableConstraint
@@ -77,6 +78,36 @@ export class SessionService {
    * forgotten. Enforcing it here means it cannot be.
    */
   async current(query: SessionQuery): Promise<Session | undefined> {
+    const peeked = await this.peek(query);
+
+    if (!peeked) {
+      return undefined;
+    }
+
+    if (peeked.staleBranch) {
+      await this.write(
+        path.resolve(query.workspaceRoot),
+        park(
+          peeked.session,
+          `branch changed from ${describeHead(peeked.session.gitHead)}`
+        )
+      );
+      return undefined;
+    }
+
+    return peeked.session;
+  }
+
+  /**
+   * The active session without touching it.
+   *
+   * `current()` parks a session whose branch moved, which is correct when a
+   * phase is about to act on it and wrong for anything that merely displays
+   * it: a dashboard repaint must not end the developer's session as a side
+   * effect of being looked at. This reports the same staleness and leaves the
+   * decision to the caller.
+   */
+  async peek(query: SessionQuery): Promise<SessionPeek | undefined> {
     const workspaceRoot = path.resolve(query.workspaceRoot);
     const session = await this.readActive(workspaceRoot);
 
@@ -84,16 +115,10 @@ export class SessionService {
       return undefined;
     }
 
-    const head = await readGitHead(workspaceRoot);
-    if (session.gitHead !== head) {
-      await this.write(
-        workspaceRoot,
-        park(session, `branch changed from ${describeHead(session.gitHead)}`)
-      );
-      return undefined;
-    }
-
-    return session;
+    return {
+      session,
+      staleBranch: session.gitHead !== (await readGitHead(workspaceRoot))
+    };
   }
 
   /** Every session in this workspace, newest first. */
