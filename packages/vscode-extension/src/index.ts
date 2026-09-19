@@ -23,9 +23,12 @@ import {
   type ApplyChangeInput,
   DEFAULT_MAX_CHANGES,
   parseSelectedChanges,
+  parseAddOutlines,
+  renderOutline,
   selectByRelevance,
   verifySelectedChanges,
   type PlanContract,
+  type PlannedOutline,
   type PlannedChange,
   type VerifiedChange
 } from "@copilot-architect/planner";
@@ -2277,6 +2280,23 @@ async function runPlanPhase(
     ])
   );
 
+  const addPaths = new Set(
+    selection
+      .filter((choice) => choice.kind === "add")
+      .map((choice) => choice.relativePath)
+  );
+  const outlines =
+    addPaths.size > 0
+      ? await requestAddOutlines(
+          vscode,
+          indexing,
+          workspaceRoot,
+          prompt,
+          selection,
+          token
+        )
+      : new Map<string, PlannedOutline>();
+
   // Snapshots are read from disk by buildPlannedChange — never written by the
   // model, which paraphrases existing code and corrupts the patch.
   const changes: PlannedChange[] = [];
@@ -2287,7 +2307,10 @@ async function runPlanPhase(
         relativePath: choice.relativePath,
         kind: choice.kind,
         rationale: choice.rationale,
-        anchorLine: anchors.get(choice.relativePath)
+        anchorLine: anchors.get(choice.relativePath),
+        ...(outlines.has(choice.relativePath)
+          ? { outline: outlines.get(choice.relativePath) }
+          : {})
       })
     );
   }
@@ -2321,6 +2344,18 @@ async function runPlanPhase(
     stream.markdown(
       `- **${change.kind}** \`${change.relativePath}\` — ${change.rationale}${flag} _(${quoted})_\n`
     );
+
+    if (change.kind === "add") {
+      const outline = renderOutline(change.outline);
+      // A new file with no outline is a sentence the developer is being asked
+      // to approve. Saying so is the difference between an admitted gap and a
+      // hidden one.
+      stream.markdown(
+        outline
+          ? `  ↳ ${outline}\n`
+          : "  ↳ _no outline — you would be approving this description alone_\n"
+      );
+    }
   }
 
   const unverified = selection.filter((choice) => choice.evidence === "unverified");
@@ -2498,7 +2533,7 @@ async function runImplementPhase(
         "",
         change.before
           ? `Current contents (lines ${change.before.startLine}-${change.before.endLine} of ${change.before.fileLines}):\n${change.before.text}`
-          : "This is a new file."
+          : describeNewFile(change)
       ].join("\n"),
       token
     );
@@ -3335,6 +3370,114 @@ async function selectPlanChanges(
     selection: verifySelectedChanges(selection, symbolsByFile),
     selectedByModel: true
   };
+}
+
+/**
+ * What implementation is told about a file that does not exist yet.
+ *
+ * The outline was approved, so it is a contract rather than a suggestion: the
+ * developer said yes to a file exporting these names, and a file exporting
+ * something else is not the file they approved.
+ */
+function describeNewFile(change: PlannedChange): string {
+  if (!change.outline) {
+    return "This is a new file. No outline was approved for it, so keep it minimal and focused on the stated reason.";
+  }
+
+  const lines = [
+    "This is a new file. The developer approved this outline for it — treat it as the contract:",
+    `- Must export: ${change.outline.exports.join(", ")}`
+  ];
+
+  if (change.outline.dependsOn.length > 0) {
+    lines.push(`- Expected to import: ${change.outline.dependsOn.join(", ")}`);
+  }
+
+  if (change.outline.estimatedLines !== undefined) {
+    lines.push(
+      `- Roughly ${change.outline.estimatedLines} lines. Substantially more than that means scope the developer did not approve.`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Asks what each new file will contain.
+ *
+ * An `update` shows the developer real code before they approve it. An `add`
+ * has nothing to show, so without this they approve a sentence — "new rules
+ * deciding who may approve" could be forty lines or eight hundred, exporting
+ * anything at all. The outline is the nearest equivalent to a snapshot for a
+ * file that does not exist yet, and it is what implementation is then held to.
+ *
+ * Returns an empty map when no model was available, which the plan reports as
+ * a missing outline rather than passing the add off as fully specified.
+ */
+async function requestAddOutlines(
+  vscode: VscodeApiLike,
+  indexing: IndexingService,
+  workspaceRoot: string,
+  request: string,
+  selection: VerifiedChange[],
+  token: unknown
+): Promise<Map<string, PlannedOutline>> {
+  const adds = selection.filter((choice) => choice.kind === "add");
+
+  if (adds.length === 0) {
+    return new Map();
+  }
+
+  const existing = selection
+    .filter((choice) => choice.kind !== "add")
+    .map((choice) => choice.relativePath);
+
+  const text = await requestLmText(
+    vscode,
+    [
+      "A developer asked for this change:",
+      request,
+      "",
+      "The plan adds these new files:",
+      ...adds.map((add) => `${add.relativePath} — ${add.rationale}`),
+      "",
+      ...(existing.length > 0
+        ? ["It also changes these existing files:", ...existing, ""]
+        : []),
+      "Say what each new file will contain, so the developer can approve",
+      "something concrete rather than a description.",
+      "",
+      "One per line, pipe-separated, nothing else — no prose, no numbering:",
+      "path | exported names, comma-separated | repo files it imports | rough line count",
+      "",
+      "Import only files that already exist in this repository; leave that",
+      "field empty rather than guessing at a path.",
+      "Give the line count as a number — an honest estimate, not a target.",
+      "",
+      "Example:",
+      "src/billing/ApprovalPolicy.ts | ApprovalPolicy, ApprovalDecision | src/billing/InvoiceService.ts | 80"
+    ].join("\n"),
+    token
+  );
+
+  if (text === undefined) {
+    return new Map();
+  }
+
+  const inventory = await indexing
+    .listFiles({ startPath: workspaceRoot, limit: Number.MAX_SAFE_INTEGER })
+    .catch(() => undefined);
+
+  const indexedPaths = new Set(
+    (inventory?.files ?? []).map((file) =>
+      file.repoName ? `${file.repoName}/${file.relativePath}` : file.relativePath
+    )
+  );
+
+  return parseAddOutlines(text, {
+    addPaths: new Set(adds.map((add) => add.relativePath)),
+    indexedPaths
+  });
 }
 
 /**

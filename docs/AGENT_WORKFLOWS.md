@@ -78,6 +78,23 @@ against the index. The file may still be right — the explanation is not.
 Nothing is dropped over a failed check. A wrong reason on a right file is
 still the right file, and you are the one who decides.
 
+A new file has no code to show you, so it carries an outline instead — what it
+will export, which existing files it will import, roughly how long it will be:
+
+```text
+- **add** `src/billing/ApprovalPolicy.ts` — new rules deciding who may approve _(new file)_
+  ↳ will export ApprovalPolicy, ApprovalDecision · imports src/billing/InvoiceService.ts · ~80 lines
+```
+
+An import of a file that does not exist is dropped from the outline: it means
+the outline was written about a different repository, and a false fact at the
+moment you are deciding whether to approve is worse than a missing one. Where
+no outline could be produced the plan says so — _"no outline — you would be
+approving this description alone"_ — rather than presenting the add as fully
+specified.
+
+What you approve becomes the contract `/implement` works to.
+
 Where no language model is available it falls back to the top search matches
 and says so, in those words, rather than presenting them as a judged
 selection. Your corrections outrank its first proposal — say what

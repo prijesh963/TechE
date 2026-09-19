@@ -59,6 +59,29 @@ export interface PlannedChange {
    * re-read, so it does not break the retrieve-once rule.
    */
   beforeHash?: string;
+  /**
+   * What a new file will contain. Set only on an `add`, where there is no
+   * `before` to quote.
+   *
+   * Without it, an `add` is approved from a sentence: "new rules deciding who
+   * may approve" could be forty lines or eight hundred, exporting anything.
+   * An update shows the developer real code before they approve; this is the
+   * nearest equivalent for a file that does not exist yet.
+   */
+  outline?: PlannedOutline;
+}
+
+export interface PlannedOutline {
+  /** Symbols the new file will declare. */
+  exports: string[];
+  /**
+   * Existing repo files it will import. Verified to exist when the outline is
+   * parsed — an import of a file that is not there is a checkable claim, and
+   * a wrong one means the outline was written about a different repository.
+   */
+  dependsOn: string[];
+  /** Rough size, so a one-line rationale cannot quietly mean a large file. */
+  estimatedLines?: number;
 }
 
 export type ChangeKind = "add" | "update" | "delete";
@@ -93,6 +116,8 @@ export interface BuildChangeOptions {
   anchorLine?: number;
   /** Lines of context either side of the anchor. Defaults to 30. */
   contextLines?: number;
+  /** What a new file will contain. Ignored for anything but an `add`. */
+  outline?: PlannedOutline;
 }
 
 const DEFAULT_CONTEXT_LINES = 30;
@@ -116,7 +141,7 @@ export async function buildPlannedChange(
   };
 
   if (options.kind === "add") {
-    return base;
+    return options.outline ? { ...base, outline: options.outline } : base;
   }
 
   let text: string;

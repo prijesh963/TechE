@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–12 merged. The redesign is complete; what is below is
+**Status:** Phases 0–13 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -72,17 +72,28 @@ file has no indexed symbols", and neither is visible unless the developer looks
 for absence. Requiring a citation would instead punish honest uncertainty,
 which is the worse trade — but the asymmetry is real and unmeasured.
 
-### 1.6 Nothing bounds how much of a file an `add` implies
+### 1.6 Nothing checks the file against the outline it was approved under
 
-**Phase 11.** An added file has no snapshot, which is correct — there is
-nothing to quote. But it also means implementation writes it from the
-rationale alone, with no size, shape or interface agreed at plan time.
+**Phase 13.** The outline is passed to implementation as a contract, and
+`/review` compares the diff against the plan — but nothing compares the new
+file's actual exports to the ones the developer approved. A file that exports
+something else is not the file they said yes to, and nothing says so.
 
-**Cost:** the developer approves "new rules deciding who may approve" without
-seeing what that will be. For an update the plan shows the code; for an add it
-shows a sentence.
+**Cost:** the outline binds by persuasion rather than by check. The data to
+close this is already there: the index records what the written file declares,
+and the plan records what it should have.
 
-### 1.7 `/implement` regenerates whole files, with no dry run
+### 1.7 An outline describes shape, not behaviour
+
+**Phase 13.** `ApprovalPolicy, ApprovalDecision · ~80 lines` bounds how big a
+new file is and what it exposes. It says nothing about what those exports do.
+
+**Cost:** a developer approving an add still cannot tell a correct
+implementation from a plausible one — only an oversized or mis-shaped one.
+Going further means generating the file at plan time, which front-loads
+implementation into planning and pays for it again on every redraft.
+
+### 1.8 `/implement` regenerates whole files, with no dry run
 
 **Phase 4b.** The model is asked for complete replacement contents from the
 before-snapshot. There is no preview before writing.
@@ -91,7 +102,7 @@ before-snapshot. There is no preview before writing.
 safer, but needs the model to emit reliable diffs. Approval already gates the
 write, so a preview is a safety improvement rather than a missing gate.
 
-### 1.8 The CLI shell-outs are still subprocesses
+### 1.9 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

@@ -84,6 +84,49 @@ describe("buildPlannedChange", () => {
 
     expect(change.before).toBeUndefined();
     expect(change.beforeHash).toBeUndefined();
+    expect(change.outline).toBeUndefined();
+  });
+
+  it("carries an approved outline on a new file", async () => {
+    // An add has no snapshot to quote, so the outline is what the developer
+    // actually approved — and what implementation is held to.
+    const repoRoot = await createRepo({ "src/existing.ts": "export const a = 1;" });
+
+    const change = await buildPlannedChange({
+      repoRoot,
+      relativePath: "src/brand-new.ts",
+      kind: "add",
+      rationale: "New approval handler",
+      outline: {
+        exports: ["ApprovalHandler"],
+        dependsOn: ["src/existing.ts"],
+        estimatedLines: 60
+      }
+    });
+
+    expect(change.before).toBeUndefined();
+    expect(change.outline).toEqual({
+      exports: ["ApprovalHandler"],
+      dependsOn: ["src/existing.ts"],
+      estimatedLines: 60
+    });
+  });
+
+  it("ignores an outline on a file that already exists", async () => {
+    // An update shows real code; an outline there would be a second, weaker
+    // description of the same file competing with the snapshot.
+    const repoRoot = await createRepo({ "src/existing.ts": "export const a = 1;" });
+
+    const change = await buildPlannedChange({
+      repoRoot,
+      relativePath: "src/existing.ts",
+      kind: "update",
+      rationale: "holds the value this changes",
+      outline: { exports: ["Nonsense"], dependsOn: [] }
+    });
+
+    expect(change.outline).toBeUndefined();
+    expect(change.before).toBeDefined();
   });
 
   it("records the change without a snapshot when the file cannot be read", async () => {

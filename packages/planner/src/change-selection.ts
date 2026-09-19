@@ -17,7 +17,7 @@
 
 import path from "node:path";
 
-import type { ChangeKind } from "./plan-contract.js";
+import type { ChangeKind, PlannedOutline } from "./plan-contract.js";
 
 export interface SelectedChange {
   kind: ChangeKind;
@@ -239,5 +239,123 @@ function normalizeEvidenceSymbol(value: string | undefined): string | undefined 
 
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(bare) && bare.length <= 120
     ? bare
+    : undefined;
+}
+
+/** More exports than this from one new file is a module, not a file. */
+const MAX_OUTLINE_EXPORTS = 12;
+
+/** A file this long is not something a developer can review from a sentence. */
+const MAX_ESTIMATED_LINES = 2000;
+
+export interface ParseOutlinesOptions {
+  /** The `add` paths this plan proposes. An outline for anything else is noise. */
+  addPaths: Set<string>;
+  /**
+   * Every path the index knows. An outline's imports are checked against it:
+   * an import of a file that is not there means the outline was written about
+   * a different repository.
+   */
+  indexedPaths: Set<string>;
+}
+
+/**
+ * Reads outlines for the new files a plan proposes.
+ *
+ * An outline is what an `add` has instead of a `before` snapshot. It exists so
+ * the developer approves something concrete — what the file will export, what
+ * it will import, roughly how big it will be — rather than a sentence that
+ * could mean anything.
+ *
+ * Returned as a map because an outline that names no known `add` has nothing
+ * to attach to, and is dropped rather than creating a change the selection
+ * never chose.
+ */
+export function parseAddOutlines(
+  text: string,
+  options: ParseOutlinesOptions
+): Map<string, PlannedOutline> {
+  const outlines = new Map<string, PlannedOutline>();
+
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim().replace(/^[-*]\s*/, "");
+    if (!trimmed) continue;
+
+    // path | exports | files it imports | rough line count
+    const parts = trimmed.split("|").map((part) => part.trim());
+    if (parts.length < 2) continue;
+
+    const relativePath = normalizeSelectedPath(parts[0]);
+    if (!relativePath || !options.addPaths.has(relativePath)) continue;
+    if (outlines.has(relativePath)) continue;
+
+    const exports = splitList(parts[1])
+      .map(normalizeExportName)
+      .filter((name): name is string => name !== undefined)
+      .slice(0, MAX_OUTLINE_EXPORTS);
+
+    // An outline with nothing in it bounds nothing, and showing it would
+    // imply the add had been thought about when it had not.
+    if (exports.length === 0) continue;
+
+    // Imports are kept only where the file exists. A dependency on something
+    // that is not there is the outline describing a different repository, and
+    // showing it would put a false fact in front of the developer.
+    const dependsOn = splitList(parts[2])
+      .map((value) => normalizeSelectedPath(value))
+      .filter((value): value is string => value !== undefined)
+      .filter((value) => options.indexedPaths.has(value));
+
+    outlines.set(relativePath, {
+      exports,
+      dependsOn,
+      ...(parseEstimatedLines(parts[3]) !== undefined
+        ? { estimatedLines: parseEstimatedLines(parts[3]) }
+        : {})
+    });
+  }
+
+  return outlines;
+}
+
+/** One line for the plan, or `undefined` when there is nothing to say. */
+export function renderOutline(outline: PlannedOutline | undefined): string | undefined {
+  if (!outline) return undefined;
+
+  const parts = [`will export ${outline.exports.join(", ")}`];
+
+  if (outline.dependsOn.length > 0) {
+    parts.push(`imports ${outline.dependsOn.join(", ")}`);
+  }
+
+  if (outline.estimatedLines !== undefined) {
+    parts.push(`~${outline.estimatedLines} lines`);
+  }
+
+  return parts.join(" · ");
+}
+
+function splitList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function normalizeExportName(value: string): string | undefined {
+  const cleaned = value.replace(/^`|`$/g, "").replace(/\(\)$/, "").trim();
+
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(cleaned) && cleaned.length <= 120
+    ? cleaned
+    : undefined;
+}
+
+function parseEstimatedLines(value: string | undefined): number | undefined {
+  const digits = /(\d+)/.exec(value ?? "");
+  if (!digits) return undefined;
+
+  const lines = Number(digits[1]);
+  return Number.isInteger(lines) && lines > 0 && lines <= MAX_ESTIMATED_LINES
+    ? lines
     : undefined;
 }

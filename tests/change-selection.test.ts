@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_CHANGES,
   parseSelectedChanges,
+  parseAddOutlines,
+  renderOutline,
   selectByRelevance,
   verifySelectedChanges
 } from "../packages/planner/src/index.js";
@@ -349,5 +351,143 @@ describe("verifySelectedChanges", () => {
     );
 
     expect(change.evidence).toBe("not-checked");
+  });
+});
+
+describe("parseAddOutlines", () => {
+  const addPaths = new Set(["src/billing/ApprovalPolicy.ts"]);
+  const outlineIndexed = new Set([
+    "src/billing/InvoiceService.ts",
+    "src/billing/InvoiceState.ts"
+  ]);
+
+  it("reads what a new file will export, import and cost", () => {
+    const outlines = parseAddOutlines(
+      "src/billing/ApprovalPolicy.ts | ApprovalPolicy, ApprovalDecision | src/billing/InvoiceService.ts | 80",
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+
+    expect(outlines.get("src/billing/ApprovalPolicy.ts")).toEqual({
+      exports: ["ApprovalPolicy", "ApprovalDecision"],
+      dependsOn: ["src/billing/InvoiceService.ts"],
+      estimatedLines: 80
+    });
+  });
+
+  it("drops an import of a file that is not in the repository", () => {
+    // An outline importing something that does not exist was written about a
+    // different repository. Showing it would put a false fact in front of the
+    // developer at the moment they are deciding whether to approve.
+    const outlines = parseAddOutlines(
+      "src/billing/ApprovalPolicy.ts | ApprovalPolicy | src/billing/Imagined.ts, src/billing/InvoiceState.ts | 60",
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+
+    expect(outlines.get("src/billing/ApprovalPolicy.ts")?.dependsOn).toEqual([
+      "src/billing/InvoiceState.ts"
+    ]);
+  });
+
+  it("ignores an outline for a file the plan is not adding", () => {
+    const outlines = parseAddOutlines(
+      [
+        "src/billing/Unrelated.ts | Something | | 40",
+        "src/billing/ApprovalPolicy.ts | ApprovalPolicy | | 60"
+      ].join("\n"),
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+
+    expect([...outlines.keys()]).toEqual(["src/billing/ApprovalPolicy.ts"]);
+  });
+
+  it("drops an outline that exports nothing", () => {
+    // An outline with nothing in it bounds nothing, and rendering it would
+    // imply the add had been thought about when it had not.
+    const outlines = parseAddOutlines(
+      [
+        "src/billing/ApprovalPolicy.ts | | src/billing/InvoiceService.ts | 60",
+        "src/billing/ApprovalPolicy.ts | a sentence, not an identifier | | 60"
+      ].join("\n"),
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+
+    expect(outlines.size).toBe(0);
+  });
+
+  it("refuses a line count that is not a plausible file", () => {
+    const huge = parseAddOutlines(
+      "src/billing/ApprovalPolicy.ts | ApprovalPolicy | | 99999",
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+    const zero = parseAddOutlines(
+      "src/billing/ApprovalPolicy.ts | ApprovalPolicy | | 0",
+      {
+        addPaths,
+        indexedPaths: outlineIndexed
+      }
+    );
+
+    expect(huge.get("src/billing/ApprovalPolicy.ts")?.estimatedLines).toBeUndefined();
+    expect(zero.get("src/billing/ApprovalPolicy.ts")?.estimatedLines).toBeUndefined();
+  });
+
+  it("keeps the first outline when a file is described twice", () => {
+    const outlines = parseAddOutlines(
+      [
+        "src/billing/ApprovalPolicy.ts | ApprovalPolicy | | 60",
+        "src/billing/ApprovalPolicy.ts | SomethingElse | | 900"
+      ].join("\n"),
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+
+    expect(outlines.get("src/billing/ApprovalPolicy.ts")?.exports).toEqual([
+      "ApprovalPolicy"
+    ]);
+  });
+
+  it("caps the export list", () => {
+    const many = Array.from({ length: 30 }, (_, i) => `Export${i}`).join(", ");
+    const outlines = parseAddOutlines(
+      `src/billing/ApprovalPolicy.ts | ${many} | | 60`,
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+
+    expect(outlines.get("src/billing/ApprovalPolicy.ts")?.exports).toHaveLength(12);
+  });
+
+  it("ignores prose", () => {
+    const outlines = parseAddOutlines(
+      [
+        "Here is what the new file will contain:",
+        "It will export an approval policy class."
+      ].join("\n"),
+      { addPaths, indexedPaths: outlineIndexed }
+    );
+
+    expect(outlines.size).toBe(0);
+  });
+});
+
+describe("renderOutline", () => {
+  it("says what was agreed, in one line", () => {
+    expect(
+      renderOutline({
+        exports: ["ApprovalPolicy", "ApprovalDecision"],
+        dependsOn: ["src/billing/InvoiceService.ts"],
+        estimatedLines: 80
+      })
+    ).toBe(
+      "will export ApprovalPolicy, ApprovalDecision · imports src/billing/InvoiceService.ts · ~80 lines"
+    );
+  });
+
+  it("leaves out what was not said", () => {
+    expect(renderOutline({ exports: ["ApprovalPolicy"], dependsOn: [] })).toBe(
+      "will export ApprovalPolicy"
+    );
+  });
+
+  it("returns nothing when there is no outline", () => {
+    expect(renderOutline(undefined)).toBeUndefined();
   });
 });
