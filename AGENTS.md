@@ -120,7 +120,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               44 files, 443 tests
+├── tests/               44 files, 449 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -295,7 +295,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 443 tests must pass before merging.
+Use Vitest. All 449 tests must pass before merging.
 
 Cover:
 

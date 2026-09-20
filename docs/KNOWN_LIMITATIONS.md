@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–24 merged. The redesign is complete; what is below is
+**Status:** Phases 0–25 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -218,7 +218,17 @@ is not in the list is still invisible.
 and a symbol that is real but unextracted reads as a fabrication. The
 symbol-graph package parses TS/JS properly; the index does not use it.
 
-### 1.19 The CLI shell-outs are still subprocesses
+### 1.19 A large plan is a long scroll
+
+**Phase 25.** Every changed file's excerpt is shown inline. At the cap of
+twelve files and thirty lines of context either side, a plan can run to
+several hundred lines of chat.
+
+**Cost:** the code most worth reading is the hardest to reach. Collapsing
+them behind a button would fix the scroll and lose the point — an excerpt
+nobody opens is an excerpt nobody read.
+
+### 1.20 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

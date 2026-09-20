@@ -34,6 +34,7 @@
     "onCommand:copilotArchitect.moreActions",
     "onCommand:copilotArchitect.approvePlan",
     "onCommand:copilotArchitect.confirmDecision",
+    "onCommand:copilotArchitect.openPlannedFile",
     "onCommand:copilotArchitect.runValidation",
     "onCommand:copilotArchitect.showStagedDiff",
     "onCommand:copilotArchitect.applyChanges",
@@ -116,6 +117,10 @@
       {
         "command": "copilotArchitect.confirmDecision",
         "title": "Copilot Architect: Confirm Decision"
+      },
+      {
+        "command": "copilotArchitect.openPlannedFile",
+        "title": "Copilot Architect: Open Planned File"
       },
       {
         "command": "copilotArchitect.runValidation",

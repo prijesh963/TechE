@@ -72,6 +72,30 @@ selects from them, giving each file a reason and a kind:
 - **add** `src/billing/ApprovalPolicy.ts` — new rules deciding who may approve _(new file)_
 ```
 
+For every file it would change, the draft shows the code as it stands:
+
+```text
+- **update** `spring-petclinic-customers-service/.../PetResource.java` — handles pet creation _(lines 40–80 of 210)_
+
+    @PostMapping("/owners/{ownerId}/pets")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Pet processCreationForm(...) {
+      ...
+    }
+
+  [ Open .../PetResource.java ]
+```
+
+This is the excerpt implementation will work from, so seeing it is also how
+you find out whether the window caught the right lines — better now than when
+an edit cannot be produced. **Open** shows the whole file, because judging the
+window needs what is around it.
+
+There is no "after" here. What replaces this code is produced at
+`/implement`, where every change is diffed against your files before anything
+is written — generating it at plan time would front-load implementation into
+planning and pay for it again on every redraft.
+
 A path that the index has never seen is dropped rather than planned against:
 a file nobody has read cannot be snapshotted, and implementation would patch
 blind. A path that escapes the repository is refused at plan time, not at

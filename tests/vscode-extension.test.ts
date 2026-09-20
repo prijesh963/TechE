@@ -16,6 +16,7 @@ import {
   activate,
   buildCommandLmPrompt,
   buildLabel,
+  languageHint,
   createCliCommandLine,
   createDashboardHtml,
   STAGED_SCHEME,
@@ -1042,6 +1043,88 @@ async function writeWorkspace(workspaceRoot: string, repos: string[]): Promise<v
     "utf8"
   );
 }
+
+describe("showing code in the plan draft", () => {
+  it("highlights an excerpt by its file type", () => {
+    // The plan has carried the excerpt since it was built and only ever said
+    // how many lines it covered. Approving a file list is not the same as
+    // approving a change to code you have read.
+    expect(languageHint("src/billing/InvoiceService.java")).toBe("java");
+    expect(languageHint("src/app.tsx")).toBe("tsx");
+    expect(languageHint("config/application.yml")).toBe("yaml");
+  });
+
+  it("gives no hint rather than the wrong one", () => {
+    // A plain block beats the wrong colours, and an unknown extension is
+    // common in the repos this runs against.
+    expect(languageHint("mvnw")).toBe("");
+    expect(languageHint("Makefile")).toBe("");
+    expect(languageHint("src/data.parquet")).toBe("");
+  });
+
+  it("does not care about the case of the extension", () => {
+    expect(languageHint("SRC/Main.JAVA")).toBe("java");
+  });
+
+  it("opens nothing when the command is called without a path", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-openfile-"));
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.openPlannedFile")?.("");
+
+    expect(
+      fake.executeCommandCalls.some((call) => call.command === "vscode.open")
+    ).toBe(false);
+  });
+
+  it("opens the file the plan named", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-openfile-ok-"));
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.openPlannedFile")?.("src/Billing.java");
+
+    const opened = fake.executeCommandCalls.find(
+      (call) => call.command === "vscode.open"
+    );
+    expect(opened).toBeDefined();
+    expect(String((opened?.args[0] as { fsPath?: string })?.fsPath)).toContain(
+      path.join("src", "Billing.java")
+    );
+  });
+
+  it("contributes the command so the button resolves", async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(process.cwd(), "packages/vscode-extension/package.json"),
+        "utf8"
+      )
+    );
+    const ids = manifest.contributes.commands.map(
+      (c: { command: string }) => c.command
+    );
+
+    expect(ids).toContain("copilotArchitect.openPlannedFile");
+    expect(manifest.activationEvents).toContain(
+      "onCommand:copilotArchitect.openPlannedFile"
+    );
+  });
+});
 
 describe("build identity", () => {
   it("names the build in every answer's receipts", () => {

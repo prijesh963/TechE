@@ -912,6 +912,22 @@ export function activate(
         `Plan v${version} approved — run \`/implement\` when ready.`
       );
     }),
+    vscode.commands.registerCommand(OPEN_FILE_COMMAND, async (...args) => {
+      const relativePath = String(args[0] ?? "");
+      const fileUri = vscode.Uri?.file;
+
+      if (!relativePath || !fileUri) {
+        return;
+      }
+
+      // The whole file, not the excerpt: the excerpt is what implementation
+      // sees, and a developer checking whether it is the right window needs
+      // what is around it.
+      await vscode.commands.executeCommand?.(
+        "vscode.open",
+        fileUri(path.join(workspaceRoot, relativePath))
+      );
+    }),
     vscode.commands.registerCommand(RUN_VALIDATION_COMMAND, async () => {
       const channel = outputChannel;
       channel.appendLine("$ validation");
@@ -2126,6 +2142,8 @@ const MAX_PROPOSED_DECISIONS = 4;
 
 export const CONFIRM_DECISION_COMMAND = "copilotArchitect.confirmDecision";
 
+export const OPEN_FILE_COMMAND = "copilotArchitect.openPlannedFile";
+
 export const RUN_VALIDATION_COMMAND = "copilotArchitect.runValidation";
 
 export const SHOW_DIFF_COMMAND = "copilotArchitect.showStagedDiff";
@@ -2554,8 +2572,37 @@ async function runPlanPhase(
           ? `  ↳ ${outline}\n`
           : "  ↳ _no outline — you would be approving this description alone_\n"
       );
+      continue;
+    }
+
+    // The code as it stands, shown rather than described. The plan has
+    // carried this excerpt since it was built — it is what implementation
+    // will work from — and until now the draft only said how many lines it
+    // covered. Approving a file list is not the same as approving a change
+    // to code you have read.
+    //
+    // It also makes the excerpt window visible: if the lines that actually
+    // need changing are outside it, that is something to see now rather than
+    // discover when the edit cannot be produced.
+    if (change.before) {
+      stream.markdown(
+        `\n\`\`\`${languageHint(change.relativePath)}\n${change.before.text}\n\`\`\`\n`
+      );
+      stream.button?.({
+        command: OPEN_FILE_COMMAND,
+        title: `Open ${truncate(change.relativePath, 40)}`,
+        arguments: [change.relativePath]
+      });
+    } else {
+      stream.markdown(
+        "\n  ↳ _no snapshot — this file could not be read, so implementation would have nothing to work from_\n"
+      );
     }
   }
+
+  stream.markdown(
+    "\n_Above is the code as it stands. What replaces it is produced at `/implement`, where every change is diffed against your files before anything is written._\n"
+  );
 
   const unverified = selection.filter((choice) => choice.evidence === "unverified");
   if (unverified.length > 0) {
@@ -3120,6 +3167,40 @@ function summarizeValidation(result: { report: { results?: { status?: string }[]
     blocked: count("blocked"),
     timedOut: count("timed-out")
   };
+}
+
+/**
+ * The fence language for a path, so a quoted excerpt is highlighted rather
+ * than shown as plain text. Unknown extensions get no hint, which renders as
+ * a plain block instead of the wrong colours.
+ */
+export function languageHint(relativePath: string): string {
+  const byExtension: Record<string, string> = {
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".java": "java",
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".rb": "ruby",
+    ".cs": "csharp",
+    ".kt": "kotlin",
+    ".php": "php",
+    ".sql": "sql",
+    ".sh": "bash",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".json": "json",
+    ".xml": "xml",
+    ".html": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".md": "markdown"
+  };
+
+  return byExtension[path.extname(relativePath).toLowerCase()] ?? "";
 }
 
 function list(paths: string[]): string {
