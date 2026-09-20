@@ -15,6 +15,7 @@ import {
   DASHBOARD_VIEW_ID,
   activate,
   buildCommandLmPrompt,
+  buildLabel,
   createCliCommandLine,
   createDashboardHtml,
   STAGED_SCHEME,
@@ -1041,6 +1042,31 @@ async function writeWorkspace(workspaceRoot: string, repos: string[]): Promise<v
     "utf8"
   );
 }
+
+describe("build identity", () => {
+  it("names the build in every answer's receipts", () => {
+    // Every VSIX shipped as 0.1.0, so a developer re-testing a fix could not
+    // tell whether the extension running was the one they had just built. A
+    // fix verified in the repository looked broken in the editor, twice,
+    // because the old bundle was still installed and nothing said so.
+    expect(buildLabel()).toMatch(/^Build /);
+  });
+
+  it("says it is running from source rather than inventing a version", () => {
+    // From the repo there is no stamped manifest beside the bundle. Printing
+    // a version that means nothing is worse than saying which case this is.
+    expect(buildLabel()).toContain("from source");
+  });
+
+  it("shows the build on the dashboard", () => {
+    const html = createDashboardHtml({
+      workspaceRoot: "/workspace/repo",
+      mcpStatus: "stopped"
+    });
+
+    expect(html).toContain("Build");
+  });
+});
 
 describe("the analyze prompt", () => {
   it("sends the role, rather than computing it and dropping it", () => {

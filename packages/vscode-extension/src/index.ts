@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1593,6 +1593,12 @@ export function createDashboardHtml(state: ExtensionState): string {
       body: state.mcpStatus
     },
     {
+      // So a developer re-testing a fix can see which build is running
+      // without having to deduce it from behaviour.
+      title: "Build",
+      body: escapeHtml(EXTENSION_VERSION)
+    },
+    {
       title: "Agent insights",
       body: escapeHtml(formatAgentInsights(artifacts))
     }
@@ -2224,7 +2230,40 @@ async function buildReceipts(workspaceRoot: string): Promise<string> {
   }
 
   const repos = inventory.repos?.length ?? 1;
-  return `_Looked at ${inventory.totalFiles} files across ${repos} repo${repos === 1 ? "" : "s"}._`;
+  return `_Looked at ${inventory.totalFiles} files across ${repos} repo${repos === 1 ? "" : "s"}. ${buildLabel()}_`;
+}
+
+/**
+ * Which build produced this answer.
+ *
+ * Every VSIX shipped as 0.1.0, so a developer re-testing a fix could not tell
+ * whether the extension running was the one they had just built. A fix
+ * verified in the repository looked broken in the editor, twice, because the
+ * old bundle was still installed and nothing said so.
+ */
+export function buildLabel(): string {
+  return `Build ${EXTENSION_VERSION}.`;
+}
+
+/**
+ * Read from the manifest beside the bundled extension, which the packaging
+ * script stamps with the commit count. Unknown when running from source,
+ * where the manifest still carries the base version.
+ */
+const EXTENSION_VERSION = readExtensionVersion();
+
+function readExtensionVersion(): string {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const manifest = JSON.parse(
+      readFileSync(path.join(here, "package.json"), "utf8")
+    ) as { version?: string };
+    return manifest.version ?? "unknown";
+  } catch {
+    // Running from source, where the bundle's manifest is not beside this
+    // file. Saying so beats printing a version that means nothing.
+    return "from source";
+  }
 }
 
 /** Opens a session on first use rather than making setup a separate step. */

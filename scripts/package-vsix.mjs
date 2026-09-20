@@ -45,11 +45,25 @@ const manifest = JSON.parse(
   await readFile(path.join(extensionDir, "package.json"), "utf8")
 );
 
+/**
+ * A version that changes with the code.
+ *
+ * Every build shipped as 0.1.0, so VS Code had no reason to think an
+ * installed extension differed from a new one — and a developer re-testing a
+ * fix had no way to tell which build was actually running. A fix verified in
+ * the repository looked broken in the editor, twice, because the old bundle
+ * was still there.
+ *
+ * The patch number is the commit count, so it rises with every commit and is
+ * the same for everyone building the same tree.
+ */
+const buildInfo = describeBuild(rootDir, manifest.version);
+
 const staged = {
   name: "copilot-architect",
   displayName: manifest.displayName,
   description: manifest.description,
-  version: manifest.version,
+  version: buildInfo.version,
   publisher: manifest.publisher,
   license: "SEE LICENSE IN README.md",
   categories: manifest.categories,
@@ -110,8 +124,29 @@ run(
 );
 
 console.log(`\nVSIX: ${path.relative(rootDir, vsixPath)}`);
+console.log(`Build: ${buildInfo.version} (${buildInfo.commit})`);
 console.log("Install with: code --install-extension <path>, or");
 console.log("VS Code > Extensions > ... > Install from VSIX...");
+
+/**
+ * Version and commit for this build.
+ *
+ * Falls back to the manifest version outside a git checkout — a ZIP download
+ * has no history, and refusing to package there would break the path most
+ * teammates use.
+ */
+function describeBuild(root, baseVersion) {
+  const [major, minor] = baseVersion.split(".");
+  const git = (args) =>
+    spawnSync("git", args, { cwd: root, encoding: "utf8" }).stdout?.trim();
+
+  const count = git(["rev-list", "--count", "HEAD"]);
+  const commit = git(["rev-parse", "--short", "HEAD"]);
+
+  return count && commit
+    ? { version: `${major}.${minor}.${count}`, commit }
+    : { version: baseVersion, commit: "no git history" };
+}
 
 function run(command, args, cwd = rootDir) {
   const result = spawnSync(command, args, { cwd, stdio: "inherit", shell: false });
