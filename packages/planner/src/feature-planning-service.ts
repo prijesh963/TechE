@@ -713,7 +713,14 @@ const INTEGRATION_GUIDANCE: Record<string, string> = {
   "single-spa":
     "single-spa: registered applications are mounted at runtime; check the registration config and cross-app shared state before changing an app's public surface.",
   OpenFeign:
-    "OpenFeign: a REST contract change breaks the Feign client interface in calling services — update both sides and their tests together."
+    "OpenFeign: a REST contract change breaks the Feign client interface in calling services — update both sides and their tests together.",
+  Kubernetes:
+    "Kubernetes: a code change to env vars, config, ports, or readiness/liveness behavior needs a matching change to the Deployment/Service manifest — the two drift independently unless updated together.",
+  "Docker Compose":
+    "Docker Compose: service definitions (ports, env, volumes, depends_on) are a contract with the code that reads them — check the compose file alongside a config or startup change.",
+  Nx: "Nx: check the workspace's own project graph (`nx graph`, or a project's `implicitDependencies`) for what else depends on the project being changed before assuming the change is isolated.",
+  Turborepo:
+    "Turborepo: check turbo.json's task dependsOn graph for what else in the workspace depends on the project being changed before assuming the change is isolated."
 };
 
 const CATEGORY_GUIDANCE: Record<string, string> = {
@@ -724,7 +731,14 @@ const CATEGORY_GUIDANCE: Record<string, string> = {
   "micro-frontend":
     "Micro-frontend: changes cross application boundaries at runtime; confirm which host or remote owns the change and how versions are aligned.",
   microservice:
-    "Microservice platform: an API change ripples to callers, gateway routes and service registration — enumerate the calling services before changing a contract."
+    "Microservice platform: an API change ripples to callers, gateway routes and service registration — enumerate the calling services before changing a contract.",
+  // Helm relies on this baseline rather than a name-specific entry — same
+  // precedent as "Web Components" under micro-frontend: not every detected
+  // name needs its own line, and the category still guarantees one.
+  orchestration:
+    "Deployment topology: check the manifest or compose file for the service alongside the code — ports, environment variables, resource limits and inter-service links can silently drift from what the code now needs.",
+  "monorepo-tooling":
+    "Monorepo build graph: other projects in this repo may depend on the one being changed — check the build tool's own dependency graph, not just imports, before assuming the change is isolated."
 };
 
 function createIntegrationGuidance(integrations: IntegrationInfo[]): string[] {

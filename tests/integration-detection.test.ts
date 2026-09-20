@@ -102,3 +102,90 @@ describe("detectIntegrations", () => {
     ).toEqual([]);
   });
 });
+
+describe("orchestration and monorepo build tooling", () => {
+  it("detects Kubernetes from manifest content, wherever the file lives", () => {
+    // Manifests live under all sorts of folder names in practice, so this
+    // has to work without a canonical path.
+    const [detected] = detectIntegrations([
+      file("config/api-deploy.yaml", "apiVersion: apps/v1\nkind: Deployment\n")
+    ]);
+    expect(detected).toMatchObject({
+      name: "Kubernetes",
+      category: "orchestration",
+      confidence: "high"
+    });
+  });
+
+  it("detects Kubernetes from a canonical path alone, with no text captured", () => {
+    // The whole point of a path signal: a file the scan never read the
+    // content of is still identified by its name, the same way `pom.xml`
+    // implies Maven without reading it.
+    expect(names([{ path: "k8s/service.yaml" } as unknown as AdapterFile])).toContain(
+      "Kubernetes"
+    );
+  });
+
+  it("does not treat a bare 'kind' field as Kubernetes", () => {
+    // `kind` is a common field name outside Kubernetes too. Only a real
+    // Kubernetes resource kind should count.
+    expect(names([file("config/app.yaml", "kind: custom\nname: something\n")])).toEqual(
+      []
+    );
+  });
+
+  it("detects Helm by its required Chart.yaml, and Kubernetes alongside it", () => {
+    // A Helm chart genuinely is a Kubernetes deployment — both names are
+    // correct for the same file, not a duplicate.
+    const detected = names([
+      file("charts/api/Chart.yaml", "apiVersion: v2\nname: api\nversion: 0.1.0\n")
+    ]);
+    expect(detected).toEqual(expect.arrayContaining(["Helm", "Kubernetes"]));
+  });
+
+  it("detects Docker Compose by filename, including a compose override", () => {
+    expect(names([file("docker-compose.yml", "services:\n  api: {}\n")])).toContain(
+      "Docker Compose"
+    );
+    expect(names([file("docker-compose.override.yaml", "services: {}")])).toContain(
+      "Docker Compose"
+    );
+    expect(names([file("compose.yml", "services: {}")])).toContain("Docker Compose");
+  });
+
+  it("detects Nx by nx.json, and by the workspace dependency without it", () => {
+    expect(names([file("nx.json", "{}")])).toContain("Nx");
+    expect(
+      names([file("package.json", '{"devDependencies":{"@nx/workspace":"18.0.0"}}')])
+    ).toContain("Nx");
+  });
+
+  it("detects Turborepo by turbo.json, and by the devDependency without it", () => {
+    expect(names([file("turbo.json", '{"pipeline":{}}')])).toContain("Turborepo");
+    expect(
+      names([file("package.json", '{"devDependencies":{"turbo":"^2.0.0"}}')])
+    ).toContain("Turborepo");
+  });
+
+  it("categorizes the new detections correctly", () => {
+    const [k8s] = detectIntegrations([file("k8s/deploy.yaml", "kind: Deployment\n")]);
+    expect(k8s.category).toBe("orchestration");
+
+    const [nx] = detectIntegrations([file("nx.json", "{}")]);
+    expect(nx.category).toBe("monorepo-tooling");
+  });
+
+  it("a Compose-flavored MFE + microservices repo composes from independent signals", () => {
+    // The point of the whole detector: an arbitrary real-world combination —
+    // here, a Module Federation frontend deployed alongside Feign-based
+    // services under Compose — needs no special case.
+    const detected = names([
+      file("webpack.config.js", "new ModuleFederationPlugin({ remotes: {} })"),
+      file("services/orders/Client.java", '@FeignClient(name = "orders")'),
+      file("docker-compose.yml", "services:\n  gateway: {}\n  orders: {}\n")
+    ]);
+    expect(detected).toEqual(
+      expect.arrayContaining(["Module Federation", "OpenFeign", "Docker Compose"])
+    );
+  });
+});

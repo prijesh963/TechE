@@ -143,12 +143,14 @@ detection answers "what does it talk to", and runs as one pass over all files
 rather than per adapter — the same broker shows up in a Maven pom, an npm
 `package.json`, a `requirements.txt` or a Spring `application.properties`.
 
-| Category           | Detected                                                                |
-| ------------------ | ----------------------------------------------------------------------- |
-| **Datastore**      | Oracle, MongoDB, PostgreSQL, MySQL, SQL Server, Redis                   |
-| **Messaging**      | Kafka, IBM MQ, JMS, ActiveMQ, RabbitMQ                                  |
-| **Micro-frontend** | Module Federation, single-spa, Web Components                           |
-| **Microservice**   | Spring Cloud, Service Discovery (Eureka/Consul), API Gateway, OpenFeign |
+| Category             | Detected                                                                |
+| -------------------- | ----------------------------------------------------------------------- |
+| **Datastore**        | Oracle, MongoDB, PostgreSQL, MySQL, SQL Server, Redis                   |
+| **Messaging**        | Kafka, IBM MQ, JMS, ActiveMQ, RabbitMQ                                  |
+| **Micro-frontend**   | Module Federation, single-spa, Web Components                           |
+| **Microservice**     | Spring Cloud, Service Discovery (Eureka/Consul), API Gateway, OpenFeign |
+| **Orchestration**    | Kubernetes, Helm, Docker Compose                                        |
+| **Monorepo tooling** | Nx, Turborepo                                                           |
 
 Because these compose, **arbitrary combinations need no special case**: a
 "Java + Oracle + Kafka + IBM MQ" service is the Java adapter plus three
@@ -159,6 +161,20 @@ combination it can appear in.
 Confidence is evidence-based: a declared dependency, driver class or connection
 URL yields `high`; a bare keyword mention yields `medium`. Documentation files
 are excluded — a README mentioning Kafka is not evidence the service uses it.
+
+Orchestration and monorepo tooling are also detected by canonical filename —
+`nx.json`, `turbo.json`, `docker-compose.yml`, `Chart.yaml` — the same
+precedent as a Java adapter treating `pom.xml` itself as high-confidence
+evidence for Maven, since a scan that never read the file's content still
+knows what it is called. Kubernetes additionally checks manifest content
+(`apiVersion` plus a real resource `kind`), since real manifests live under
+all sorts of folder names in practice.
+
+This is what catches a microservices or micro-frontend repo that is not
+built on Spring Cloud or Module Federation at all — plain services wired
+together by Kubernetes/Compose, or several frontends wired together by
+Nx/Turborepo, is the more common shape outside the Java and webpack
+ecosystems specifically.
 
 Detected integrations appear in `repo-map.json` under `integrations`, and the
 Feature Planner, FeatureImplementer and CodeReviewer agents are instructed to
@@ -174,8 +190,13 @@ Feign),
 `ibm-messaging/mq-dev-patterns` (IBM MQ, JMS),
 `oracle-samples/oracle-db-examples` (Oracle),
 `spring-guides/gs-accessing-data-mongodb` (MongoDB),
-`module-federation/module-federation-examples` (Module Federation), and
-`tiangolo/full-stack-fastapi-template` (FastAPI + React + PostgreSQL).
+`module-federation/module-federation-examples` (Module Federation),
+`tiangolo/full-stack-fastapi-template` (FastAPI + React + PostgreSQL),
+`vercel/turborepo` (Turborepo's own `turbo.json`, and Module Federation and
+Redis found incidentally inside it),
+`docker/awesome-compose` (Docker Compose),
+`kubernetes/examples` (raw Kubernetes manifests, not curated fixtures), and
+`nrwl/nx-examples` (Nx).
 
 ---
 

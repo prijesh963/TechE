@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–33 merged. The redesign is complete; what is below is
+**Status:** Phases 0–34 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -502,6 +502,29 @@ mistake this module exists to prevent.
 
 **Phase 6.** `/create-plan` and `/review` produce claims about the repo too and
 do not verify them.
+
+### 4.12 Orchestration and monorepo-tooling detection stops at "present"
+
+**Phase 34.** Kubernetes, Helm, Docker Compose, Nx and Turborepo are detected —
+by content where a signal exists, by canonical filename otherwise — but
+detection stops at naming the tool. It does not read what `nx.json`'s
+`implicitDependencies` or `turbo.json`'s task `dependsOn` actually say, so the
+plan cannot answer "which other projects depend on the one being changed" —
+only tell the developer to go check the tool's own graph themselves. The
+planner guidance for Nx and Turborepo says exactly this rather than pretending
+otherwise.
+
+**Cost:** the one thing that would make this genuinely prevent the "looked
+isolated but wasn't" failure — a real project dependency graph, the same
+depth the symbol graph already gives TS/JS and Java — is not there yet for
+the monorepo build graph. Detecting presence was the tractable first step;
+parsing the graph is a second one.
+
+Docker Compose also has no content signal at all (`strong: []`), relying
+entirely on its canonical filename. A file merely named `docker-compose.yml`
+with unrelated content would still be flagged — accepted because the
+filename is unambiguous in practice, the same trade the Java adapter already
+makes by treating `pom.xml` alone as high-confidence Maven evidence.
 
 ---
 

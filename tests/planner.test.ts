@@ -164,6 +164,32 @@ describe("FeaturePlanningService", () => {
     expect(guidance).toContain("Detected integrations to account for");
   });
 
+  it("surfaces orchestration and monorepo-tooling guidance too", async () => {
+    const repoRoot = await createRepo({
+      "nx.json": "{}",
+      "docker-compose.yml": "services:\n  api: {}\n",
+      "k8s/deploy.yaml": "apiVersion: apps/v1\nkind: Deployment\n",
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/index.ts": "export const add = (a: number, b: number) => a + b;"
+    });
+
+    const { plan } = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      strictRoot: true,
+      request: "Add a subtract helper"
+    });
+    const guidance = plan.stackSpecificPlan.integrations.join("\n");
+
+    expect(guidance).toContain("Kubernetes");
+    expect(guidance).toContain("Docker Compose");
+    expect(guidance).toContain("Nx");
+    // Kubernetes and Docker Compose have their own lines; Nx relies on the
+    // category baseline, same precedent as Web Components under
+    // micro-frontend — not every detected name needs its own entry.
+    expect(guidance).toContain("Deployment topology");
+    expect(guidance).toContain("Monorepo build graph");
+  });
+
   it("leaves integration guidance empty when the repo has none", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),

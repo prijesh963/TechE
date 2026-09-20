@@ -16,7 +16,9 @@ interface IntegrationSignal {
   ecosystem: string;
   /**
    * Strong signals (a declared dependency, a driver class, a connection URL)
-   * are enough on their own for high confidence.
+   * are enough on their own for high confidence. Content-only, so it stays
+   * `[]` for a signal that is identified by its filename instead — see
+   * `strongPath`.
    */
   strong: RegExp[];
   /**
@@ -24,6 +26,15 @@ interface IntegrationSignal {
    * produce a medium-confidence result, and only when no strong signal matched.
    */
   weak?: RegExp[];
+  /**
+   * Matched against the file's path rather than its content, and checked over
+   * every scanned file, not only the ones with readable text — a canonical
+   * name like `nx.json` or `docker-compose.yml` is evidence on its own,
+   * whether or not the scan captured what is inside it. Same precedent as
+   * `context.hasFile("pom.xml")` elsewhere in the adapters: some markers are
+   * the filename, not a pattern inside it.
+   */
+  strongPath?: RegExp[];
 }
 
 const INTEGRATION_SIGNALS: IntegrationSignal[] = [
@@ -225,6 +236,71 @@ const INTEGRATION_SIGNALS: IntegrationSignal[] = [
     category: "microservice",
     ecosystem: "java",
     strong: [/openfeign/i, /@FeignClient/]
+  },
+
+  // --- Orchestration ----------------------------------------------------------
+  // How services are wired and deployed together, not how one is written. A
+  // repo can be microservice-shaped without Spring Cloud at all — plain
+  // services behind Kubernetes or Compose is the more common case outside
+  // the Java ecosystem — so this is what actually catches that shape.
+  {
+    name: "Kubernetes",
+    category: "orchestration",
+    ecosystem: "any",
+    strongPath: [
+      /(^|\/)(k8s|kubernetes|manifests?)\/.*\.ya?ml$/i,
+      /(^|\/)kustomization\.ya?ml$/i
+    ],
+    // Manifests live under all sorts of folder names in practice, so content
+    // matters here too: `apiVersion` is close to unique to Kubernetes/Helm
+    // YAML, and `kind` is checked against a real Kubernetes resource list
+    // rather than left bare — a config file can have an unrelated `kind`
+    // field for something else entirely.
+    strong: [
+      /^apiVersion:\s*\S+/m,
+      /^kind:\s*(Deployment|Service|StatefulSet|DaemonSet|Ingress|Job|CronJob|Namespace|ConfigMap|ReplicaSet|PersistentVolumeClaim)\s*$/m
+    ]
+  },
+  {
+    name: "Helm",
+    category: "orchestration",
+    ecosystem: "any",
+    // Chart.yaml is Helm's own required, canonical file — as reliable a
+    // marker as pom.xml is for Maven.
+    strongPath: [/(^|\/)Chart\.ya?ml$/i],
+    strong: [/helm\.sh\/chart/i]
+  },
+  {
+    name: "Docker Compose",
+    category: "orchestration",
+    ecosystem: "any",
+    strongPath: [
+      /(^|\/)docker-compose(\.[\w.-]+)?\.ya?ml$/i,
+      /(^|\/)compose(\.[\w.-]+)?\.ya?ml$/i
+    ],
+    // No reliable content signal without parsing YAML — `services:` alone is
+    // too generic to trust on its own — so this relies on the filename,
+    // which in practice is unambiguous.
+    strong: []
+  },
+
+  // --- Monorepo build tooling -------------------------------------------------
+  // Wires multiple projects — several micro-frontends, or several services —
+  // together in one repo with a real dependency graph between them, which is
+  // exactly the thing "the change looked isolated but wasn't" comes from.
+  {
+    name: "Nx",
+    category: "monorepo-tooling",
+    ecosystem: "node",
+    strongPath: [/(^|\/)nx\.json$/i],
+    strong: [/"@nx\/workspace"|"@nrwl\/workspace"/, /"nx":\s*\{/]
+  },
+  {
+    name: "Turborepo",
+    category: "monorepo-tooling",
+    ecosystem: "node",
+    strongPath: [/(^|\/)turbo\.json$/i],
+    strong: [/"turbo":\s*"[\^~]?\d/]
   }
 ];
 
@@ -250,29 +326,39 @@ export function detectIntegrations(files: AdapterFile[]): IntegrationInfo[] {
   const detected: IntegrationInfo[] = [];
 
   for (const signal of INTEGRATION_SIGNALS) {
-    const strongEvidence: string[] = [];
-    const weakEvidence: string[] = [];
+    const strongEvidence = new Set<string>();
+    const weakEvidence = new Set<string>();
+
+    // Path signals run over every scanned file, not only the ones with
+    // readable text — see the strongPath doc comment on IntegrationSignal.
+    if (signal.strongPath) {
+      for (const file of files) {
+        if (signal.strongPath.some((pattern) => pattern.test(file.path))) {
+          strongEvidence.add(file.path);
+        }
+      }
+    }
 
     for (const file of scannable) {
       const text = file.text as string;
       if (signal.strong.some((pattern) => pattern.test(text))) {
-        strongEvidence.push(file.path);
+        strongEvidence.add(file.path);
       } else if (signal.weak?.some((pattern) => pattern.test(text))) {
-        weakEvidence.push(file.path);
+        weakEvidence.add(file.path);
       }
     }
 
-    if (strongEvidence.length === 0 && weakEvidence.length === 0) {
+    if (strongEvidence.size === 0 && weakEvidence.size === 0) {
       continue;
     }
 
-    const isStrong = strongEvidence.length > 0;
+    const isStrong = strongEvidence.size > 0;
     detected.push({
       name: signal.name,
       category: signal.category,
       ecosystem: signal.ecosystem,
       confidence: isStrong ? "high" : "medium",
-      evidence: (isStrong ? strongEvidence : weakEvidence)
+      evidence: [...(isStrong ? strongEvidence : weakEvidence)]
         .slice(0, MAX_EVIDENCE_FILES)
         .sort()
     });

@@ -111,7 +111,12 @@ export interface FrameworkInfo {
  * without adding a detector per combination.
  */
 export type IntegrationCategory =
-  "datastore" | "messaging" | "micro-frontend" | "microservice";
+  | "datastore"
+  | "messaging"
+  | "micro-frontend"
+  | "microservice"
+  | "orchestration"
+  | "monorepo-tooling";
 
 export interface IntegrationInfo {
   /** e.g. "Oracle", "MongoDB", "Kafka", "IBM MQ", "Module Federation". */

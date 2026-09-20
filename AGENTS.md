@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 498 tests
+├── tests/               48 files, 508 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -198,6 +198,14 @@ the other. If a shell needs repo intelligence, it imports the service.
 20. Advanced intelligence: architecture detection, route/API detection, test
     relationships, risk scoring.
 21. VSIX packaging, internal setup docs, npm link support.
+22. Integration detection: datastores, messaging, micro-frontend platforms,
+    microservice platforms, deployment orchestration (Kubernetes, Helm,
+    Docker Compose) and monorepo build tooling (Nx, Turborepo) — detected
+    independently of language/framework, so an arbitrary combination composes
+    without a detector per combination. Each detection carries its own risk
+    guidance into `/create-plan`, and a detection with no guidance of its own
+    still gets its category's baseline, so a new detector is never
+    plan-silent.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -221,6 +229,23 @@ so a declaration is found because the grammar says it is one. Both measured
 zero symbols per file before this: not silence, but every true claim about
 them reported as a fabrication. Every other language keeps the pattern
 list unchanged.
+
+### Architecture-level integration detection
+
+Detected by content or by canonical filename (`nx.json` is evidence the same
+way `pom.xml` is), independently of the language/framework adapters:
+
+- **Datastores** — Oracle, MongoDB, PostgreSQL, MySQL, SQL Server, Redis.
+- **Messaging** — Kafka, IBM MQ, JMS, ActiveMQ, RabbitMQ.
+- **Micro-frontend** — Module Federation, single-spa, Web Components.
+- **Microservice platform** — Spring Cloud, service discovery, API Gateway,
+  OpenFeign.
+- **Orchestration** — Kubernetes, Helm, Docker Compose.
+- **Monorepo build tooling** — Nx, Turborepo.
+
+A plain-service repo behind Kubernetes or Compose, or a monorepo wired
+together by Nx or Turborepo, is a common shape outside the Java ecosystem
+that Spring Cloud detection alone would miss — this is what catches it.
 
 ### Extended validation allowlist
 
@@ -311,7 +336,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 498 tests must pass before merging.
+Use Vitest. All 508 tests must pass before merging.
 
 Cover:
 
@@ -341,6 +366,9 @@ Cover:
   declining a language so the pattern list still runs)
 - multi-repo path resolution (unique suffix, ambiguity, segment boundaries)
 - feature planning (JSON + Markdown output)
+- integration detection (datastore/messaging/micro-frontend/microservice/
+  orchestration/monorepo-tooling, by content and by canonical filename, and
+  the risk guidance each carries into a plan)
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
 - MCP tools (all 30 tools)
