@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–29 merged. The redesign is complete; what is below is
+**Status:** Phases 0–31 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -522,21 +522,16 @@ per install is.
 during graph builds only. Marking `typescript` external would not help — it
 would ship the same bytes as `node_modules`.
 
-### 5.8 The test suite leaks a temp directory per fixture
+### 5.8 Fixtures still accumulate within a single run
 
-**Found in Phase 28.** 110 `mkdtemp` calls across 33 test files; two clean up
-after themselves. A machine that has run the suite a few dozen times carries
-thousands of abandoned fixture directories — this one had 2,700, holding
-**14 GB**, which was most of the 22 GB in use on the volume.
+**Phase 31.** The run's temp root is removed when the run ends, so nothing
+survives it. During the run, every fixture any test makes is still there:
+234 directories by the end, none reclaimed until teardown.
 
-**Cost:** disk, first of all — a developer who runs the suite regularly loses
-gigabytes to it and has nothing pointing at the cause. It is also the best
-explanation for an intermittent failure in the sample matrix, whose
-copy-heavy test failed once here and then passed on four consecutive runs;
-the samples are copied per fixture and never reclaimed. That matters more now
-than it did: the release workflow gates a published build on this suite, so a
-flake is a release that did not happen. Fixing it is mechanical but touches 33
-files, so it was left rather than folded into a packaging change.
+**Cost:** none on disk, which is why it was left. It does mean a very long
+run holds everything it has ever made, so a suite that grew ten-fold would
+feel it before the teardown arrived. Per-test cleanup would fix it and put
+back the obligation to remember, which is what the run root exists to remove.
 
 ---
 
@@ -626,3 +621,4 @@ Kept so the record shows what was traded and when.
 | Nothing ever called `recordDecision`                   | Phase 1   | Phase 9 — proposals confirmed from `/create-plan` |
 | A change of mind left two decisions active             | Phase 9   | Phase 10 — proposals carry what they replace      |
 | `templates/agents/` left empty after Phase 5           | Phase 5   | Phase 8 — directory removed                       |
+| Test suite leaked a temp directory per fixture         | Phase 28  | Phase 31 — one temp root per run, removed at end  |
