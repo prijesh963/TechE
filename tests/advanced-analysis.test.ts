@@ -8,9 +8,15 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "../packages/cli/src/index.js";
-import { AdvancedAnalysisService } from "../packages/core/src/index.js";
+import {
+  AdvancedAnalysisService,
+  WorkspaceService
+} from "../packages/core/src/index.js";
 import { FeaturePlanningService } from "../packages/planner/src/index.js";
-import { getArtifactDirectoryPath } from "../packages/shared/src/index.js";
+import {
+  CURRENT_SCHEMA_VERSION,
+  getArtifactDirectoryPath
+} from "../packages/shared/src/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -362,6 +368,140 @@ describe("Phase 21 advanced intelligence", () => {
     expect(missingTestRisk?.reasons.join(" ")).toContain("untested hotspots");
   });
 });
+
+describe("multi-repo advanced analysis", () => {
+  it("analyzes every registered repo, not only the first (repos[0] regression)", async () => {
+    const fixture = await createMultiRepoWorkspaceFixture();
+    const workspaceService = new WorkspaceService();
+
+    await workspaceService.createWorkspaceMap({ startPath: fixture.workspaceRoot });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    // Routes from BOTH repos must be present, not only api-repo (repos[0]).
+    expect(analysis.routes).toContainEqual(
+      expect.objectContaining({
+        routePath: "/invoices",
+        repoName: "api-repo"
+      })
+    );
+    expect(
+      analysis.architecturePatterns.some((pattern) => pattern.repoName === "web-repo")
+    ).toBe(true);
+
+    // Test relationships from both repos, each tagged with its own repo.
+    const relationshipRepoNames = new Set(
+      analysis.testRelationships.map((relationship) => relationship.repoName)
+    );
+    expect(relationshipRepoNames.has("api-repo")).toBe(true);
+    expect(relationshipRepoNames.has("web-repo")).toBe(true);
+    expect(
+      analysis.testRelationships.some(
+        (relationship) =>
+          relationship.repoName === "api-repo" &&
+          relationship.sourceFile === "src/server.ts" &&
+          relationship.testFile === "src/server.test.ts"
+      )
+    ).toBe(true);
+
+    // Risk scores are computed per repo, tagged, and merged.
+    expect(
+      analysis.riskScores.filter((risk) => risk.category === "security")
+    ).toHaveLength(2);
+    expect(
+      analysis.riskScores.some(
+        (risk) => risk.category === "security" && risk.repoName === "api-repo"
+      )
+    ).toBe(true);
+    expect(
+      analysis.riskScores.some(
+        (risk) => risk.category === "security" && risk.repoName === "web-repo"
+      )
+    ).toBe(true);
+
+    // A polyrepo workspace (physically separate repos) is not evidence that
+    // any single member of it is itself a monorepo.
+    expect(
+      analysis.architecturePatterns.some((pattern) => pattern.name === "monorepo")
+    ).toBe(false);
+
+    // Repo-map/index freshness is a workspace-wide artifact, checked once —
+    // not once per registered repo.
+    expect(
+      analysis.diagnostics.filter((diagnostic) => diagnostic.code === "STALE_INDEX")
+    ).toHaveLength(1);
+    expect(analysis.diagnostics.find((d) => d.code === "STALE_INDEX")?.repoName).toBe(
+      undefined
+    );
+
+    expect(analysis.repoRoot).toBe(fixture.workspaceRoot);
+  });
+});
+
+async function createMultiRepoWorkspaceFixture(): Promise<{
+  workspaceRoot: string;
+  apiRepo: string;
+  webRepo: string;
+}> {
+  const parent = await mkdtemp(path.join(tmpdir(), "copilot-advanced-workspace-"));
+  const workspaceRoot = path.join(parent, "workspace");
+  const apiRepo = path.join(parent, "api-repo");
+  const webRepo = path.join(parent, "web-repo");
+
+  await mkdir(workspaceRoot, { recursive: true });
+  await createRepoAt(apiRepo, {
+    "package.json": JSON.stringify({
+      scripts: { build: "tsc", test: "vitest run" },
+      dependencies: { express: "^4.18.0" }
+    }),
+    "src/server.ts":
+      "import express from 'express'; const app = express(); app.get('/invoices', handler);",
+    "src/server.test.ts": "test('server', () => {})"
+  });
+  await createRepoAt(webRepo, {
+    "package.json": JSON.stringify({
+      scripts: { build: "vite build", test: "vitest run" },
+      dependencies: { react: "^18.2.0" }
+    }),
+    "src/App.tsx": "export function App() { return null; }",
+    "src/App.test.tsx": "test('app', () => {})"
+  });
+  await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+  await writeFile(
+    path.join(workspaceRoot, ".copilot-architect", "workspace.json"),
+    JSON.stringify(
+      {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        workspaceName: "Multi Repo Workspace",
+        workspaceRoot,
+        artifactRoot: path.join(workspaceRoot, ".copilot-architect"),
+        repos: [
+          { name: "api-repo", path: apiRepo, role: "backend" },
+          { name: "web-repo", path: webRepo, role: "frontend" }
+        ],
+        repoRoots: []
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  return { workspaceRoot, apiRepo, webRepo };
+}
+
+async function createRepoAt(
+  repoRoot: string,
+  files: Record<string, string>
+): Promise<void> {
+  for (const [relativePath, contents] of Object.entries(files)) {
+    const fullPath = path.join(repoRoot, relativePath);
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    await writeFile(fullPath, contents, "utf8");
+  }
+}
 
 async function createRepo(files: Record<string, string>): Promise<string> {
   const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-advanced-"));

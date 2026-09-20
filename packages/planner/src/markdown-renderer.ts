@@ -44,7 +44,7 @@ export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
     renderBullets(
       plan.advancedAnalysis.architecturePatterns.map(
         (pattern) =>
-          `${pattern.name} (${pattern.confidence}): ${pattern.evidence.join(", ")}`
+          `${withRepoPrefix(pattern.repoName)}${pattern.name} (${pattern.confidence}): ${pattern.evidence.join(", ")}`
       )
     ),
     "",
@@ -52,19 +52,18 @@ export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
     renderBullets(
       plan.advancedAnalysis.routes.map(
         (route) =>
-          `${route.kind} ${route.method} ${route.routePath} in \`${route.filePath}\``
+          `${withRepoPrefix(route.repoName)}${route.kind} ${route.method} ${route.routePath} in \`${route.filePath}\``
       )
     ),
     "",
     "## Test Relationships",
     renderBullets(
-      plan.advancedAnalysis.testRelationships
-        .slice(0, 12)
-        .map((relationship) =>
-          relationship.testFile
-            ? `${relationship.kind}: \`${relationship.sourceFile}\` -> \`${relationship.testFile}\``
-            : `${relationship.kind}: \`${relationship.sourceFile}\` has no nearby test`
-        )
+      plan.advancedAnalysis.testRelationships.slice(0, 12).map((relationship) => {
+        const prefix = withRepoPrefix(relationship.repoName);
+        return relationship.testFile
+          ? `${prefix}${relationship.kind}: \`${relationship.sourceFile}\` -> \`${relationship.testFile}\``
+          : `${prefix}${relationship.kind}: \`${relationship.sourceFile}\` has no nearby test`;
+      })
     ),
     "",
     "## Endpoints To Touch",
@@ -197,6 +196,11 @@ function renderBullets(values: string[]): string {
   }
 
   return values.map((value) => `- ${value}`).join("\n");
+}
+
+// Absent for single-repo analysis, so a single-repo plan reads unchanged.
+function withRepoPrefix(repoName: string | undefined): string {
+  return repoName ? `${repoName}: ` : "";
 }
 
 function renderNumbered(values: string[]): string {

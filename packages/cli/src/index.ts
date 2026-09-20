@@ -3077,7 +3077,7 @@ function getDiagnosticsText(result: RepoReadinessReport): string {
     ...listOrNone(
       analysis.architecturePatterns.map(
         (pattern) =>
-          `${pattern.name} (${pattern.confidence}) - ${pattern.evidence.join(", ")}`
+          `${withRepoPrefix(pattern.repoName)}${pattern.name} (${pattern.confidence}) - ${pattern.evidence.join(", ")}`
       )
     ),
     "",
@@ -3087,14 +3087,15 @@ function getDiagnosticsText(result: RepoReadinessReport): string {
         .slice(0, 20)
         .map(
           (route) =>
-            `${route.kind} ${route.method} ${route.routePath} - ${route.filePath}`
+            `${withRepoPrefix(route.repoName)}${route.kind} ${route.method} ${route.routePath} - ${route.filePath}`
         )
     ),
     "",
     "Risk scores:",
     ...listOrNone(
       analysis.riskScores.map(
-        (risk) => `${risk.category}: ${risk.level} (${risk.score}/100)`
+        (risk) =>
+          `${withRepoPrefix(risk.repoName)}${risk.category}: ${risk.level} (${risk.score}/100)`
       )
     ),
     "",
@@ -3102,7 +3103,7 @@ function getDiagnosticsText(result: RepoReadinessReport): string {
     ...listOrNone(
       result.diagnostics.map(
         (diagnostic) =>
-          `${diagnostic.severity}: ${diagnostic.code} - ${diagnostic.message}${
+          `${withRepoPrefix(diagnostic.repoName)}${diagnostic.severity}: ${diagnostic.code} - ${diagnostic.message}${
             diagnostic.recommendation ? ` ${diagnostic.recommendation}` : ""
           }`
       )
@@ -3112,6 +3113,12 @@ function getDiagnosticsText(result: RepoReadinessReport): string {
 
 function listOrNone(values: string[]): string[] {
   return values.length > 0 ? values.map((value) => `- ${value}`) : ["- None detected."];
+}
+
+// Absent for single-repo analysis and for workspace-wide diagnostics
+// (MISSING_REPO_MAP, STALE_INDEX) that apply to no single repo.
+function withRepoPrefix(repoName: string | undefined): string {
+  return repoName ? `${repoName}: ` : "";
 }
 
 async function getStatusControls(

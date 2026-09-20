@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 523 tests
+├── tests/               48 files, 524 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -196,7 +196,9 @@ the other. If a shell needs repo intelligence, it imports the service.
 18. Review report generation from git diff and validation evidence.
 19. Multi-repo workspace support.
 20. Advanced intelligence: architecture detection, route/API detection, test
-    relationships, risk scoring.
+    relationships, risk scoring — computed for every registered repo in a
+    workspace, not only the first, and each result tagged with the repo it
+    came from.
 21. VSIX packaging, internal setup docs, npm link support.
 22. Integration detection: datastores, messaging, micro-frontend platforms,
     microservice platforms, deployment orchestration (Kubernetes, Helm,
@@ -349,7 +351,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 523 tests must pass before merging.
+Use Vitest. All 524 tests must pass before merging.
 
 Cover:
 
@@ -378,6 +380,10 @@ Cover:
 - parsed symbols (Go receivers, Rust items, start lines, kinds, and
   declining a language so the pattern list still runs)
 - multi-repo path resolution (unique suffix, ambiguity, segment boundaries)
+- advanced analysis across a multi-repo workspace (every registered repo
+  represented and `repoName`-tagged, not only the first; workspace-wide
+  repo-map/index diagnostics computed once rather than once per repo; a
+  polyrepo workspace not mistaken for any one member being a monorepo)
 - feature planning (JSON + Markdown output)
 - integration detection (datastore/messaging/micro-frontend/microservice/
   orchestration/monorepo-tooling/test-automation, by content and by

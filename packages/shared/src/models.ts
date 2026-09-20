@@ -237,6 +237,8 @@ export interface FileChangeActivity {
   /** ISO timestamp of the most recent commit touching it. */
   lastChangedAt: string;
   lastChangedDaysAgo: number;
+  /** Which registered repo this came from, in a multi-repo workspace. */
+  repoName?: string;
 }
 
 export interface AdvancedArchitecturePattern {
@@ -251,6 +253,8 @@ export interface AdvancedArchitecturePattern {
     | "CLI app";
   confidence: ConfidenceLevel;
   evidence: string[];
+  /** Which registered repo this came from, in a multi-repo workspace. */
+  repoName?: string;
 }
 
 export interface DependencyManifest {
@@ -259,6 +263,8 @@ export interface DependencyManifest {
   packageManager?: string;
   changed: boolean;
   evidence: string[];
+  /** Which registered repo this came from, in a multi-repo workspace. */
+  repoName?: string;
 }
 
 export interface RouteApiEndpoint {
@@ -276,6 +282,8 @@ export interface RouteApiEndpoint {
   filePath: string;
   line?: number;
   handler?: string;
+  /** Which registered repo this came from, in a multi-repo workspace. */
+  repoName?: string;
 }
 
 export interface TestRelationship {
@@ -285,6 +293,8 @@ export interface TestRelationship {
   routePath?: string;
   confidence: ConfidenceLevel;
   reason: string;
+  /** Which registered repo this came from, in a multi-repo workspace. */
+  repoName?: string;
 }
 
 export interface AdvancedRiskScore {
@@ -294,6 +304,8 @@ export interface AdvancedRiskScore {
   score: number;
   reasons: string[];
   mitigation?: string;
+  /** Which registered repo this came from, in a multi-repo workspace. */
+  repoName?: string;
 }
 
 export interface PlanQualityScore {
@@ -327,6 +339,9 @@ export interface RepoReadinessDiagnostic {
   message: string;
   recommendation?: string;
   filePath?: string;
+  /** Which registered repo this came from, in a multi-repo workspace. Absent
+   *  for workspace-wide diagnostics (`MISSING_REPO_MAP`, `STALE_INDEX`). */
+  repoName?: string;
 }
 
 export interface FeaturePlan extends GeneratedArtifact {

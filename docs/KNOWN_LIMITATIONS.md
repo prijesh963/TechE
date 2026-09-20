@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–35 merged. The redesign is complete; what is below is
+**Status:** Phases 0–36 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -553,6 +553,37 @@ built on a guess; the detection mechanism is ready and costs about fifteen
 lines once those markers exist, the same size as each of the nine signals
 already in `integration-detector.ts`.
 
+### 4.14 Cross-repo interlinks are code-level only, and narrow even there
+
+**Pre-phase, surfaced assessing Phase 36.** "Interlinks between repos" was
+checked directly rather than assumed. What works: a relative import that
+crosses from one registered repo's folder into another's resolves in the
+symbol graph exactly like an in-repo import, and `graph-workspace.json`'s
+`crossRepoEdgeCount` reports it. What does not:
+
+- A published package (one repo depending on another via its name in
+  `package.json`/`pom.xml` rather than a relative path) resolves to nothing —
+  the same "external specifiers are left unresolved" rule that applies
+  in-repo applies here too, since nothing distinguishes "external" from
+  "another of our own repos published as a package."
+- Call-graph resolution's instance/local-variable gap (a call through a
+  variable rather than a bare or single-level property access) is exactly as
+  broken across repos as within one, for the same reason: `resolveIdentifier`
+  never binds a local variable to its declared type in either language.
+- Runtime/API-level interlinks — a Feign client or REST call in one repo
+  reaching a route detected in another, a Kafka producer in one reaching a
+  consumer in another — are not a modelled concept anywhere. Phase 36 made
+  routes and messaging integrations workspace-wide (every repo's routes are
+  now in one `AdvancedAnalysis.routes` array, tagged by `repoName`), which is
+  the data a matcher would need, but nothing does the matching yet.
+
+**Cost:** a plan touching a contract shared across repos — a REST endpoint,
+a message payload, a Feign interface — gets no cross-repo callers or
+consumers surfaced automatically; a developer still has to know to look in
+the other repo. Matching routes/messaging evidence by path or topic name
+across the now-merged workspace-wide arrays is the natural next step and
+does not require parser changes, only a comparison pass.
+
 ---
 
 ## 5. Scale and housekeeping
@@ -685,22 +716,23 @@ Fixing it means threading the actual invocation through `getHelpText` and
 
 Kept so the record shows what was traded and when.
 
-| Limitation                                             | Raised    | Closed                                            |
-| ------------------------------------------------------ | --------- | ------------------------------------------------- |
-| `resetIndexFreshnessCache` exported but unwired        | pre-phase | Phase 0 — `.git/HEAD` checked before the cache    |
-| Plan body opaque in the session                        | Phase 1   | Phase 2 — `PlanContract`                          |
-| Nothing builds a plan contract end to end              | Phase 2   | Phase 4a                                          |
-| `checkConstraints` never called against `plannedPaths` | Phase 2   | Phase 4b                                          |
-| `runAgenticPlanLoop` — a third retrieval mechanism     | Phase 3   | Phase 4a                                          |
-| No checkpoint captured                                 | Phase 4a  | Phase 4b                                          |
-| Two tokenizers that had to be fixed twice              | pre-phase | Phase 3 — one exported tokenizer                  |
-| Extension unusable without a monorepo clone            | pre-phase | Phase 7 — CLI bundled into the VSIX               |
-| Generated artifacts named deleted agents               | Phase 5   | Phase 8 — `CHAT_COMMANDS` as one source           |
-| `AGENTS.md` behind the built product                   | Phase 2   | Phase 8 — rewritten against measured figures      |
-| No solution overview on main                           | Phase 6   | Phase 8 — written with re-measured numbers        |
-| Phase 6 entries misfiled under documentation debt      | Phase 6   | Phase 8 — refiled under correctness edges         |
-| Dashboard showed artifacts, never the session          | Phase 4a  | Phase 9 — Current work card, read via `peek`      |
-| Nothing ever called `recordDecision`                   | Phase 1   | Phase 9 — proposals confirmed from `/create-plan` |
-| A change of mind left two decisions active             | Phase 9   | Phase 10 — proposals carry what they replace      |
-| `templates/agents/` left empty after Phase 5           | Phase 5   | Phase 8 — directory removed                       |
-| Test suite leaked a temp directory per fixture         | Phase 28  | Phase 31 — one temp root per run, removed at end  |
+| Limitation                                                                                                           | Raised    | Closed                                                       |
+| -------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------ |
+| `resetIndexFreshnessCache` exported but unwired                                                                      | pre-phase | Phase 0 — `.git/HEAD` checked before the cache               |
+| Plan body opaque in the session                                                                                      | Phase 1   | Phase 2 — `PlanContract`                                     |
+| Nothing builds a plan contract end to end                                                                            | Phase 2   | Phase 4a                                                     |
+| `checkConstraints` never called against `plannedPaths`                                                               | Phase 2   | Phase 4b                                                     |
+| `runAgenticPlanLoop` — a third retrieval mechanism                                                                   | Phase 3   | Phase 4a                                                     |
+| No checkpoint captured                                                                                               | Phase 4a  | Phase 4b                                                     |
+| Two tokenizers that had to be fixed twice                                                                            | pre-phase | Phase 3 — one exported tokenizer                             |
+| Extension unusable without a monorepo clone                                                                          | pre-phase | Phase 7 — CLI bundled into the VSIX                          |
+| Generated artifacts named deleted agents                                                                             | Phase 5   | Phase 8 — `CHAT_COMMANDS` as one source                      |
+| `AGENTS.md` behind the built product                                                                                 | Phase 2   | Phase 8 — rewritten against measured figures                 |
+| No solution overview on main                                                                                         | Phase 6   | Phase 8 — written with re-measured numbers                   |
+| Phase 6 entries misfiled under documentation debt                                                                    | Phase 6   | Phase 8 — refiled under correctness edges                    |
+| Dashboard showed artifacts, never the session                                                                        | Phase 4a  | Phase 9 — Current work card, read via `peek`                 |
+| Nothing ever called `recordDecision`                                                                                 | Phase 1   | Phase 9 — proposals confirmed from `/create-plan`            |
+| A change of mind left two decisions active                                                                           | Phase 9   | Phase 10 — proposals carry what they replace                 |
+| `templates/agents/` left empty after Phase 5                                                                         | Phase 5   | Phase 8 — directory removed                                  |
+| Test suite leaked a temp directory per fixture                                                                       | Phase 28  | Phase 31 — one temp root per run, removed at end             |
+| `AdvancedAnalysisService.analyze()` only ever read `repoMap.repos[0]`, silently ignoring every other registered repo | pre-phase | Phase 36 — every repo is analyzed and tagged with `repoName` |

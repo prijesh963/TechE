@@ -56,34 +56,57 @@ export class AdvancedAnalysisService {
   async analyze(options: AdvancedAnalysisOptions = {}): Promise<AdvancedAnalysis> {
     const startPath = path.resolve(options.startPath ?? process.cwd());
     const repoMap = options.repoMap ?? (await loadOrCreateRepoMap(startPath));
-    const repo = repoMap.repos[0];
 
-    if (!repo) {
+    if (repoMap.repos.length === 0) {
       throw new Error("Repo map does not contain any repositories");
     }
 
-    const files = await scanRepoFiles(repo.repoRoot);
-    const dependencyManifests = await detectDependencyManifests(repo.repoRoot, files);
-    const routes = detectRoutes(files);
-    const testRelationships = detectTestRelationships(files, routes);
-    const architecturePatterns = detectArchitecturePatterns(repoMap, repo, files);
-    const diagnostics = await createReadinessDiagnostics(repo.repoRoot, repo, files);
-    const gitActivity = await collectGitActivity(repo.repoRoot);
-    const riskScores = scoreRisks({
-      repoMap,
-      repo,
-      dependencyManifests,
-      routes,
-      testRelationships,
-      diagnostics,
-      gitActivity,
-      request: options.request
-    });
+    // Every registered repo is analyzed, not only repos[0] — a workspace
+    // repo map routinely carries more than one, and silently analyzing only
+    // the first meant every other repo's routes, tests, architecture
+    // patterns, diagnostics and risk scores never reached a plan at all.
+    const perRepo = await Promise.all(
+      repoMap.repos.map((repo) => analyzeSingleRepo(repoMap, repo, options.request))
+    );
+
+    const dependencyManifests = perRepo.flatMap((result) => result.dependencyManifests);
+    const routes = perRepo.flatMap((result) => result.routes);
+    const testRelationships = perRepo.flatMap((result) => result.testRelationships);
+    const architecturePatterns = perRepo.flatMap(
+      (result) => result.architecturePatterns
+    );
+    const gitActivity = perRepo.flatMap((result) => result.gitActivity);
+    const riskScores = perRepo.flatMap((result) => result.riskScores);
+    const repoDiagnostics = perRepo.flatMap((result) => result.diagnostics);
+    const newestSourceMtime = Math.max(
+      0,
+      ...perRepo.flatMap((result) => result.files.map((file) => file.mtimeMs))
+    );
+    // Repo map and index freshness are workspace-wide artifacts (one
+    // repoMap.json/index.json at the workspace root), so they are checked
+    // once rather than once per repo — otherwise a stale index in a 5-repo
+    // workspace would multiply the same warning five times and overweight
+    // the readiness score by 5x.
+    const workspaceDiagnostics = await createWorkspaceReadinessDiagnostics(
+      repoMap.workspaceRoot,
+      newestSourceMtime
+    );
+    const diagnostics =
+      workspaceDiagnostics.length === 0 && repoDiagnostics.length === 0
+        ? [
+            {
+              code: "READY" as const,
+              severity: "info" as const,
+              message:
+                "Repo map, index, package manager, build, and test signals are present across the workspace."
+            }
+          ]
+        : [...workspaceDiagnostics, ...repoDiagnostics];
 
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
-      repoRoot: repo.repoRoot,
+      repoRoot: repoMap.workspaceRoot,
       summary: summarizeAdvancedAnalysis({
         architecturePatterns,
         dependencyManifests,
@@ -190,8 +213,54 @@ async function scanRepoFiles(repoRoot: string): Promise<ScannedFile[]> {
   );
 }
 
-function detectArchitecturePatterns(
+interface SingleRepoAnalysis {
+  files: ScannedFile[];
+  dependencyManifests: DependencyManifest[];
+  routes: RouteApiEndpoint[];
+  testRelationships: TestRelationship[];
+  architecturePatterns: AdvancedArchitecturePattern[];
+  diagnostics: RepoReadinessDiagnostic[];
+  gitActivity: FileChangeActivity[];
+  riskScores: AdvancedRiskScore[];
+}
+
+async function analyzeSingleRepo(
   repoMap: UniversalRepoMap,
+  repo: RepoMap,
+  request: string | undefined
+): Promise<SingleRepoAnalysis> {
+  const repoName = repo.displayName;
+  const files = await scanRepoFiles(repo.repoRoot);
+  const dependencyManifests = await detectDependencyManifests(repo.repoRoot, files);
+  const routes = detectRoutes(files);
+  const testRelationships = detectTestRelationships(files, routes);
+  const architecturePatterns = detectArchitecturePatterns(repo, files);
+  const diagnostics = await createRepoReadinessDiagnostics(repo, files);
+  const gitActivity = await collectGitActivity(repo.repoRoot);
+  const riskScores = scoreRisks({
+    repoMap,
+    repo,
+    dependencyManifests,
+    routes,
+    testRelationships,
+    diagnostics,
+    gitActivity,
+    request
+  });
+
+  return {
+    files,
+    dependencyManifests: dependencyManifests.map((item) => ({ ...item, repoName })),
+    routes: routes.map((item) => ({ ...item, repoName })),
+    testRelationships: testRelationships.map((item) => ({ ...item, repoName })),
+    architecturePatterns: architecturePatterns.map((item) => ({ ...item, repoName })),
+    diagnostics: diagnostics.map((item) => ({ ...item, repoName })),
+    gitActivity: gitActivity.map((item) => ({ ...item, repoName })),
+    riskScores: riskScores.map((item) => ({ ...item, repoName }))
+  };
+}
+
+function detectArchitecturePatterns(
   repo: RepoMap,
   files: ScannedFile[]
 ): AdvancedArchitecturePattern[] {
@@ -262,11 +331,10 @@ function detectArchitecturePatterns(
     });
   }
 
-  if (
-    repoMap.summary.repoCount > 1 ||
-    repo.projects.length > 1 ||
-    repo.architecturalPatterns.includes("monorepo")
-  ) {
+  // Workspace-wide repo count is deliberately excluded here: several
+  // physically-separate repos registered in one workspace (polyrepo) is not
+  // evidence that any single one of them is itself a monorepo.
+  if (repo.projects.length > 1 || repo.architecturalPatterns.includes("monorepo")) {
     patterns.push({
       name: "monorepo",
       confidence: repo.projects.length > 1 ? "high" : "medium",
@@ -584,20 +652,24 @@ function detectTestRelationships(
   return dedupeRelationships(relationships).slice(0, 200);
 }
 
-async function createReadinessDiagnostics(
-  repoRoot: string,
-  repo: RepoMap,
-  files: ScannedFile[]
+/**
+ * Repo map and index freshness are workspace-wide artifacts — one
+ * repoMap.json/index.json under the workspace root, not one per registered
+ * repo — so these are computed once per `analyze()` call rather than once
+ * per repo.
+ */
+async function createWorkspaceReadinessDiagnostics(
+  workspaceRoot: string,
+  newestSourceMtime: number
 ): Promise<RepoReadinessDiagnostic[]> {
   const diagnostics: RepoReadinessDiagnostic[] = [];
-  const repoMapPath = getArtifactFilePath(repoRoot, "repoMap");
+  const repoMapPath = getArtifactFilePath(workspaceRoot, "repoMap");
   const indexPath = path.join(
-    getArtifactDirectoryPath(repoRoot, "index"),
+    getArtifactDirectoryPath(workspaceRoot, "index"),
     "index.json"
   );
   const repoMapExists = await pathExists(repoMapPath);
   const indexStats = await tryStat(indexPath);
-  const newestSourceMtime = Math.max(0, ...files.map((file) => file.mtimeMs));
 
   if (!repoMapExists) {
     diagnostics.push({
@@ -607,6 +679,26 @@ async function createReadinessDiagnostics(
       recommendation: "Run `npm run cli -- analyze`."
     });
   }
+
+  if (!indexStats || indexStats.mtimeMs < newestSourceMtime) {
+    diagnostics.push({
+      code: "STALE_INDEX",
+      severity: "warning",
+      message: indexStats
+        ? "Local index appears older than repository files."
+        : "Local index is missing.",
+      recommendation: "Run `npm run cli -- index`."
+    });
+  }
+
+  return diagnostics;
+}
+
+async function createRepoReadinessDiagnostics(
+  repo: RepoMap,
+  files: ScannedFile[]
+): Promise<RepoReadinessDiagnostic[]> {
+  const diagnostics: RepoReadinessDiagnostic[] = [];
 
   if (repo.packageManagers.length === 0 && hasDependencyManifest(files)) {
     diagnostics.push({
@@ -636,26 +728,6 @@ async function createReadinessDiagnostics(
       severity: "warning",
       message: "No complete test signal was detected.",
       recommendation: "Add tests or configure a safe validation command."
-    });
-  }
-
-  if (!indexStats || indexStats.mtimeMs < newestSourceMtime) {
-    diagnostics.push({
-      code: "STALE_INDEX",
-      severity: "warning",
-      message: indexStats
-        ? "Local index appears older than repository files."
-        : "Local index is missing.",
-      recommendation: "Run `npm run cli -- index`."
-    });
-  }
-
-  if (diagnostics.length === 0) {
-    diagnostics.push({
-      code: "READY",
-      severity: "info",
-      message:
-        "Repository has repo-map, index, package manager, build, and test signals."
     });
   }
 
