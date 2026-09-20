@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–25 merged. The redesign is complete; what is below is
+**Status:** Phases 0–26 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -228,7 +228,31 @@ several hundred lines of chat.
 them behind a button would fix the scroll and lose the point — an excerpt
 nobody opens is an excerpt nobody read.
 
-### 1.20 The CLI shell-outs are still subprocesses
+### 1.20 Apply speaks through a notification, not the chat
+
+**Phase 26.** The chat turn that staged the changes is over by the time Apply
+runs, so the result is an editor notification — written files, refused count,
+and a "Run checks" action for the checks the plan committed to. The detail
+still goes to the output channel.
+
+**Cost:** a notification is dismissible and transient; a developer who clicks
+away has no record in the conversation that the apply happened, and the chat
+thread still ends at "Nothing has been written yet." Writing back into the
+chat means holding the stream open past the turn, which the chat API does not
+offer.
+
+### 1.21 A refused edit is a count, not a name, in the notification
+
+**Phase 26.** When some edits apply and others do not, the notification says
+how many were refused; which ones, and why, are in the output channel behind
+"Show details".
+
+**Cost:** the most important case — a partly-applied plan — is the one where
+the developer most needs the file names, and reads a number instead. A
+notification has room for a sentence, not a list, so closing this means the
+chat thread, which is 1.20.
+
+### 1.22 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

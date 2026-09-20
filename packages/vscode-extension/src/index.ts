@@ -271,8 +271,14 @@ export interface VscodeApiLike {
   };
   window: {
     createOutputChannel(name: string): OutputChannelLike;
-    showInformationMessage(message: string): unknown;
-    showErrorMessage(message: string): unknown;
+    /**
+     * With `items`, resolves to the one chosen — or `undefined` if dismissed.
+     *
+     * The apply step runs outside a chat turn, so a chat button cannot be
+     * offered there. A notification action is the equivalent that works.
+     */
+    showInformationMessage(message: string, ...items: string[]): unknown;
+    showErrorMessage(message: string, ...items: string[]): unknown;
     showInputBox?(options: {
       title?: string;
       prompt?: string;
@@ -1000,15 +1006,31 @@ export function activate(
     vscode.commands.registerCommand(APPLY_CHANGES_COMMAND, async (...args) => {
       const version = Number(args[0]);
       const channel = outputChannel;
-      // The chat stream from the turn that staged these is gone, so the apply
-      // reports into the output channel instead of nowhere.
+      // The chat turn that staged these is over, so a stream at this point
+      // reaches only the output channel. The detail belongs there; the result
+      // has to reach the developer where they are looking, which is the
+      // editor — clicking Apply and seeing nothing change is the same
+      // experience as clicking a button that does not work.
       const sink: ChatResponseStreamLike = {
         markdown: (value: string) => channel.appendLine(value.trimEnd())
       };
 
-      await applyStagedWrites(vscode, chatSessions, workspaceRoot, version, sink);
+      const outcome = await applyStagedWrites(
+        vscode,
+        chatSessions,
+        workspaceRoot,
+        version,
+        sink
+      );
       dashboard.refresh();
-      channel.show?.(true);
+
+      if (outcome.blocked) {
+        channel.show?.(true);
+        vscode.window.showErrorMessage(outcome.blocked);
+        return;
+      }
+
+      await reportApplied(vscode, outcome, channel);
     }),
     vscode.commands.registerCommand(CONFIRM_DECISION_COMMAND, async (...args) => {
       const proposal = args[0] as ProposedDecision | undefined;
@@ -2869,6 +2891,25 @@ async function runImplementPhase(
 }
 
 /**
+ * What the apply produced, for the caller to surface.
+ *
+ * Returned rather than only streamed: the chat turn that staged these is
+ * over, so everything written to a stream at this point lands in the output
+ * channel — a panel the developer has no reason to be looking at. Clicking
+ * Apply and seeing the chat unchanged is indistinguishable from clicking a
+ * button that does nothing.
+ */
+export interface ApplyOutcome {
+  written: string[];
+  deleted: string[];
+  refused: number;
+  /** Set when nothing was applied, with the reason a developer can act on. */
+  blocked?: string;
+  /** Checks the approved plan committed to, if any. */
+  validationCommands: number;
+}
+
+/**
  * Writes the changes staged by `/implement`.
  *
  * Separate from generating them so the developer sees what an approved plan
@@ -2882,16 +2923,16 @@ async function applyStagedWrites(
   workspaceRoot: string,
   version: number,
   stream: ChatResponseStreamLike
-): Promise<void> {
+): Promise<ApplyOutcome> {
   const staged = stagedWrites.get(workspaceRoot);
 
   if (!staged || staged.version !== version) {
     // Staged in memory, so a reload loses it. Saying so beats writing
     // something the developer can no longer see the preview for.
-    stream.markdown(
-      "Those changes are no longer staged — the window was reloaded, or a newer plan replaced them. Run `/implement` again to regenerate and preview.\n"
-    );
-    return;
+    const blocked =
+      "Those changes are no longer staged — the window was reloaded, or a newer plan replaced them. Run `/implement` again to regenerate and preview.";
+    stream.markdown(`${blocked}\n`);
+    return { written: [], deleted: [], refused: 0, blocked, validationCommands: 0 };
   }
 
   // Re-checked here, not only before generating. Between the preview and
@@ -2903,11 +2944,12 @@ async function applyStagedWrites(
 
   if (!freshness.ok) {
     const moved = [...freshness.drifted, ...freshness.missing];
+    const blocked = `Nothing written — ${moved.join(", ")} changed since the preview was built. Applying now would overwrite it.`;
     stream.markdown(
       `**Nothing written — ${list(moved)} changed since the preview was built.**\n\n` +
         "Applying now would overwrite whatever changed. Run `/implement` again to regenerate against the current files.\n"
     );
-    return;
+    return { written: [], deleted: [], refused: 0, blocked, validationCommands: 0 };
   }
 
   stagedWrites.delete(workspaceRoot);
@@ -2958,21 +3000,29 @@ async function applyStagedWrites(
 
   await reportOutlineDivergence(plan, workspaceRoot, applied.written, stream);
 
+  const outcome: ApplyOutcome = {
+    written: applied.written,
+    deleted: applied.deleted,
+    refused: applied.refused.length,
+    validationCommands: applied.written.length > 0 ? plan.validation.length : 0
+  };
+
   if (plan.validation.length > 0 && applied.written.length > 0) {
     // A button, not automatic. The plan named these checks and the developer
     // approved the plan — but approving a plan that mentions a command is not
     // agreeing to execute it this second, and validation runs real repo
     // commands.
+    // Named here for the record; offered as a notification action by the
+    // caller, because a chat button cannot be rendered outside a chat turn
+    // and this one was being dropped in silence.
     stream.markdown(
       `This plan committed to ${plan.validation.map((entry) => `\`${entry.command}\``).join(", ")}.\n`
     );
-    stream.button?.({
-      command: RUN_VALIDATION_COMMAND,
-      title: `Run ${plan.validation.length} check(s)`
-    });
   }
 
   stream.markdown("\nRun `/review` to compare this against the approved plan.\n");
+
+  return outcome;
 }
 
 /**
@@ -4011,6 +4061,53 @@ function describeNewFile(change: PlannedChange): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Tells the developer what the apply did, in the editor.
+ *
+ * A chat button cannot be offered from here — the turn is over — so the
+ * checks the plan committed to are a notification action instead. They were
+ * previously offered as `stream.button` on a sink that implements only
+ * `markdown`, so the call was silently dropped and validation was
+ * unreachable from the normal flow.
+ */
+export async function reportApplied(
+  vscode: VscodeApiLike,
+  outcome: ApplyOutcome,
+  channel: OutputChannelLike
+): Promise<void> {
+  const touched = outcome.written.length + outcome.deleted.length;
+
+  if (touched === 0) {
+    channel.show?.(true);
+    vscode.window.showErrorMessage(
+      outcome.refused > 0
+        ? `Nothing was written: all ${outcome.refused} change(s) were refused. See the Copilot Architect output for why.`
+        : "Nothing was written. See the Copilot Architect output for details."
+    );
+    return;
+  }
+
+  const parts = [`Applied ${touched} change(s)`];
+  if (outcome.refused > 0) {
+    parts.push(`${outcome.refused} refused`);
+  }
+
+  const RUN_CHECKS = "Run checks";
+  const DETAILS = "Show details";
+  const actions = outcome.validationCommands > 0 ? [RUN_CHECKS, DETAILS] : [DETAILS];
+
+  const choice = await vscode.window.showInformationMessage(
+    `${parts.join(", ")}. Run /review to compare against the approved plan.`,
+    ...actions
+  );
+
+  if (choice === RUN_CHECKS) {
+    await vscode.commands.executeCommand?.(RUN_VALIDATION_COMMAND);
+  } else if (choice === DETAILS) {
+    channel.show?.(true);
+  }
 }
 
 /**

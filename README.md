@@ -217,12 +217,12 @@ The normal path. Install the VS Code extension (see
 [docs/INSTALL.md](docs/INSTALL.md)) and drive a feature through four phases in
 Copilot Chat:
 
-| Type this                 | What it does                                                         |
-| ------------------------- | -------------------------------------------------------------------- |
-| `@architect /analyze`     | Explains what is in the repo, grounded in a real index of the files. |
-| `@architect /create-plan` | Turns the request into a plan you can read, correct, and approve.    |
-| `@architect /implement`   | Diffs what the plan comes to, then applies it on a click.            |
-| `@architect /review`      | Compares what was built against what was approved.                   |
+| Type this                 | What it does                                                                                                                                          |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@architect /analyze`     | Explains what is in the repo, grounded in a real index of the files.                                                                                  |
+| `@architect /create-plan` | Turns the request into a plan you can read, correct, and approve.                                                                                     |
+| `@architect /implement`   | Diffs what the plan comes to, then applies it on a click. The apply reports back as a notification — written, refused, and the checks the plan named. |
+| `@architect /review`      | Compares what was built against what was approved.                                                                                                    |
 
 A prompt with no slash command is treated as `/analyze`.
 
@@ -451,7 +451,7 @@ GitHub Copilot Chat artifacts:
 
 ```bash
 npm run build     # compile all TypeScript packages
-npm test          # run all 449 Vitest tests
+npm test          # run all 455 Vitest tests
 npm run lint      # ESLint
 npm run format    # Prettier check
 npm run format:write  # Prettier fix

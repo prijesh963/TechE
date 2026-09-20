@@ -1386,7 +1386,7 @@ function extractSymbols(filePath: string, text: string): CodeSymbol[] {
     // worth indexing and keeps `if (`, `for (` and `new Foo(` out. The method
     // name must start lowercase, which is also convention and skips
     // constructors — whose class is indexed already.
-    /\b(?:public|protected|private)\s+(?:[\w<>\[\],.$]+\s+)+?([a-z][\w$]*)\s*\(/g
+    /\b(?:public|protected|private)\s+(?:[\w<>[\],.$]+\s+)+?([a-z][\w$]*)\s*\(/g
   ] as const;
 
   for (const pattern of patterns) {

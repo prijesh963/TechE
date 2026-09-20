@@ -17,6 +17,7 @@ import {
   buildCommandLmPrompt,
   buildLabel,
   languageHint,
+  reportApplied,
   createCliCommandLine,
   createDashboardHtml,
   STAGED_SCHEME,
@@ -959,6 +960,8 @@ function createFakeVscode(workspaceRoot = "/workspace/repo"): FakeVscode {
     quickPickChoice: undefined,
     quickPickItems: [],
     contentProvider: undefined,
+    notifications: [],
+    notificationChoice: undefined,
     vscode: {
       commands: {
         registerCommand: (command, callback): DisposableLike => {
@@ -976,8 +979,20 @@ function createFakeVscode(workspaceRoot = "/workspace/repo"): FakeVscode {
           show: () => undefined,
           dispose: () => undefined
         }),
-        showInformationMessage: () => undefined,
-        showErrorMessage: () => undefined,
+        showInformationMessage: (message: string, ...items: string[]) => {
+          fake.notifications.push({ kind: "info", message, items });
+          // Resolves to the action the test asked for, or nothing — the same
+          // two outcomes a developer has.
+          return Promise.resolve(
+            items.includes(fake.notificationChoice ?? "")
+              ? fake.notificationChoice
+              : undefined
+          );
+        },
+        showErrorMessage: (message: string, ...items: string[]) => {
+          fake.notifications.push({ kind: "error", message, items });
+          return Promise.resolve(undefined);
+        },
         showInputBox: async () => fake.input,
         showOpenDialog: async () => fake.openDialogResult,
         showQuickPick: async (items: QuickPickItemLike[]) => {
@@ -1123,6 +1138,106 @@ describe("showing code in the plan draft", () => {
     expect(manifest.activationEvents).toContain(
       "onCommand:copilotArchitect.openPlannedFile"
     );
+  });
+});
+
+describe("reporting what Apply did", () => {
+  const channel = () => {
+    const shown: boolean[] = [];
+    return {
+      channel: {
+        appendLine: () => undefined,
+        show: () => shown.push(true),
+        dispose: () => undefined
+      },
+      shown
+    };
+  };
+
+  it("offers the plan's checks as a notification action", async () => {
+    // The checks were offered as `stream.button` on a sink implementing only
+    // `markdown`, so the call was dropped in silence and validation was
+    // unreachable from the normal flow.
+    const fake = createFakeVscode();
+    fake.notificationChoice = "Run checks";
+    const { channel: out } = channel();
+
+    await reportApplied(
+      fake.vscode,
+      {
+        written: ["src/a.ts"],
+        deleted: [],
+        refused: 0,
+        validationCommands: 2
+      },
+      out
+    );
+
+    expect(fake.notifications[0].items).toContain("Run checks");
+    expect(
+      fake.executeCommandCalls.some(
+        (call) => call.command === "copilotArchitect.runValidation"
+      )
+    ).toBe(true);
+  });
+
+  it("leaves the checks action out when the plan committed to none", async () => {
+    const fake = createFakeVscode();
+    const { channel: out } = channel();
+
+    await reportApplied(
+      fake.vscode,
+      { written: ["src/a.ts"], deleted: [], refused: 0, validationCommands: 0 },
+      out
+    );
+
+    expect(fake.notifications[0].items).not.toContain("Run checks");
+    expect(fake.notifications[0].items).toContain("Show details");
+  });
+
+  it("counts what was refused alongside what landed", async () => {
+    const fake = createFakeVscode();
+    const { channel: out } = channel();
+
+    await reportApplied(
+      fake.vscode,
+      { written: ["src/a.ts"], deleted: [], refused: 2, validationCommands: 0 },
+      out
+    );
+
+    expect(fake.notifications[0].message).toContain("Applied 1 change(s)");
+    expect(fake.notifications[0].message).toContain("2 refused");
+  });
+
+  it("reports an error, not a success, when nothing was written", async () => {
+    // "Applied 0 changes" reads as a result. It is a failure.
+    const fake = createFakeVscode();
+    const { channel: out, shown } = channel();
+
+    await reportApplied(
+      fake.vscode,
+      { written: [], deleted: [], refused: 3, validationCommands: 0 },
+      out
+    );
+
+    expect(fake.notifications[0].kind).toBe("error");
+    expect(fake.notifications[0].message).toContain("all 3 change(s) were refused");
+    // The detail is opened for them rather than left to be found.
+    expect(shown).toHaveLength(1);
+  });
+
+  it("opens the output on request rather than always", async () => {
+    const fake = createFakeVscode();
+    fake.notificationChoice = "Show details";
+    const { channel: out, shown } = channel();
+
+    await reportApplied(
+      fake.vscode,
+      { written: ["src/a.ts"], deleted: [], refused: 0, validationCommands: 0 },
+      out
+    );
+
+    expect(shown).toHaveLength(1);
   });
 });
 
@@ -1510,6 +1625,28 @@ describe("applying staged changes", () => {
     await expect(readFile(path.join(workspaceRoot, "app.ts"), "utf8")).resolves.toBe(
       "export const a = 99;"
     );
+  });
+
+  it("says so in the editor when the staging is gone", async () => {
+    // Reported: clicking Apply appeared to do nothing. Everything the apply
+    // had to say went to the output channel, a panel the developer has no
+    // reason to be looking at — indistinguishable from a button that does
+    // not work.
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-apply-msg-"));
+    const fake = createFakeVscode(workspaceRoot);
+    activate(
+      { subscriptions: [], extensionPath: path.join(workspaceRoot, "ext") },
+      fake.vscode,
+      {
+        runner: passThroughRunner,
+        mcpStarter: { start: () => ({ dispose: () => undefined }) }
+      }
+    );
+
+    await fake.commands.get("copilotArchitect.applyChanges")?.(1);
+
+    const shown = fake.notifications.find((entry) => entry.kind === "error");
+    expect(shown?.message).toContain("no longer staged");
   });
 
   it("contributes the apply command so the preview button resolves", async () => {
