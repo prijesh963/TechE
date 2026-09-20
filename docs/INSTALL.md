@@ -15,6 +15,22 @@ You need **VS Code 1.90 or newer** and the **GitHub Copilot** extension
 installed and signed in. You do not need Node.js, npm, or a clone of this
 repository — the extension carries its own runtime.
 
+**Get the `.vsix`**
+
+From the repository's [Releases](../../releases) page — the newest release
+carries `copilot-architect-<version>.vsix` as a download. A release is built
+from `main` on every push, so the latest one matches the latest code.
+
+The file is not in the repository itself. It is a build output, ignored the
+same way `dist/` is, so downloading the source as a ZIP will not contain one.
+To build your own you need the clone and toolchain this section says you can
+do without:
+
+```bash
+npm install
+npm run package:vsix      # → dist-vsix/copilot-architect-<version>.vsix
+```
+
 **From the VS Code UI**
 
 1. Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`).

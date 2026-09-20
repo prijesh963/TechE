@@ -84,9 +84,13 @@ Most target repositories are:
 This is not a commercial product. The goal is internal team sharing with
 minimal setup.
 
-1. **`npm run package:vsix`** — an installable VS Code extension. This is the
-   normal path: the recipient needs VS Code and Copilot, not Node, npm or a
-   clone. The CLI is bundled inside the package and spawned by absolute path.
+1. **A release download** — the normal path. Every push to `main` builds the
+   `.vsix` and attaches it to a release, so the recipient needs VS Code and
+   Copilot, not Node, npm or a clone. The CLI is bundled inside the package
+   and spawned by absolute path. The `.vsix` is a build output and is
+   gitignored: it is never committed, so a source ZIP contains none.
+   `npm run package:vsix` builds one locally, clearing older packages so the
+   newest is the only one an install dialog offers.
 2. Git clone + `scripts/setup.sh`, for developing the tool itself.
 3. `npm link --workspace @copilot-architect/cli` for a global command.
 4. `npm run package:local` to build a tarball for teammates.
@@ -120,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               45 files, 471 tests
+├── tests/               45 files, 476 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -299,7 +303,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 471 tests must pass before merging.
+Use Vitest. All 476 tests must pass before merging.
 
 Cover:
 
@@ -341,6 +345,8 @@ Cover:
 - demo command
 - secret redaction patterns
 - node version check in doctor
+- the release workflow (full history for the build number, checks before
+  packaging, one package or none)
 
 ```bash
 npm test                      # run all tests

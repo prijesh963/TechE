@@ -19,7 +19,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,21 @@ for (const required of ["extension.cjs", "cli.mjs"]) {
 
 await rm(stageDir, { recursive: true, force: true });
 await mkdir(stageDir, { recursive: true });
+
+// Old packages are removed, not left beside the new one.
+//
+// The version rising per commit only tells a developer which build they are
+// running if they install the one they meant to. This directory accumulated
+// every build ever made — including 0.1.0, from before the version meant
+// anything — and an install dialog listing five of them is an invitation to
+// pick the wrong one. It has already happened: a fix verified in the
+// repository was reported broken in the editor, from a build two versions
+// behind.
+for (const entry of existsSync(outDir) ? await readdir(outDir) : []) {
+  if (entry.endsWith(".vsix")) {
+    await rm(path.join(outDir, entry), { force: true });
+  }
+}
 
 const manifest = JSON.parse(
   await readFile(path.join(extensionDir, "package.json"), "utf8")

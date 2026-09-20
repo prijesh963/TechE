@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–27 merged. The redesign is complete; what is below is
+**Status:** Phases 0–28 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -288,7 +288,28 @@ already selected. Folding intent into the selection call would save the trip
 and make the reply much harder to parse, which is how the selection format got
 its own step in the first place.
 
-### 1.25 The CLI shell-outs are still subprocesses
+### 1.25 A release is published per commit to `main`
+
+**Phase 28.** The version is the commit count, so every push to `main` is a
+distinct installable build and gets its own release. There is no notion of a
+release worth cutting as against one that merely happened.
+
+**Cost:** the releases page becomes a commit log with attachments, and
+"latest" means most recent rather than most ready. Tagging deliberately would
+fix it and put a manual step back in the path this phase exists to remove.
+
+### 1.26 Nothing checks that the published package runs
+
+**Phase 28.** The workflow runs format, lint, build and the suite before
+packaging, then publishes whatever `vsce` produced. Nothing installs the
+`.vsix` into a VS Code instance and activates it.
+
+**Cost:** a bundling fault that the unit tests cannot see — a bad esbuild
+shim, a missing contributed command — ships as a green release and is found by
+whoever installs it. `@vscode/test-electron` would close it, and is a
+different piece of work from packaging.
+
+### 1.27 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —
@@ -487,6 +508,21 @@ per install is.
 **Cost:** an installed extension takes ~12 MB on disk for a compiler that runs
 during graph builds only. Marking `typescript` external would not help — it
 would ship the same bytes as `node_modules`.
+
+### 5.8 The test suite leaks a temp directory per fixture
+
+**Found in Phase 28.** 110 `mkdtemp` calls across 33 test files; two clean up
+after themselves. A machine that has run the suite a few dozen times carries
+thousands of abandoned fixture directories — this one had 2,700, enough that
+`du` over the temp directory did not finish inside two minutes.
+
+**Cost:** the suite gets slower on a machine that runs it often, and it is the
+best current explanation for an intermittent failure in the sample matrix,
+whose copy-heavy test failed once and then passed on four consecutive runs.
+That matters more now than it did: the release workflow gates a published
+build on this suite, so a flake is a release that did not happen. Fixing it is
+mechanical but touches 33 files, so it was left rather than folded into a
+packaging change.
 
 ---
 

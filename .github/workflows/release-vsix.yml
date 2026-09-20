@@ -1,0 +1,138 @@
+name: Release VSIX
+
+# Builds the installable extension and attaches it to a release, so a
+# teammate needs a download link rather than a clone, Node and npm — which
+# is the distribution model in AGENTS.md. The `.vsix` itself stays out of
+# git: it is 2 MB of derived bytes that change on every commit, and a stale
+# copy sitting in the repo looking installable is worse than none.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# `gh release` writes to the repository. Nothing else here needs a token.
+permissions:
+  contents: write
+
+concurrency:
+  # Two merges in quick succession would otherwise race. The later commit is
+  # the one worth publishing.
+  group: release-vsix
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone. The package version
+          # is `major.minor.<commit count>` — see `describeBuild` in
+          # scripts/package-vsix.mjs — so a depth-1 checkout would stamp every
+          # build `0.1.1` and keep doing it silently. A build number that
+          # never changes is worse than no build number: it is the one thing
+          # that tells a developer whether the extension they installed is the
+          # one they think it is, and we have already lost a round of testing
+          # to a working fix in a build nobody had.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      # The same gates as CI, run again rather than assumed from it. This job
+      # produces the file people install; a red build must not become a
+      # download link.
+      - name: Check formatting
+        run: npm run format
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Package VSIX
+        run: npm run package:vsix
+
+      - name: Read the built version
+        id: vsix
+        run: |
+          set -euo pipefail
+          # Taken from the file the packaging script actually produced, so a
+          # release can never be named a version that was never built.
+          #
+          # Asserted rather than assumed: the packaging script clears stale
+          # packages, but a glob that quietly matched two would put a
+          # multi-line value into GITHUB_OUTPUT and publish whichever the
+          # shell happened to end on. A wrong version is the one failure this
+          # whole build-number scheme exists to prevent, so it fails the job.
+          mapfile -t built < <(find dist-vsix -maxdepth 1 -name '*.vsix' | sort)
+          if [ "${#built[@]}" -ne 1 ]; then
+            echo "Expected exactly one .vsix, found ${#built[@]}:" >&2
+            printf '  %s\n' "${built[@]}" >&2
+            exit 1
+          fi
+
+          vsix="${built[0]}"
+          version="$(basename "$vsix" .vsix)"
+          version="${version#copilot-architect-}"
+          echo "path=$vsix" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Built $vsix"
+
+      # Kept per run, including runs where publishing is skipped or fails, so
+      # a green build always leaves something installable behind.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-architect-${{ steps.vsix.outputs.version }}
+          path: dist-vsix/*.vsix
+          if-no-files-found: error
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.vsix.outputs.version }}
+          VSIX: ${{ steps.vsix.outputs.path }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+
+          # printf with single-quoted formats: the notes are markdown full of
+          # backticks, which a heredoc would run as command substitution.
+          {
+            printf 'Built from `%s` on `main`.\n\n' "$GITHUB_SHA"
+            printf '**Install:** download `%s`, then in VS Code open\n' "$(basename "$VSIX")"
+            printf 'Extensions, and from the `...` menu choose **Install from VSIX...**\n'
+            printf 'Reload the window afterwards.\n\n'
+            printf 'Every `@architect` reply names its build in the footer. If it does\n'
+            printf 'not read `Build %s`, VS Code kept an older install: uninstall\n' "$VERSION"
+            printf 'Copilot Architect from the Extensions list first, then install again.\n'
+          } > release-notes.md
+
+          # Re-runnable. A release for this version may already exist — from a
+          # re-run, or a force-push that left the commit count unchanged — and
+          # failing there would mean a green build publishes nothing at all.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$VSIX" --clobber
+            gh release edit "$tag" --notes-file release-notes.md --latest
+          else
+            gh release create "$tag" "$VSIX" \
+              --title "Copilot Architect ${VERSION}" \
+              --notes-file release-notes.md \
+              --latest
+          fi
+
+          echo "Published $tag"
