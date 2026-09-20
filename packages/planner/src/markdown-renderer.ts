@@ -66,6 +66,14 @@ export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
       })
     ),
     "",
+    "## Cross-Repo Interlinks",
+    renderBullets(
+      plan.advancedAnalysis.interlinks.map(
+        (interlink) =>
+          `${interlink.fromRepo} calls ${interlink.method} ${interlink.path} (\`${interlink.fromFile}\`) -> ${interlink.toRepo} (\`${interlink.toFile}\`) [${interlink.confidence}]`
+      )
+    ),
+    "",
     "## Endpoints To Touch",
     renderBullets(
       plan.relatedEndpoints.map((endpoint) => {

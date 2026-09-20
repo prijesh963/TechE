@@ -8,6 +8,7 @@ import {
   type AdvancedAnalysis,
   type AdvancedArchitecturePattern,
   type AdvancedRiskScore,
+  type CrossRepoInterlink,
   type DependencyManifest,
   type FileChangeActivity,
   type RepoMap,
@@ -78,6 +79,11 @@ export class AdvancedAnalysisService {
     const gitActivity = perRepo.flatMap((result) => result.gitActivity);
     const riskScores = perRepo.flatMap((result) => result.riskScores);
     const repoDiagnostics = perRepo.flatMap((result) => result.diagnostics);
+    // Matched across the merged, repo-tagged route list rather than inside
+    // analyzeSingleRepo — a call site only becomes an interlink once every
+    // other repo's routes are known, which single-repo analysis cannot see.
+    const outboundCalls = perRepo.flatMap((result) => result.outboundCalls);
+    const interlinks = detectCrossRepoInterlinks(outboundCalls, routes);
     const newestSourceMtime = Math.max(
       0,
       ...perRepo.flatMap((result) => result.files.map((file) => file.mtimeMs))
@@ -114,7 +120,8 @@ export class AdvancedAnalysisService {
         testRelationships,
         riskScores,
         diagnostics,
-        gitActivity
+        gitActivity,
+        interlinks
       }),
       architecturePatterns,
       dependencyManifests,
@@ -122,7 +129,8 @@ export class AdvancedAnalysisService {
       testRelationships,
       riskScores,
       diagnostics,
-      gitActivity
+      gitActivity,
+      interlinks
     };
   }
 
@@ -222,6 +230,7 @@ interface SingleRepoAnalysis {
   diagnostics: RepoReadinessDiagnostic[];
   gitActivity: FileChangeActivity[];
   riskScores: AdvancedRiskScore[];
+  outboundCalls: TaggedOutboundCall[];
 }
 
 async function analyzeSingleRepo(
@@ -237,6 +246,7 @@ async function analyzeSingleRepo(
   const architecturePatterns = detectArchitecturePatterns(repo, files);
   const diagnostics = await createRepoReadinessDiagnostics(repo, files);
   const gitActivity = await collectGitActivity(repo.repoRoot);
+  const outboundCalls = detectOutboundCalls(files);
   const riskScores = scoreRisks({
     repoMap,
     repo,
@@ -256,7 +266,8 @@ async function analyzeSingleRepo(
     architecturePatterns: architecturePatterns.map((item) => ({ ...item, repoName })),
     diagnostics: diagnostics.map((item) => ({ ...item, repoName })),
     gitActivity: gitActivity.map((item) => ({ ...item, repoName })),
-    riskScores: riskScores.map((item) => ({ ...item, repoName }))
+    riskScores: riskScores.map((item) => ({ ...item, repoName })),
+    outboundCalls: outboundCalls.map((item) => ({ ...item, repoName }))
   };
 }
 
@@ -498,7 +509,10 @@ function detectDjangoRoutes(file: ScannedFile, text: string): RouteApiEndpoint[]
 }
 
 function detectSpringRoutes(file: ScannedFile, text: string): RouteApiEndpoint[] {
-  if (!file.relativePath.endsWith(".java")) {
+  // A @FeignClient interface's own @GetMapping-style annotations declare a
+  // route it CALLS on another service, not one it exposes — the opposite of
+  // what this function reports. detectFeignClientCalls covers those instead.
+  if (!file.relativePath.endsWith(".java") || text.includes("@FeignClient")) {
     return [];
   }
 
@@ -599,6 +613,198 @@ function detectNextRoutes(file: ScannedFile): RouteApiEndpoint[] {
   }
 
   return [];
+}
+
+interface OutboundCallSite {
+  method: string;
+  path: string;
+  filePath: string;
+  line?: number;
+}
+
+type TaggedOutboundCall = OutboundCallSite & { repoName?: string };
+
+/**
+ * A call this repo makes outward — an HTTP client call with a literal path,
+ * or an OpenFeign client method — as opposed to detectRoutes, which finds
+ * routes this repo exposes. Cross-repo interlink matching needs both: a call
+ * site only becomes an interlink once it is checked against every OTHER
+ * repo's routes.
+ */
+function detectOutboundCalls(files: ScannedFile[]): OutboundCallSite[] {
+  return files.flatMap((file) => {
+    const text = file.text;
+
+    if (!text || isTestFile(file.relativePath)) {
+      return [];
+    }
+
+    return [
+      ...detectJsHttpClientCalls(file, text),
+      ...detectPythonHttpClientCalls(file, text),
+      ...detectFeignClientCalls(file, text)
+    ];
+  });
+}
+
+function detectJsHttpClientCalls(file: ScannedFile, text: string): OutboundCallSite[] {
+  if (!/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file.relativePath)) {
+    return [];
+  }
+
+  const calls: OutboundCallSite[] = [];
+  const axiosPattern = /\baxios\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/g;
+
+  for (const match of text.matchAll(axiosPattern)) {
+    calls.push({
+      method: match[1]?.toUpperCase() ?? "GET",
+      path: match[2] ?? "",
+      filePath: file.relativePath,
+      line: lineNumberAt(text, match.index ?? 0)
+    });
+  }
+
+  // fetch(url) defaults to GET unless an inline { method: "..." } is given —
+  // a method built at runtime (a variable, a shared options object) is not
+  // followed, so it is read as GET, matching the fetch default for that case.
+  const fetchPattern = /\bfetch\(\s*["'`]([^"'`]+)["'`](?:\s*,\s*\{([^}]*)\})?/g;
+
+  for (const match of text.matchAll(fetchPattern)) {
+    const method = match[2]?.match(/method\s*:\s*["'`](\w+)["'`]/)?.[1];
+
+    calls.push({
+      method: method?.toUpperCase() ?? "GET",
+      path: match[1] ?? "",
+      filePath: file.relativePath,
+      line: lineNumberAt(text, match.index ?? 0)
+    });
+  }
+
+  return calls;
+}
+
+function detectPythonHttpClientCalls(
+  file: ScannedFile,
+  text: string
+): OutboundCallSite[] {
+  if (!file.relativePath.endsWith(".py")) {
+    return [];
+  }
+
+  const calls: OutboundCallSite[] = [];
+  const pattern = /\brequests\.(get|post|put|patch|delete)\(\s*["']([^"']+)["']/g;
+
+  for (const match of text.matchAll(pattern)) {
+    calls.push({
+      method: match[1]?.toUpperCase() ?? "GET",
+      path: match[2] ?? "",
+      filePath: file.relativePath,
+      line: lineNumberAt(text, match.index ?? 0)
+    });
+  }
+
+  return calls;
+}
+
+function detectFeignClientCalls(file: ScannedFile, text: string): OutboundCallSite[] {
+  if (!file.relativePath.endsWith(".java") || !text.includes("@FeignClient")) {
+    return [];
+  }
+
+  const calls: OutboundCallSite[] = [];
+  const classMapping =
+    text.match(/@RequestMapping\(\s*(?:value\s*=\s*)?["']([^"']+)["']/)?.[1] ?? "";
+  const pattern =
+    /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\(\s*(?:value\s*=\s*)?["']?([^"')]*)["']?/g;
+
+  for (const match of text.matchAll(pattern)) {
+    const annotation = match[1] ?? "RequestMapping";
+
+    calls.push({
+      method: springMethod(annotation),
+      path: joinRoutes(classMapping, match[2] ?? ""),
+      filePath: file.relativePath,
+      line: lineNumberAt(text, match.index ?? 0)
+    });
+  }
+
+  return calls;
+}
+
+/**
+ * Matches each outbound call against every OTHER repo's routes by normalized
+ * path and HTTP method. Best-effort: a match is a path collision, not proof
+ * the call actually reaches that route, and a dynamic base URL or a path
+ * built outside a literal string is invisible to it either way.
+ */
+function detectCrossRepoInterlinks(
+  outboundCalls: TaggedOutboundCall[],
+  routes: RouteApiEndpoint[]
+): CrossRepoInterlink[] {
+  const interlinks: CrossRepoInterlink[] = [];
+
+  for (const call of outboundCalls) {
+    const normalizedCallPath = normalizeRoutePath(call.path);
+
+    if (!normalizedCallPath) {
+      continue;
+    }
+
+    for (const route of routes) {
+      if (!route.repoName || route.repoName === call.repoName) {
+        continue;
+      }
+
+      if (normalizeRoutePath(route.routePath) !== normalizedCallPath) {
+        continue;
+      }
+
+      const methodsMatch =
+        call.method === route.method && call.method !== "ANY" && route.method !== "ANY";
+
+      interlinks.push({
+        kind: "http-route",
+        method: methodsMatch ? call.method : `${call.method} -> ${route.method}`,
+        path: route.routePath,
+        fromRepo: call.repoName ?? "unknown",
+        fromFile: call.filePath,
+        fromLine: call.line,
+        toRepo: route.repoName,
+        toFile: route.filePath,
+        toLine: route.line,
+        confidence: methodsMatch ? "high" : "medium"
+      });
+    }
+  }
+
+  return dedupeInterlinks(interlinks).slice(0, 200);
+}
+
+function normalizeRoutePath(routePath: string): string {
+  return routePath
+    .split("?")[0]
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) =>
+      /^(?::[\w-]+|\{[^}]+\}|<[^>]+>|\[[^\]]+\])$/.test(segment) ? "*" : segment
+    )
+    .join("/");
+}
+
+function dedupeInterlinks(interlinks: CrossRepoInterlink[]): CrossRepoInterlink[] {
+  const seen = new Set<string>();
+  const output: CrossRepoInterlink[] = [];
+
+  for (const interlink of interlinks) {
+    const key = `${interlink.fromFile}:${interlink.fromLine ?? ""}:${interlink.toFile}:${interlink.toLine ?? ""}`;
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      output.push(interlink);
+    }
+  }
+
+  return output;
 }
 
 function detectTestRelationships(
@@ -961,6 +1167,7 @@ function summarizeAdvancedAnalysis(input: {
   riskScores: AdvancedRiskScore[];
   diagnostics: RepoReadinessDiagnostic[];
   gitActivity: FileChangeActivity[];
+  interlinks: CrossRepoInterlink[];
 }): string {
   const highRisks = input.riskScores.filter((risk) => risk.level === "high");
 
@@ -971,7 +1178,8 @@ function summarizeAdvancedAnalysis(input: {
     `${input.testRelationships.length} test relationship(s)`,
     `${highRisks.length} high risk score(s)`,
     `${input.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length} readiness warning(s)`,
-    `${input.gitActivity.length} file(s) with recent git activity`
+    `${input.gitActivity.length} file(s) with recent git activity`,
+    `${input.interlinks.length} cross-repo interlink(s)`
   ].join(", ");
 }
 

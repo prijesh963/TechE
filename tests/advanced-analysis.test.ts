@@ -438,7 +438,146 @@ describe("multi-repo advanced analysis", () => {
 
     expect(analysis.repoRoot).toBe(fixture.workspaceRoot);
   });
+
+  it("matches an HTTP client call in one repo to a route in another", async () => {
+    const fixture = await createMultiRepoWorkspaceFixture();
+    await writeFile(
+      path.join(fixture.webRepo, "src", "invoiceClient.ts"),
+      "import axios from 'axios'; export function loadInvoices() { return axios.get('/invoices'); }",
+      "utf8"
+    );
+    const workspaceService = new WorkspaceService();
+    await workspaceService.createWorkspaceMap({ startPath: fixture.workspaceRoot });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "http-route",
+        method: "GET",
+        path: "/invoices",
+        fromRepo: "web-repo",
+        fromFile: "src/invoiceClient.ts",
+        toRepo: "api-repo",
+        toFile: "src/server.ts",
+        confidence: "high"
+      })
+    );
+  });
+
+  it("does not report an interlink for a call matching a route in its own repo", async () => {
+    const fixture = await createMultiRepoWorkspaceFixture();
+    // api-repo calling its own /invoices route is not a cross-repo interlink.
+    await writeFile(
+      path.join(fixture.apiRepo, "src", "selfCall.ts"),
+      "import axios from 'axios'; export function loadInvoices() { return axios.get('/invoices'); }",
+      "utf8"
+    );
+    const workspaceService = new WorkspaceService();
+    await workspaceService.createWorkspaceMap({ startPath: fixture.workspaceRoot });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(
+      analysis.interlinks.some((interlink) => interlink.fromRepo === "api-repo")
+    ).toBe(false);
+  });
+
+  it("treats a Feign client's declared methods as calls, not exposed routes", async () => {
+    const fixture = await createFeignWorkspaceFixture();
+    const workspaceService = new WorkspaceService();
+    await workspaceService.createWorkspaceMap({ startPath: fixture.workspaceRoot });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    // The Feign client interface must not be reported as a route this repo
+    // exposes — it declares a call to another service, the opposite claim.
+    expect(analysis.routes.some((route) => route.repoName === "order-service")).toBe(
+      false
+    );
+    expect(analysis.routes).toContainEqual(
+      expect.objectContaining({
+        routePath: "/invoices/{id}/approve",
+        repoName: "invoice-service"
+      })
+    );
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "http-route",
+        method: "POST",
+        fromRepo: "order-service",
+        toRepo: "invoice-service",
+        confidence: "high"
+      })
+    );
+  });
 });
+
+async function createFeignWorkspaceFixture(): Promise<{
+  workspaceRoot: string;
+  invoiceService: string;
+  orderService: string;
+}> {
+  const parent = await mkdtemp(path.join(tmpdir(), "copilot-advanced-feign-"));
+  const workspaceRoot = path.join(parent, "workspace");
+  const invoiceService = path.join(parent, "invoice-service");
+  const orderService = path.join(parent, "order-service");
+
+  await mkdir(workspaceRoot, { recursive: true });
+  await createRepoAt(invoiceService, {
+    "pom.xml": "<project><artifactId>spring-boot-starter-web</artifactId></project>",
+    "src/main/java/com/acme/InvoiceController.java": [
+      "import org.springframework.web.bind.annotation.*;",
+      "@RestController",
+      '@RequestMapping("/invoices")',
+      "public class InvoiceController {",
+      '@PostMapping("/{id}/approve")',
+      "void approve() {}",
+      "}"
+    ].join("\n")
+  });
+  await createRepoAt(orderService, {
+    "pom.xml":
+      "<project><artifactId>spring-cloud-starter-openfeign</artifactId></project>",
+    "src/main/java/com/acme/InvoiceClient.java": [
+      "import org.springframework.cloud.openfeign.FeignClient;",
+      "import org.springframework.web.bind.annotation.*;",
+      '@FeignClient(name = "invoice-service")',
+      "public interface InvoiceClient {",
+      '@PostMapping("/invoices/{id}/approve")',
+      "void approveInvoice(@PathVariable String id);",
+      "}"
+    ].join("\n")
+  });
+  await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+  await writeFile(
+    path.join(workspaceRoot, ".copilot-architect", "workspace.json"),
+    JSON.stringify(
+      {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        workspaceName: "Feign Workspace",
+        workspaceRoot,
+        artifactRoot: path.join(workspaceRoot, ".copilot-architect"),
+        repos: [
+          { name: "invoice-service", path: invoiceService, role: "backend" },
+          { name: "order-service", path: orderService, role: "backend" }
+        ],
+        repoRoots: []
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  return { workspaceRoot, invoiceService, orderService };
+}
 
 async function createMultiRepoWorkspaceFixture(): Promise<{
   workspaceRoot: string;

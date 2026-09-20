@@ -228,6 +228,32 @@ export interface AdvancedAnalysis extends GeneratedArtifact {
   /** Recency/frequency signal from git history. Empty when the repo has no
    *  `.git` directory, git is unavailable, or the history is empty. */
   gitActivity: FileChangeActivity[];
+  /** A call site in one registered repo whose literal URL path matches a
+   *  route detected in a different one — only meaningful in a multi-repo
+   *  workspace, always empty for a single repo. */
+  interlinks: CrossRepoInterlink[];
+}
+
+/**
+ * A caller in one repo (an HTTP client call, an OpenFeign client method) whose
+ * path matches a route exposed by another registered repo. Matching is by
+ * normalized path and HTTP method only — no runtime evidence, so it can miss
+ * a real call built from a dynamic base URL, and it can also surface a
+ * coincidental path collision between two repos that do not actually call
+ * each other. Confidence reflects HTTP-method agreement, not certainty about
+ * the relationship itself.
+ */
+export interface CrossRepoInterlink {
+  kind: "http-route";
+  method: string;
+  path: string;
+  fromRepo: string;
+  fromFile: string;
+  fromLine?: number;
+  toRepo: string;
+  toFile: string;
+  toLine?: number;
+  confidence: ConfidenceLevel;
 }
 
 export interface FileChangeActivity {

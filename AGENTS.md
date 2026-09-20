@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 524 tests
+├── tests/               48 files, 527 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -217,6 +217,15 @@ the other. If a shell needs repo intelligence, it imports the service.
     silently invisible to some of them, which is exactly Cucumber's common
     shape. Also recognizes `.feature` files and the JUnit/TestNG
     `SomethingTests.java` suffix convention.
+24. Cross-repo HTTP-route interlink matching: an HTTP client call
+    (`axios`/`fetch`/`requests`, an OpenFeign client method) whose literal
+    path matches a route exposed by a *different* registered repo is reported
+    in `AdvancedAnalysis.interlinks`, tagged with both repos and a confidence
+    based on HTTP-method agreement. A `@FeignClient` interface's own
+    `@GetMapping`-style annotations are read as the call they are, not
+    misreported as a route the calling repo itself exposes. Messaging
+    interlinks (Kafka producer/consumer, etc.) are not yet matched — see
+    `docs/KNOWN_LIMITATIONS.md` 4.14.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -351,7 +360,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 524 tests must pass before merging.
+Use Vitest. All 527 tests must pass before merging.
 
 Cover:
 
@@ -384,6 +393,9 @@ Cover:
   represented and `repoName`-tagged, not only the first; workspace-wide
   repo-map/index diagnostics computed once rather than once per repo; a
   polyrepo workspace not mistaken for any one member being a monorepo)
+- cross-repo HTTP-route interlinks (an outbound call matched to a route in a
+  different repo; a same-repo match not reported as an interlink; a
+  `@FeignClient`'s own mappings excluded from the routes it exposes)
 - feature planning (JSON + Markdown output)
 - integration detection (datastore/messaging/micro-frontend/microservice/
   orchestration/monorepo-tooling/test-automation, by content and by

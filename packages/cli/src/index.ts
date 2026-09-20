@@ -3107,6 +3107,14 @@ function getDiagnosticsText(result: RepoReadinessReport): string {
             diagnostic.recommendation ? ` ${diagnostic.recommendation}` : ""
           }`
       )
+    ),
+    "",
+    "Cross-repo interlinks:",
+    ...listOrNone(
+      analysis.interlinks.map(
+        (interlink) =>
+          `${interlink.fromRepo} calls ${interlink.method} ${interlink.path} (\`${interlink.fromFile}\`) -> ${interlink.toRepo} (\`${interlink.toFile}\`) [${interlink.confidence}]`
+      )
     )
   ].join("\n");
 }
