@@ -451,7 +451,12 @@ function buildPlan(
     advancedAnalysis.testRelationships,
     likelyFilesToModify
   );
-  const likelyNewFiles = inferLikelyNewFiles(repo, request, impactedModules);
+  const likelyNewFiles = inferLikelyNewFiles(
+    repo,
+    request,
+    impactedModules,
+    searchResults
+  );
   const assumptions = createAssumptions(repo, searchResults, planningContext);
   const openQuestions = createOpenQuestions(repo, request, planningContext);
   const risks = createRisks(repo, searchResults, advancedAnalysis.riskScores);
@@ -1114,43 +1119,172 @@ function inferLikelyFilesToModify(searchResults: SearchResult[]): string[] {
   return unique(nonDocs).slice(0, 8);
 }
 
+/**
+ * Words that carry no meaning in a file name.
+ *
+ * A request is a sentence, and naming a class after the whole sentence
+ * produces `AddRetryLogicToTheVisitsClientService.java` — a name no developer
+ * would write, proposed with the confidence of a real one. Dropping the verb
+ * and the grammar leaves the nouns the feature is actually about.
+ */
+const NAMING_STOPWORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "to",
+  "for",
+  "of",
+  "in",
+  "on",
+  "into",
+  "with",
+  "and",
+  "or",
+  "add",
+  "adds",
+  "added",
+  "create",
+  "creates",
+  "make",
+  "update",
+  "change",
+  "support",
+  "implement",
+  "new",
+  "some",
+  "please",
+  "logic",
+  "feature"
+]);
+
+/** Longer than this and it is a sentence, not a name. */
+const MAX_NAME_WORDS = 3;
+
+/**
+ * The meaningful words in a request, for naming a file after it.
+ *
+ * Falls back to the raw slug when stripping leaves nothing — a request made
+ * entirely of stopwords is unusual, and an empty name would be worse than a
+ * clumsy one.
+ */
+function nameWordsFromRequest(request: string): string[] {
+  const words = slugFromRequest(request)
+    .split("-")
+    .filter((word) => word.length > 1 && !NAMING_STOPWORDS.has(word));
+
+  const kept = words.length > 0 ? words : slugFromRequest(request).split("-");
+  return kept.filter(Boolean).slice(0, MAX_NAME_WORDS);
+}
+
+/**
+ * A folder to put a proposed new file of this type in.
+ *
+ * Grounded rather than guessed. `impactedModules` is ranked by search hits,
+ * so its top entry is whatever matched the words of the request — which on a
+ * real repository put a `.java` file under `src/test/java`, then under
+ * `db/mysql`, then under `scripts/chaos`. None of those hold Java.
+ *
+ * So the folder has to already contain files of the same kind. The index
+ * knows where those are, and preferring the highest-ranked module that
+ * qualifies keeps the proposal near the code the request is about.
+ */
+function folderForExtension(
+  repo: RepoMap,
+  impactedModules: string[],
+  searchResults: SearchResult[],
+  extension: string,
+  nameWords: string[]
+): string | undefined {
+  const looksLikeTests = (folder: string): boolean =>
+    /(^|\/)(test|tests|__tests__|spec|specs)(\/|$)/.test(folder);
+
+  // Two sources of evidence, because one is not enough. Search results are
+  // scoped to the request, so a repository can hold plenty of Java and return
+  // none of it for a feature described in words none of those files use —
+  // which is how this first proposed nothing at all for a polyglot repo.
+  // Entry points are repo-wide and carry real paths, so they answer "where
+  // does this language live" independently of what was asked.
+  const evidence = [
+    ...searchResults.map((result) => result.relativePath),
+    ...(repo.entryPoints ?? []).map((entry) => entry.filePath)
+  ];
+
+  const folders = new Set(
+    evidence
+      .filter((file) => file.endsWith(extension))
+      .map((file) => path.dirname(file))
+      .filter((folder) => folder !== "." && !looksLikeTests(folder))
+  );
+
+  if (folders.size === 0) {
+    return undefined;
+  }
+
+  // Among folders that qualify, prefer one the request actually names. Search
+  // ranking alone put a change to the "customers service" in `genai-service`
+  // simply because that module's files scored highest overall; a module whose
+  // path carries a word from the request is the better guess, and is still
+  // evidence rather than invention.
+  const candidates = impactedModules.filter((folder) => folders.has(folder));
+  const named = candidates.find((folder) =>
+    nameWords.some((word) => folder.toLowerCase().includes(word))
+  );
+
+  return named ?? candidates[0] ?? [...folders][0];
+}
+
 function inferLikelyNewFiles(
   repo: RepoMap,
   request: string,
-  impactedModules: string[]
+  impactedModules: string[],
+  searchResults: SearchResult[]
 ): string[] {
-  const slug = slugFromRequest(request);
-  const baseFolder = impactedModules[0] ?? repo.projects[0]?.sourceFolders[0] ?? "src";
+  const words = nameWordsFromRequest(request);
+  const slug = words.join("-");
   const frameworks = new Set(repo.frameworks.map((framework) => framework.name));
   const languages = new Set(repo.languages.map((language) => language.name));
   const files: string[] = [];
 
-  if (frameworks.has("React")) {
-    files.push(`${baseFolder}/${slug}.tsx`, `${baseFolder}/${slug}.test.tsx`);
+  // Proposed only where the repository already has somewhere to put it. A
+  // suggestion with nowhere real to live is one the developer has to notice
+  // and discard, which costs more than making no suggestion at all.
+  const folderFor = (extension: string): string | undefined =>
+    folderForExtension(repo, impactedModules, searchResults, extension, words);
+
+  const reactFolder = frameworks.has("React") ? folderFor(".tsx") : undefined;
+  if (reactFolder) {
+    files.push(`${reactFolder}/${slug}.tsx`, `${reactFolder}/${slug}.test.tsx`);
   }
 
-  if (frameworks.has("Angular")) {
+  const angularFolder = frameworks.has("Angular") ? folderFor(".ts") : undefined;
+  if (angularFolder) {
     files.push(
-      `${baseFolder}/${slug}.service.ts`,
-      `${baseFolder}/${slug}.service.spec.ts`
+      `${angularFolder}/${slug}.service.ts`,
+      `${angularFolder}/${slug}.service.spec.ts`
     );
   }
 
-  if (languages.has("Python")) {
+  const pythonFolder = languages.has("Python") ? folderFor(".py") : undefined;
+  if (pythonFolder) {
     files.push(
-      `${baseFolder}/${slug}.py`,
+      `${pythonFolder}/${slug.replaceAll("-", "_")}.py`,
       `tests/test_${slug.replaceAll("-", "_")}.py`
     );
   }
 
-  if (languages.has("Java")) {
-    files.push(`${baseFolder}/${pascalCase(slug)}Service.java`);
+  const javaFolder = languages.has("Java") ? folderFor(".java") : undefined;
+  if (javaFolder) {
+    files.push(`${javaFolder}/${pascalCase(slug)}Service.java`);
   }
 
-  if (files.length === 0) {
-    files.push(`${baseFolder}/${slug}`);
+  const goFolder = languages.has("Go") ? folderFor(".go") : undefined;
+  if (goFolder) {
+    files.push(`${goFolder}/${slug.replaceAll("-", "_")}.go`);
   }
 
+  // No fallback path. Inventing `<some folder>/<the request>` was how a plan
+  // proposed a file with neither a real name nor a real home; saying nothing
+  // is the honest answer when the repository gives no evidence.
   return unique(files).slice(0, 8);
 }
 

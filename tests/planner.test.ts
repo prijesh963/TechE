@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -679,3 +679,86 @@ async function createRepo(files: Record<string, string>): Promise<string> {
 
   return repoRoot;
 }
+
+describe("proposed new files", () => {
+  it("names a file after the feature, not after the sentence", async () => {
+    // "Add retry logic to the visits client" produced
+    // AddRetryLogicToTheVisitsClientService.java — a name no developer would
+    // write, proposed with the confidence of a real one.
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-newfiles-"));
+    await mkdir(path.join(repoRoot, "src/main/java/com/acme/visits"), {
+      recursive: true
+    });
+    await writeFile(path.join(repoRoot, "pom.xml"), "<project/>\n", "utf8");
+    await writeFile(
+      path.join(repoRoot, "src/main/java/com/acme/visits/VisitsClient.java"),
+      "package com.acme.visits;\npublic class VisitsClient { public void call() {} }\n",
+      "utf8"
+    );
+
+    const result = await new FeaturePlanningService().createPlan({
+      startPath: repoRoot,
+      request: "Add retry logic to the visits client"
+    });
+
+    const proposed = result.plan.likelyNewFiles.join("\n");
+    expect(proposed).not.toContain("AddRetryLogicToThe");
+    for (const file of result.plan.likelyNewFiles) {
+      expect(path.basename(file).length).toBeLessThan(45);
+    }
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("puts a proposed source file where that language actually lives", async () => {
+    // Ranked search hits put a .java file under src/test/java, then db/mysql,
+    // then scripts/chaos. None of those hold Java.
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-newfiles-dir-"));
+    await mkdir(path.join(repoRoot, "src/main/java/com/acme/billing"), {
+      recursive: true
+    });
+    await mkdir(path.join(repoRoot, "src/main/resources/db/mysql"), {
+      recursive: true
+    });
+    await writeFile(path.join(repoRoot, "pom.xml"), "<project/>\n", "utf8");
+    await writeFile(
+      path.join(repoRoot, "src/main/java/com/acme/billing/InvoiceService.java"),
+      "package com.acme.billing;\npublic class InvoiceService { public void post() {} }\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(repoRoot, "src/main/resources/db/mysql/schema.sql"),
+      "-- invoice tables\nCREATE TABLE invoice (id INT);\n",
+      "utf8"
+    );
+
+    const result = await new FeaturePlanningService().createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval to billing"
+    });
+
+    for (const file of result.plan.likelyNewFiles.filter((f) => f.endsWith(".java"))) {
+      expect(file).toContain("src/main/java");
+      expect(file).not.toContain("db/mysql");
+      expect(file).not.toContain("src/test");
+    }
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("proposes nothing rather than somewhere invented", async () => {
+    // A suggestion with nowhere real to live is one the developer has to
+    // notice and discard, which costs more than making no suggestion.
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-newfiles-none-"));
+    await writeFile(path.join(repoRoot, "README.md"), "# notes only\n", "utf8");
+
+    const result = await new FeaturePlanningService().createPlan({
+      startPath: repoRoot,
+      request: "Support bulk invoice export"
+    });
+
+    expect(result.plan.likelyNewFiles).toEqual([]);
+
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+});

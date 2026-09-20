@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               47 files, 489 tests
+├── tests/               48 files, 498 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -311,7 +311,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 489 tests must pass before merging.
+Use Vitest. All 498 tests must pass before merging.
 
 Cover:
 
@@ -349,6 +349,10 @@ Cover:
 - handoff generation (approval gating, git checkpoint)
 - review reports (diff, risk detection, missing tests)
 - CLI commands (help, JSON output, exit codes)
+- the invocation help names (bundled file, linked bin, workspace script,
+  and an unfamiliar host)
+- proposed new files (named from the feature, placed where the language
+  lives, and omitted when the repo gives no evidence)
 - extension chat phases and packaged CLI invocation
 - multi-repo workspaces
 - end-to-end sample repos

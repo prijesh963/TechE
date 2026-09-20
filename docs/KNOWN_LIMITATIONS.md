@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–32 merged. The redesign is complete; what is below is
+**Status:** Phases 0–33 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -139,16 +139,19 @@ that information.
 would close most of these, at the cost of a second model call whenever the
 first was sloppy.
 
-### 1.12 Validation runs, but nothing reads its result
+### 1.12 The extension's review does not read the validation result
 
-**Phase 19.** The plan commits to checks, the button runs them safely, and the
-outcome goes to the output channel and the dashboard. `/review` does not load
-the validation report, so a failing test does not become a review finding
-even though `ReviewService` accepts one.
+**Phase 19, narrowed in Phase 33.** The CLI does load it: an end-to-end run on
+a real repository reported `Validation status: passed` once a report existed,
+so `ReviewService` and the artifact wiring work. The extension's `/review`
+still does not pass one, so a failing test does not become a review finding
+there.
 
-**Cost:** the loop's last two steps do not meet. Passing `validation:` to the
-review call would close it, and needs the run's path threaded through the
-session.
+**Cost:** the loop's last two steps meet on the CLI and not in the editor,
+which is where the four phases are actually driven. Passing `validation:` to
+the review call would close it, and needs the run's path threaded through the
+session. Recorded until Phase 33 as if neither path worked, which the record
+now corrects.
 
 ### 1.13 Review reads a diff summary, not the diff
 
@@ -220,6 +223,20 @@ and a symbol that is real but unextracted reads as a fabrication. Closing it
 is now a row in a table rather than a new mechanism — the grammars exist on
 npm — but each one costs package size, which is why only the two measured at
 zero ship today.
+
+### 1.19 A proposed new file is still a guess about placement
+
+**Phase 33.** The CLI planner names a proposed file after the feature and puts
+it in a folder that already holds that language, preferring a module the
+request names. That is evidence, not knowledge: "add retry to the visits
+client" lands in the visits module because the word matches, and a request
+whose wording does not match any module falls back to wherever that language
+is most present.
+
+**Cost:** a plausible-looking path in the wrong module, which a developer has
+to notice. The alternative is proposing nothing, which the repo-without-Java
+case already does. Judging the right module needs a model, which is the
+extension's path rather than the CLI's.
 
 ### 1.19 Only two grammars ship, chosen by size
 

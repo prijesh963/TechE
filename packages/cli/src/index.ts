@@ -140,7 +140,9 @@ const commandUsage = {
     'npm run cli -- search "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
   intent:
     'npm run cli -- intent "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
-  plan: 'npm run cli -- plan "feature request" [--path <repo>|--root <repo>] [--json]',
+  plan:
+    'npm run cli -- plan "feature request" [--path <repo>|--root <repo>] [--json]\n' +
+    "  npm run cli -- plan approve --revision <n> --by <name> [--path <repo>] [--json]",
   measure:
     'npm run cli -- measure "feature request" [--path <repo>|--root <repo>] [--json]',
   commands: "npm run cli -- commands <list|validate> [--path <repo>] [--json]",
@@ -199,6 +201,54 @@ export function getHelpText(): string {
   ].join("\n");
 }
 
+/** How this CLI was actually started, for the help text to name. */
+const SOURCE_INVOCATION = "npm run cli --";
+
+/** What `scripts/bundle-extension.mjs` emits, and the VSIX ships. */
+const BUNDLED_CLI_FILENAME = "cli.mjs";
+
+/** The `bin` name, which `npm link` puts on PATH. */
+const CLI_BIN_NAME = "copilot-architect";
+
+/**
+ * The command a reader can actually type.
+ *
+ * `npm run cli --` only resolves inside this monorepo. The CLI also ships
+ * bundled inside the VSIX, spawned by absolute path on a machine with no
+ * package.json and no clone — and it printed the monorepo invocation there,
+ * sending a developer to type something that cannot work. This is the same
+ * mistake Phase 7 fixed for the extension's spawn path, left behind in the
+ * CLI's own help.
+ */
+export function cliInvocation(scriptPath = process.argv[1] ?? ""): string {
+  if (!scriptPath) {
+    return SOURCE_INVOCATION;
+  }
+
+  // Running from the workspace sources is the one case where the npm script
+  // exists, and it is the friendlier thing to print there.
+  if (scriptPath.includes(`${path.sep}packages${path.sep}cli${path.sep}`)) {
+    return SOURCE_INVOCATION;
+  }
+
+  const base = path.basename(scriptPath);
+
+  // Only our own artifacts are named, never whatever script happens to be
+  // running. The CLI is also imported as a library — by the test runner, and
+  // by anything embedding it — and a first version printed the host's path,
+  // telling a reader to run `node .../vitest/forks.js init`. An unfamiliar
+  // host falls through to the invocation that at least exists in a clone.
+  if (base === BUNDLED_CLI_FILENAME) {
+    return `node ${scriptPath}`;
+  }
+
+  if (base === CLI_BIN_NAME) {
+    return CLI_BIN_NAME;
+  }
+
+  return SOURCE_INVOCATION;
+}
+
 export function getCommandHelpText(command: CliCommandName): string {
   return [
     `${PROJECT_NAME}: ${command}`,
@@ -206,7 +256,7 @@ export function getCommandHelpText(command: CliCommandName): string {
     commandDescriptions[command],
     "",
     "Usage:",
-    `  ${commandUsage[command]}`,
+    `  ${commandUsage[command].replaceAll(SOURCE_INVOCATION, cliInvocation())}`,
     "",
     "Common flags:",
     "  --json       Print structured JSON where supported.",
@@ -1985,12 +2035,19 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
   }
 
   if (subcommand === "approve") {
-    if (options.revision === undefined) {
-      throw new Error("plan approve requires --revision <n>");
-    }
+    // Both checked together. Reporting one at a time made approving a plan a
+    // guessing game played against error messages: run it, learn about
+    // --revision, run it again, learn about --by. The command a reader needs
+    // is printed whole rather than assembled from two failures.
+    const missing: string[] = [];
+    if (options.revision === undefined) missing.push("--revision <n>");
+    if (!options.approvedBy) missing.push("--by <name>");
 
-    if (!options.approvedBy) {
-      throw new Error("plan approve requires --by <name>");
+    if (missing.length > 0) {
+      throw new Error(
+        `plan approve requires ${missing.join(" and ")}. ` +
+          `Usage: ${cliInvocation()} plan approve --revision <n> --by <name>`
+      );
     }
   }
 
