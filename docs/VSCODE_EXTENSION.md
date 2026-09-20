@@ -105,6 +105,7 @@ After loading, the Copilot Architect icon appears in the VS Code activity bar. C
 | Validation runs      | Path to `.copilot-architect/runs/latest-validation.json`       |
 | Review reports       | Path to `.copilot-architect/reviews/latest-review.json`        |
 | MCP status           | `stopped` / `starting` / `running`                             |
+| Build                | Which build is running — rises with every commit               |
 | Last command         | The most recently run CLI command and its exit code            |
 
 **Current work** is the panel's reason to exist. With no session open it tells

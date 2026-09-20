@@ -31,6 +31,11 @@ code --install-extension copilot-architect-<version>.vsix
 To confirm it is live: open Copilot Chat and type `@architect`. If the
 participant does not appear, see _If it does not activate_ below.
 
+**Check which build you have.** The Copilot Architect panel shows a **Build**
+number, and every answer's receipts line ends with the same one. It rises with
+every commit, so after installing a new `.vsix` you can confirm the extension
+running is the one you just built — not the previous one.
+
 ---
 
 ## Use
