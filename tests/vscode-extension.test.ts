@@ -276,11 +276,11 @@ describe("VS Code extension shell", () => {
   });
 
   it("registers only the folders that look like repositories", async () => {
-    // Reported from spring-petclinic-microservices: eight services came back
+    // Reported from a multi-service Java workspace: eight services came back
     // as "12 repos" because docs/, docker/ and scripts/ were registered too,
     // putting documentation in the ranking against source on every search.
-    const reposDir = await mkdtemp(path.join(tmpdir(), "copilot-ext-petclinic-"));
-    const services = ["customers-service", "vets-service", "visits-service"];
+    const reposDir = await mkdtemp(path.join(tmpdir(), "copilot-ext-services-"));
+    const services = ["customers-service", "billing-service", "shipping-service"];
     for (const name of services) {
       await mkdir(path.join(reposDir, name), { recursive: true });
       await writeFile(path.join(reposDir, name, "pom.xml"), "<project/>\n", "utf8");
@@ -791,8 +791,8 @@ describe("VS Code extension shell", () => {
   });
 
   it("sees every registered repo, not just the workspace root", async () => {
-    // Regression: `@architect Analyze repo and explain more about R2D2` replied
-    // "the provided context is empty — the only file shown is workspace.json".
+    // Regression: asking about a symbol in a registered repo replied "the
+    // provided context is empty — the only file shown is workspace.json".
     // The Q&A path read the workspace root's own index, which on a multi-repo
     // workspace indexes nothing but registration. Retrieval now goes through
     // IndexingService, but the guarantee this protects is unchanged.
@@ -800,23 +800,23 @@ describe("VS Code extension shell", () => {
     await writeWorkspace(workspaceRoot, ["svc-orders", "web-ui"]);
     await writeSource(
       workspaceRoot,
-      "svc-orders/src/main/java/com/acme/R2D2Service.java",
-      "package com.acme;\npublic class R2D2Service { public void astromech() {} }"
+      "svc-orders/src/main/java/com/acme/Oauth2Service.java",
+      "package com.acme;\npublic class Oauth2Service { public void refresh() {} }"
     );
     await writeSource(
       workspaceRoot,
-      "web-ui/src/app/r2d2.component.ts",
-      'export class R2d2Component { droid = "R2D2"; }'
+      "web-ui/src/app/oauth2.component.ts",
+      'export class Oauth2Component { provider = "Oauth2"; }'
     );
 
-    const context = await buildRepoContext(workspaceRoot, "R2D2");
+    const context = await buildRepoContext(workspaceRoot, "Oauth2");
 
     // Both repos reachable, and paths are relative to the WORKSPACE root —
     // readFilesForLmContext resolves them with path.join(workspaceRoot, rel),
     // so a path relative to a sub-repo would silently fail to open.
     const anchored = context.fileAnchors.map((anchor) => anchor.relativePath);
-    expect(anchored).toContain("svc-orders/src/main/java/com/acme/R2D2Service.java");
-    expect(anchored).toContain("web-ui/src/app/r2d2.component.ts");
+    expect(anchored).toContain("svc-orders/src/main/java/com/acme/Oauth2Service.java");
+    expect(anchored).toContain("web-ui/src/app/oauth2.component.ts");
   });
 
   it("names why a context is empty instead of implying the repo is", async () => {
@@ -867,8 +867,8 @@ describe("VS Code extension shell", () => {
   });
 
   it("offers four phases, not a menu of twelve", async () => {
-    // The R2D2 report was this problem: the user wrote "Code Analysis Agent"
-    // and typed @architect — two different systems. One door, four steps.
+    // A reported confusion: the developer wrote "Code Analysis Agent" and
+    // typed @architect — two different systems. One door, four steps.
     const manifest = JSON.parse(
       await readFile(path.join("packages", "vscode-extension", "package.json"), "utf8")
     );

@@ -380,13 +380,13 @@ describe("IndexingService", () => {
   it("follows a branch switch without waiting out the freshness cache", async () => {
     if (!(await gitAvailable())) return;
 
-    const repoRoot = await createRepo({ "src/app.ts": "export class Thruster {}" });
+    const repoRoot = await createRepo({ "src/app.ts": "export class Ledger {}" });
     await execFileAsync("git", ["init", "-b", "main"], { cwd: repoRoot });
     await commitAll(repoRoot, "initial");
     await execFileAsync("git", ["checkout", "-b", "feature"], { cwd: repoRoot });
     await writeFile(
       path.join(repoRoot, "src/app.ts"),
-      "export class Astromech {}",
+      "export class Reconciler {}",
       "utf8"
     );
     await commitAll(repoRoot, "feature");
@@ -396,16 +396,16 @@ describe("IndexingService", () => {
       (await service.listFiles({ startPath: repoRoot })).files[0]?.symbols ?? [];
 
     await service.index({ startPath: repoRoot });
-    expect(await symbolsNow()).toEqual(["Astromech"]);
+    expect(await symbolsNow()).toEqual(["Reconciler"]);
 
     // No delay: the call above just warmed the freshness cache. A branch switch
     // replaces the whole tree at once, so serving that cached verdict would
     // answer from the branch the developer just left.
     await execFileAsync("git", ["checkout", "main"], { cwd: repoRoot });
-    expect(await symbolsNow()).toEqual(["Thruster"]);
+    expect(await symbolsNow()).toEqual(["Ledger"]);
 
     await execFileAsync("git", ["checkout", "feature"], { cwd: repoRoot });
-    expect(await symbolsNow()).toEqual(["Astromech"]);
+    expect(await symbolsNow()).toEqual(["Reconciler"]);
   });
 
   it("refreshes itself when the repo changed under it", async () => {
@@ -485,7 +485,7 @@ describe("IndexingService", () => {
   it("surfaces a shared library the query never mentions", async () => {
     // The payoff of a workspace-wide graph: nothing in shared-lib matches a
     // query about placing an order, but OrderService.place calls
-    // Thruster.calibrate, and that edge is the only thing that can surface it.
+    // Ledger.calibrate, and that edge is the only thing that can surface it.
     const parent = await mkdtemp(path.join(tmpdir(), "copilot-xrepo-search-"));
     const write = async (repo: string, files: Record<string, string>) => {
       for (const [relativePath, contents] of Object.entries(files)) {
@@ -496,14 +496,14 @@ describe("IndexingService", () => {
     };
 
     await write("shared-lib", {
-      "src/main/java/com/acme/core/Thruster.java":
-        "package com.acme.core;\npublic class Thruster {\n" +
+      "src/main/java/com/acme/core/Ledger.java":
+        "package com.acme.core;\npublic class Ledger {\n" +
         "  public boolean calibrate(String id) { return id != null; }\n}"
     });
     await write("svc-orders", {
       "src/main/java/com/acme/orders/OrderService.java":
-        "package com.acme.orders;\nimport com.acme.core.Thruster;\n" +
-        "public class OrderService {\n  private Thruster thruster;\n" +
+        "package com.acme.orders;\nimport com.acme.core.Ledger;\n" +
+        "public class OrderService {\n  private Ledger thruster;\n" +
         "  public void placeOrder(String id) { thruster.calibrate(id); }\n}"
     });
     await write("platform", {
@@ -532,7 +532,7 @@ describe("IndexingService", () => {
 
     const after = await search();
     const shared = after.find((result) => result.repoName === "shared-lib");
-    expect(shared?.relativePath).toBe("src/main/java/com/acme/core/Thruster.java");
+    expect(shared?.relativePath).toBe("src/main/java/com/acme/core/Ledger.java");
     // Only the graph found it, and it claims no keyword score it did not earn.
     expect(shared?.signals).toEqual(["graph"]);
     expect(shared?.matchedFields).toEqual([]);
@@ -541,8 +541,9 @@ describe("IndexingService", () => {
   });
 
   it("answers for every registered repo, not just the workspace root", async () => {
-    // Regression: `@architect Analyze repo and explain more about R2D2` returned
-    // "the provided context is empty — the only file shown is workspace.json".
+    // Regression: asking about a symbol that lives in a registered repo
+    // returned "the provided context is empty — the only file shown is
+    // workspace.json".
     // The workspace root holds registration, not code, so every read path that
     // resolved it alone saw an empty repo while both real repos sat indexed.
     const workspaceRoot = await createRepo({
@@ -554,11 +555,11 @@ describe("IndexingService", () => {
           { name: "web-ui", path: "web-ui" }
         ]
       }),
-      "svc-orders/src/main/java/com/acme/R2D2Service.java":
-        "package com.acme;\npublic class R2D2Service { public void astromech() {} }",
+      "svc-orders/src/main/java/com/acme/Oauth2Service.java":
+        "package com.acme;\npublic class Oauth2Service { public void refresh() {} }",
       "svc-orders/pom.xml": "<project><artifactId>orders</artifactId></project>",
-      "web-ui/src/app/r2d2.component.ts":
-        'export class R2d2Component { droid = "R2D2"; }'
+      "web-ui/src/app/oauth2.component.ts":
+        'export class Oauth2Component { provider = "Oauth2"; }'
     });
     const service = new IndexingService();
 
@@ -572,12 +573,12 @@ describe("IndexingService", () => {
       inventory.files.map((file) => `${file.repoName}::${file.relativePath}`)
     ).toEqual(
       expect.arrayContaining([
-        "svc-orders::src/main/java/com/acme/R2D2Service.java",
-        "web-ui::src/app/r2d2.component.ts"
+        "svc-orders::src/main/java/com/acme/Oauth2Service.java",
+        "web-ui::src/app/oauth2.component.ts"
       ])
     );
 
-    const found = await service.search({ startPath: workspaceRoot, query: "R2D2" });
+    const found = await service.search({ startPath: workspaceRoot, query: "Oauth2" });
     expect(found.results.map((result) => result.repoName).sort()).toEqual([
       "svc-orders",
       "web-ui"
@@ -602,17 +603,18 @@ describe("IndexingService", () => {
   });
 
   it("finds an identifier that carries a digit", async () => {
-    // "R2D2Service" tokenized to one opaque "r2d2service", so searching the
-    // exact name the user asked about could not reach the file defining it.
+    // "Oauth2Service" tokenized to one opaque "oauth2service", so searching
+    // the exact name a developer asked about could not reach the file
+    // defining it.
     const repoRoot = await createRepo({
-      "src/R2D2Service.java": "public class R2D2Service {}",
+      "src/Oauth2Service.java": "public class Oauth2Service {}",
       "src/Utf8Decoder.java": "public class Utf8Decoder {}"
     });
     const service = new IndexingService();
 
-    const droid = await service.search({ startPath: repoRoot, query: "R2D2" });
-    expect(droid.results.map((result) => result.relativePath)).toContain(
-      "src/R2D2Service.java"
+    const auth = await service.search({ startPath: repoRoot, query: "Oauth2" });
+    expect(auth.results.map((result) => result.relativePath)).toContain(
+      "src/Oauth2Service.java"
     );
 
     const decoder = await service.search({ startPath: repoRoot, query: "utf8" });
@@ -748,16 +750,16 @@ describe("Java symbol extraction", () => {
     // cite one as evidence, and a request naming a real method looked like a
     // request about nothing that exists.
     const repoRoot = await createRepo({
-      "src/PetService.java": [
+      "src/InvoiceService.java": [
         "package com.acme;",
-        "public class PetService {",
+        "public class InvoiceService {",
         "  private final Repo repo;",
-        "  public void addPet(String name) { if (name != null) { return; } }",
-        "  protected List<Pet> findAll() { for (int i = 0; i < 3; i++) {} return null; }",
-        "  private static Map<String, Pet> cache() { return new HashMap<>(); }",
+        "  public void addInvoice(String id) { if (id != null) { return; } }",
+        "  protected List<Invoice> findAll() { for (int i = 0; i < 3; i++) {} return null; }",
+        "  private static Map<String, Invoice> cache() { return new HashMap<>(); }",
         "  @Bean",
         "  public AuthenticationManager authenticationManager() { return null; }",
-        "  public PetService(Repo repo) { this.repo = repo; }",
+        "  public InvoiceService(Repo repo) { this.repo = repo; }",
         "}"
       ].join("\n")
     });
@@ -766,8 +768,8 @@ describe("Java symbol extraction", () => {
     await service.index({ startPath: repoRoot });
     const symbols = await service.symbolNames({ startPath: repoRoot });
 
-    expect(symbols.has("PetService")).toBe(true);
-    for (const method of ["addPet", "findAll", "cache", "authenticationManager"]) {
+    expect(symbols.has("InvoiceService")).toBe(true);
+    for (const method of ["addInvoice", "findAll", "cache", "authenticationManager"]) {
       expect(symbols.has(method)).toBe(true);
     }
   });

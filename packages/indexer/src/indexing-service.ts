@@ -971,8 +971,8 @@ function createIndexedFile(input: {
 /**
  * The one tokenizer. Exported because a second copy is not a duplication of
  * code but a source of silent bugs: a query tokenized one way cannot match a
- * corpus tokenized another, and the digit-boundary fix that made `R2D2` findable
- * had to be applied twice before this was shared.
+ * corpus tokenized another, and the digit-boundary fix that made an identifier
+ * like `Oauth2Service` findable had to be applied twice before this was shared.
  */
 export function tokenize(text: string): string[] {
   const tokens: string[] = [];
@@ -980,9 +980,9 @@ export function tokenize(text: string): string[] {
     if (!chunk) continue;
     // Split camelCase ("invoiceApproval" → ["invoice","Approval"]),
     // acronym boundaries ("HTTPSClient" → ["HTTPS","Client"]), and
-    // digit boundaries ("R2D2Service" → ["R2D2","Service"]). Without the
+    // digit boundaries ("Oauth2Service" → ["Oauth2","Service"]). Without the
     // last rule an identifier carrying a digit stays one opaque token, so
-    // searching "R2D2" could not reach R2D2Service at all.
+    // searching "Oauth2" could not reach Oauth2Service at all.
     for (const sub of chunk.split(
       /(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[0-9])(?=[A-Z][a-z])/
     )) {

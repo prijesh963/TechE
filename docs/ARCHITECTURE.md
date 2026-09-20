@@ -339,8 +339,8 @@ Retrieval goes through `IndexingService`, and the tokenizer is imported from
 tokenizer, its own reciprocal-rank fusion, LM query expansion and embedding
 reranking — which meant `@architect` and the agents could give different answers
 to the same question and neither was wrong. It also meant a tokenizer fix had to
-be made twice: the digit-boundary change that made `R2D2` findable was applied
-to one copy and then the other. One engine removes that class of bug rather than
+be made twice: the digit-boundary change that made an identifier like
+`Oauth2Service` findable was applied to one copy and then the other. One engine removes that class of bug rather than
 fixing instances of it. Its manifest contributes a Copilot Architect activity-bar container, a `Copilot Architect` webview, command-palette commands, an **Open Repo in New Window** command, and a **GitHub Copilot Chat participant** (`@architect`) with slash commands for all major workflows.
 
 The extension does not implement repo analysis, planning, validation, review, agent, or instruction behavior. Commands delegate to `npm run cli -- ...` in the active workspace root, and MCP startup delegates to `npm run cli -- mcp` through a VS Code terminal or Node child process fallback. The webview renders high-level sections for repo summary, languages/frameworks, plans, validation runs, review reports, agent status, and MCP status.

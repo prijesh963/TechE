@@ -168,8 +168,8 @@ exposed modules as published contracts when a change touches them.
 ### Validated against
 
 Detection was checked against real public repositories rather than only
-fixtures: `spring-projects/spring-petclinic` (MySQL, PostgreSQL),
-`piomin/sample-spring-microservices` (Spring Cloud, Eureka, Gateway, Feign),
+fixtures: `piomin/sample-spring-microservices` (Spring Cloud, Eureka, Gateway,
+Feign),
 `piomin/sample-spring-kafka-microservices` (Kafka),
 `ibm-messaging/mq-dev-patterns` (IBM MQ, JMS),
 `oracle-samples/oracle-db-examples` (Oracle),
@@ -224,7 +224,8 @@ contract: annotations are not modelled, anonymous and local classes get no node
 of their own, and overloads collapse to one method node. A file it cannot make
 sense of yields fewer nodes, never wrong ones.
 
-Validated against `spring-projects/spring-petclinic`: 47 classes, 3 interfaces,
-190 methods and 121 edges with zero parse failures, correctly recovering
-`Owner extends Person extends BaseEntity` and controller → repository call
-edges such as `OwnerController.findOwner → OwnerRepository.findById`.
+No benchmark of the Java scanner is committed, so no counts are claimed here.
+What is covered is in `tests/java-graph.test.ts`: class, interface and method
+nodes, `extends` chains across files, and controller → repository call edges.
+A figure quoted without an artifact that reproduces it is the kind of claim
+this tool exists to flag, so it is not quoted.

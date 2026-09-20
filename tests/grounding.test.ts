@@ -110,11 +110,11 @@ describe("extractClaims", () => {
 describe("resolveClaimedPath", () => {
   // The workspace keys files by repo; nobody writing about the code does.
   const indexed = new Set([
-    "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java",
-    "spring-petclinic-customers-service/pom.xml",
-    "spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/VetsServiceApplication.java",
-    "spring-petclinic-vets-service/pom.xml",
-    "spring-petclinic-visits-service/pom.xml"
+    "acme-customers-service/src/main/java/com/acme/customers/CustomersServiceApplication.java",
+    "acme-customers-service/pom.xml",
+    "acme-billing-service/src/main/java/com/acme/billing/BillingServiceApplication.java",
+    "acme-billing-service/pom.xml",
+    "acme-shipping-service/pom.xml"
   ]);
 
   it("resolves a path written relative to its own repo", () => {
@@ -123,21 +123,19 @@ describe("resolveClaimedPath", () => {
     // the repository itself does.
     expect(
       resolveClaimedPath(
-        "src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java",
+        "src/main/java/com/acme/customers/CustomersServiceApplication.java",
         indexed
       )
     ).toEqual({
       kind: "exact",
-      path: "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java"
+      path: "acme-customers-service/src/main/java/com/acme/customers/CustomersServiceApplication.java"
     });
   });
 
   it("takes an exact workspace path as it stands", () => {
-    expect(
-      resolveClaimedPath("spring-petclinic-vets-service/pom.xml", indexed)
-    ).toEqual({
+    expect(resolveClaimedPath("acme-billing-service/pom.xml", indexed)).toEqual({
       kind: "exact",
-      path: "spring-petclinic-vets-service/pom.xml"
+      path: "acme-billing-service/pom.xml"
     });
   });
 
@@ -165,7 +163,7 @@ describe("resolveClaimedPath", () => {
   });
 
   it("does not match a prefix", () => {
-    expect(resolveClaimedPath("spring-petclinic-vets-service/src", indexed)).toEqual({
+    expect(resolveClaimedPath("acme-billing-service/src", indexed)).toEqual({
       kind: "missing"
     });
   });
@@ -275,25 +273,25 @@ describe("GroundingService", () => {
 
 describe("GroundingService across a multi-repo workspace", () => {
   it("verifies a path written the way the repository writes it", async () => {
-    // Reproduces the reported failure on spring-petclinic-microservices: a
+    // Reproduces the reported failure on a multi-service Java workspace: a
     // correct answer citing eight real files, every one flagged as a
     // fabrication because the index keys them by repo and the model did not.
     const workspaceRoot = await createWorkspace({
       "customers-service": {
-        "src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java":
-          "package org.springframework.samples.petclinic.customers;\npublic class CustomersServiceApplication {}\n",
+        "src/main/java/com/acme/customers/CustomersServiceApplication.java":
+          "package com.acme.customers;\npublic class CustomersServiceApplication {}\n",
         "pom.xml": "<project/>\n"
       },
       "vets-service": {
-        "src/main/java/org/springframework/samples/petclinic/vets/VetsServiceApplication.java":
-          "package org.springframework.samples.petclinic.vets;\npublic class VetsServiceApplication {}\n",
+        "src/main/java/com/acme/billing/BillingServiceApplication.java":
+          "package com.acme.billing;\npublic class BillingServiceApplication {}\n",
         "pom.xml": "<project/>\n"
       }
     });
 
     const report = await new GroundingService().verify(
-      "Entry points are `src/main/java/org/springframework/samples/petclinic/customers/CustomersServiceApplication.java` " +
-        "and `src/main/java/org/springframework/samples/petclinic/vets/VetsServiceApplication.java`.",
+      "Entry points are `src/main/java/com/acme/customers/CustomersServiceApplication.java` " +
+        "and `src/main/java/com/acme/billing/BillingServiceApplication.java`.",
       { startPath: workspaceRoot }
     );
 
@@ -326,8 +324,8 @@ describe("checking a request's own premise", () => {
     // method is exposed as a bean" for a repo with no Spring Security, and
     // /create-plan built a plan on it, selecting whatever scored least badly.
     const startPath = await createRepo({
-      "src/main/java/com/acme/PetService.java":
-        "package com.acme;\npublic class PetService { public void addPet() {} }\n"
+      "src/main/java/com/acme/InvoiceService.java":
+        "package com.acme;\npublic class InvoiceService { public void addInvoice() {} }\n"
     });
 
     const report = await new GroundingService().verify(
@@ -345,8 +343,8 @@ describe("checking a request's own premise", () => {
     // Naming something that does not exist yet is how a feature is asked for.
     // Only a call — a claim that something is there — is checked.
     const startPath = await createRepo({
-      "src/main/java/com/acme/PetService.java":
-        "package com.acme;\npublic class PetService { public void addPet() {} }\n"
+      "src/main/java/com/acme/InvoiceService.java":
+        "package com.acme;\npublic class InvoiceService { public void addInvoice() {} }\n"
     });
 
     const report = await new GroundingService().verify(
@@ -359,17 +357,19 @@ describe("checking a request's own premise", () => {
 
   it("confirms a request about something that is there", async () => {
     const startPath = await createRepo({
-      "src/main/java/com/acme/PetService.java":
-        "package com.acme;\npublic class PetService { public void addPet() {} }\n"
+      "src/main/java/com/acme/InvoiceService.java":
+        "package com.acme;\npublic class InvoiceService { public void addInvoice() {} }\n"
     });
 
     const report = await new GroundingService().verify(
-      "Change addPet() so it validates the owner first.",
+      "Change addInvoice() so it validates the owner first.",
       { startPath }
     );
 
     expect(report.unverified).toEqual([]);
-    expect(report.verified.map((result) => result.claim.symbol)).toContain("addPet");
+    expect(report.verified.map((result) => result.claim.symbol)).toContain(
+      "addInvoice"
+    );
   });
 });
 

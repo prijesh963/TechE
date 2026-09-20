@@ -75,15 +75,15 @@ selects from them, giving each file a reason and a kind:
 For every file it would change, the draft shows the code as it stands:
 
 ```text
-- **update** `spring-petclinic-customers-service/.../PetResource.java` — handles pet creation _(lines 40–80 of 210)_
+- **update** `acme-billing-service/.../InvoiceResource.java` — handles invoice creation _(lines 40–80 of 210)_
 
-    @PostMapping("/owners/{ownerId}/pets")
+    @PostMapping("/customers/{customerId}/invoices")
     @ResponseStatus(HttpStatus.CREATED)
-    public Pet processCreationForm(...) {
+    public Invoice processCreationForm(...) {
       ...
     }
 
-  [ Open .../PetResource.java ]
+  [ Open .../InvoiceResource.java ]
 ```
 
 This is the excerpt implementation will work from, so seeing it is also how
