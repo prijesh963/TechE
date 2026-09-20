@@ -9,7 +9,6 @@
     "copilot-architect": "./dist/index.js"
   },
   "dependencies": {
-    "@copilot-architect/agents": "0.1.0",
     "@copilot-architect/core": "0.1.0",
     "@copilot-architect/graph": "0.1.0",
     "@copilot-architect/indexer": "0.1.0",

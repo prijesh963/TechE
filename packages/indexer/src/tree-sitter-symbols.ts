@@ -282,10 +282,3 @@ export async function extractParsedSymbols(
     return undefined;
   }
 }
-
-/** Test seam: forget what has been loaded so a case can start clean. */
-export function resetParsedSymbolCache(): void {
-  loaded.clear();
-  parserModule = undefined;
-  initFailed = false;
-}
