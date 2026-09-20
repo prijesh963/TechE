@@ -53,6 +53,54 @@ describe("extractClaims", () => {
     expect(claims.map((claim) => claim.text)).not.toContain("npm test");
   });
 
+  it("reads a call written in prose, without backticks", () => {
+    // Reported: a security finding claiming "the authenticationManager()
+    // method is exposed as a bean" was written without backticks, sailed past
+    // a check that read only backticked spans, and became a plan against a
+    // method the repository does not have.
+    const claims = extractClaims(
+      "The authenticationManager() method is exposed as a bean."
+    );
+
+    expect(claims).toEqual([
+      {
+        kind: "symbol",
+        text: "authenticationManager()",
+        symbol: "authenticationManager"
+      }
+    ]);
+  });
+
+  it("reads a qualified call in prose", () => {
+    const claims = extractClaims("It calls OrderService.place() from the controller.");
+
+    expect(claims).toEqual([
+      { kind: "symbol", text: "OrderService.place()", symbol: "OrderService" }
+    ]);
+  });
+
+  it("leaves a parenthetical aside alone", () => {
+    // The parenthesis has to follow the name directly. "the docs (below)" is
+    // English; `docs()` is code.
+    expect(extractClaims("See the docs (below) and the notes (above).")).toEqual([]);
+  });
+
+  it("ignores keywords and very short names", () => {
+    // `if()`, `it()` and friends are noise, and a false warning costs more
+    // than a missed one.
+    expect(extractClaims("Use if() and for() and it() carefully.")).toEqual([]);
+  });
+
+  it("treats a backticked bare call as the same claim", () => {
+    // Backticking must not make a call less checked than writing it in prose,
+    // which is what happened while only qualified symbols were read.
+    const claims = extractClaims("The `validate()` helper runs first.");
+
+    expect(claims).toEqual([
+      { kind: "symbol", text: "validate()", symbol: "validate" }
+    ]);
+  });
+
   it("does not report the same claim twice", () => {
     const claims = extractClaims("`src/a.ts` and again `src/a.ts`");
     expect(claims).toHaveLength(1);
@@ -221,6 +269,7 @@ describe("GroundingService", () => {
     expect(report.notChecked.join(" ")).toContain(
       "Statements in prose are not checked"
     );
+    expect(report.notChecked.join(" ")).toContain("beyond paths, citations and calls");
   });
 });
 
@@ -268,6 +317,59 @@ describe("GroundingService across a multi-repo workspace", () => {
 
     expect(report.unverified[0].reason).toContain("matches 2 files");
     expect(report.unverified[0].reason).not.toContain("no such file");
+  });
+});
+
+describe("checking a request's own premise", () => {
+  it("catches a request about a method the repository does not have", async () => {
+    // The end-to-end failure: /analyze invented "the authenticationManager()
+    // method is exposed as a bean" for a repo with no Spring Security, and
+    // /create-plan built a plan on it, selecting whatever scored least badly.
+    const startPath = await createRepo({
+      "src/main/java/com/acme/PetService.java":
+        "package com.acme;\npublic class PetService { public void addPet() {} }\n"
+    });
+
+    const report = await new GroundingService().verify(
+      "Draft a plan for: the authenticationManager() method is exposed as a bean and could be misused.",
+      { startPath }
+    );
+
+    expect(report.unverified.map((result) => result.claim.symbol)).toEqual([
+      "authenticationManager"
+    ]);
+    expect(report.unverified[0].reason).toContain("no symbol with that name");
+  });
+
+  it("does not flag a request to create something new", async () => {
+    // Naming something that does not exist yet is how a feature is asked for.
+    // Only a call — a claim that something is there — is checked.
+    const startPath = await createRepo({
+      "src/main/java/com/acme/PetService.java":
+        "package com.acme;\npublic class PetService { public void addPet() {} }\n"
+    });
+
+    const report = await new GroundingService().verify(
+      "Add an invoice approval workflow with a configurable approver threshold.",
+      { startPath }
+    );
+
+    expect(report.unverified).toEqual([]);
+  });
+
+  it("confirms a request about something that is there", async () => {
+    const startPath = await createRepo({
+      "src/main/java/com/acme/PetService.java":
+        "package com.acme;\npublic class PetService { public void addPet() {} }\n"
+    });
+
+    const report = await new GroundingService().verify(
+      "Change addPet() so it validates the owner first.",
+      { startPath }
+    );
+
+    expect(report.unverified).toEqual([]);
+    expect(report.verified.map((result) => result.claim.symbol)).toContain("addPet");
   });
 });
 

@@ -741,6 +741,62 @@ describe("IndexingService", () => {
   });
 });
 
+describe("Java symbol extraction", () => {
+  it("records methods, not only the class", async () => {
+    // Only classes were indexed, so a Java repository had no method symbols
+    // at all: grounding could not check a claim about one, a plan could not
+    // cite one as evidence, and a request naming a real method looked like a
+    // request about nothing that exists.
+    const repoRoot = await createRepo({
+      "src/PetService.java": [
+        "package com.acme;",
+        "public class PetService {",
+        "  private final Repo repo;",
+        "  public void addPet(String name) { if (name != null) { return; } }",
+        "  protected List<Pet> findAll() { for (int i = 0; i < 3; i++) {} return null; }",
+        "  private static Map<String, Pet> cache() { return new HashMap<>(); }",
+        "  @Bean",
+        "  public AuthenticationManager authenticationManager() { return null; }",
+        "  public PetService(Repo repo) { this.repo = repo; }",
+        "}"
+      ].join("\n")
+    });
+
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+    const symbols = await service.symbolNames({ startPath: repoRoot });
+
+    expect(symbols.has("PetService")).toBe(true);
+    for (const method of ["addPet", "findAll", "cache", "authenticationManager"]) {
+      expect(symbols.has(method)).toBe(true);
+    }
+  });
+
+  it("does not mistake control flow or construction for a method", async () => {
+    // `if (`, `for (` and `new Foo(` are the obvious false positives, and a
+    // symbol index full of them makes every existence check meaningless.
+    const repoRoot = await createRepo({
+      "src/Noise.java": [
+        "package com.acme;",
+        "public class Noise {",
+        "  public void run() {",
+        "    if (true) {}",
+        "    for (int i = 0; i < 1; i++) {}",
+        "    while (false) {}",
+        "    Object o = new HashMap<>();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+    const symbols = await service.symbolNames({ startPath: repoRoot });
+
+    expect([...symbols].sort()).toEqual(["Noise", "run"]);
+  });
+});
+
 describe("symbolsByFile", () => {
   it("reports every symbol a file declares, past the display cap", async () => {
     // The regression this guards: listFiles caps symbols per file for a

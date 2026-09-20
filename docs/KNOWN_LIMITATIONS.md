@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–22 merged. The redesign is complete; what is below is
+**Status:** Phases 0–23 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -195,7 +195,30 @@ repos." reads as though the tool worked and the repository had nothing to
 say. Detecting a refusal reliably is hard; detecting an answer that cites
 nothing at all is not, and would catch most of them.
 
-### 1.17 The CLI shell-outs are still subprocesses
+### 1.17 A request naming nothing real is flagged, not refused
+
+**Phase 23.** `/create-plan` checks the request's own premise and says when it
+names a symbol that is not in the workspace — then plans anyway. It has to:
+naming something that does not exist yet is how a new feature is asked for,
+and refusing would block the tool's main use.
+
+**Cost:** the developer is told, and can still approve a plan built on a
+premise that does not hold. Telling apart "fix the thing that is there" from
+"build a thing that is not" needs intent, which is a model call and its own
+failure mode.
+
+### 1.18 Symbol extraction is regex, not parsing
+
+**Phase 23.** Java and C# methods are now indexed, matched on an access
+modifier and a lowercase name. That is convention, not grammar: a
+package-private method, an unconventional name, or a language whose pattern
+is not in the list is still invisible.
+
+**Cost:** every existence check is only as good as the extraction behind it,
+and a symbol that is real but unextracted reads as a fabrication. The
+symbol-graph package parses TS/JS properly; the index does not use it.
+
+### 1.19 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

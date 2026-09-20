@@ -24,6 +24,43 @@ const CITATION = /^([\w.@-]+(?:\/[\w.@-]+)+\.[a-zA-Z0-9]{1,8}):(\d+)$/;
 /** `OrderService.place()` or `OrderService.place` — a symbol on a type. */
 const QUALIFIED_SYMBOL = /^([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?:\(\))?$/;
 
+/** `validate()` — a bare call, backticked. Same claim as one written in prose. */
+const BARE_CALL = /^([A-Za-z_$][A-Za-z0-9_$]*)\(\)$/;
+
+/**
+ * A call written in prose: `authenticationManager()`, `OrderService.place()`.
+ *
+ * Prose is otherwise left alone, because a bare word is not a claim however
+ * code-like it looks. Empty parentheses are the exception: nobody writes
+ * `manager()` in English unless they mean the code.
+ *
+ * That distinction earned its place. A security finding claiming "the
+ * `authenticationManager()` method is exposed as a bean" was written without
+ * backticks, sailed past a check that read only backticked spans, and became
+ * a plan against a method the repository does not have.
+ *
+ * The parenthesis must follow the name directly: "see the docs (below)" is
+ * prose; `docs()` is not.
+ */
+const PROSE_CALL =
+  /(?<![`\w.$])([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)?)\(\)/g;
+
+/**
+ * Code-shaped words in prose that no one declared. A false warning costs more
+ * than a missed one, so the obvious keywords are excluded outright.
+ */
+const NOT_SYMBOLS = new Set([
+  "if",
+  "for",
+  "while",
+  "switch",
+  "catch",
+  "function",
+  "return",
+  "do",
+  "it"
+]);
+
 export class GroundingService {
   /**
    * Checks a model's answer against the index, and reports what it could not
@@ -82,7 +119,7 @@ export class GroundingService {
     }
 
     notChecked.push(
-      "Statements in prose are not checked — only paths and symbols written in backticks."
+      "Statements in prose are not checked, beyond paths, citations and calls written as `name()`."
     );
 
     return { verified, unverified, notChecked };
@@ -194,7 +231,28 @@ export function extractClaims(text: string): Claim[] {
     const qualified = QUALIFIED_SYMBOL.exec(raw);
     if (qualified) {
       claims.push({ kind: "symbol", text: raw, symbol: qualified[1] });
+      continue;
     }
+
+    // Backticking a call must not make it less checked than writing it in
+    // prose, which is what happened while only qualified symbols were read.
+    const bare = BARE_CALL.exec(raw);
+    if (bare && bare[1].length >= 3 && !NOT_SYMBOLS.has(bare[1].toLowerCase())) {
+      claims.push({ kind: "symbol", text: raw, symbol: bare[1] });
+    }
+  }
+
+  for (const match of text.matchAll(PROSE_CALL)) {
+    const raw = match[1];
+    const symbol = raw.includes(".") ? raw.split(".")[0] : raw;
+
+    if (symbol.length < 3 || NOT_SYMBOLS.has(symbol.toLowerCase())) continue;
+
+    const key = `${raw}()`;
+    if (seen.has(key) || seen.has(raw)) continue;
+    seen.add(key);
+
+    claims.push({ kind: "symbol", text: key, symbol });
   }
 
   return claims;

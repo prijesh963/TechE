@@ -45,6 +45,22 @@ Produces a plan with the current contents of every file it proposes to change,
 the decisions made so far in this session, the validation commands to run, and
 what it could not see.
 
+Before anything is planned, the request's own premise is checked. A request
+to fix `authenticationManager()` in a repository with no Spring Security is a
+request about code that is not there — usually because an earlier answer
+invented it:
+
+```text
+⚠️ Your request names `authenticationManager()`, which is not in this
+workspace. If you meant something that already exists, the name may be wrong,
+or an earlier answer may have invented it. If you are asking for it to be
+created, this is expected.
+```
+
+It says so and plans anyway. Naming something that does not exist yet is how
+a new feature is asked for; refusing would block the ordinary case to catch
+the rare one.
+
 Search finds what is _related_; the plan needs what has to _change_. Those are
 different questions — a test that mentions the subject and a README describing
 it both rank highly and need no edit, and no ranking will ever surface a file

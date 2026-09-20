@@ -1376,7 +1376,17 @@ function extractSymbols(filePath: string, text: string): CodeSymbol[] {
     /\bclass\s+([A-Za-z_$][\w$]*)/g,
     /\binterface\s+([A-Za-z_$][\w$]*)/g,
     /\bdef\s+([A-Za-z_][\w]*)/g,
-    /\bpublic\s+(?:final\s+)?class\s+([A-Za-z_][\w]*)/g
+    /\bpublic\s+(?:final\s+)?class\s+([A-Za-z_][\w]*)/g,
+    // Java and C# methods. Only classes were indexed before, so a Java
+    // repository had no method symbols at all: grounding could not check a
+    // claim about one, a plan could not cite one as evidence, and a request
+    // naming a real method looked like a request about nothing.
+    //
+    // An access modifier is required, which is the convention for anything
+    // worth indexing and keeps `if (`, `for (` and `new Foo(` out. The method
+    // name must start lowercase, which is also convention and skips
+    // constructors — whose class is indexed already.
+    /\b(?:public|protected|private)\s+(?:[\w<>\[\],.$]+\s+)+?([a-z][\w$]*)\s*\(/g
   ] as const;
 
   for (const pattern of patterns) {

@@ -120,7 +120,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               44 files, 430 tests
+├── tests/               44 files, 440 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -295,7 +295,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 430 tests must pass before merging.
+Use Vitest. All 440 tests must pass before merging.
 
 Cover:
 
@@ -315,7 +315,8 @@ Cover:
 - write previews (line deltas, truncation guard, staging lost on reload)
 - staged diff URIs and the read-only content provider behind them
 - file edits (unique-match requirement, all-or-nothing, literal replacement)
-- grounding (claim extraction, verification, honest "not checked")
+- grounding (claim extraction including prose calls, verification, honest "not checked")
+- Java symbol extraction (methods indexed, control flow excluded)
 - multi-repo path resolution (unique suffix, ambiguity, segment boundaries)
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)

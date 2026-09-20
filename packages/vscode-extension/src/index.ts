@@ -2370,6 +2370,29 @@ async function runPlanPhase(
   stream.progress?.("Finding the files this touches…");
   const session = await ensureSession(sessions, workspaceRoot, prompt, "plan");
 
+  // The request's own premise, checked before anything is planned on it.
+  // A request to fix `authenticationManager()` in a repository with no Spring
+  // Security is a request about code that is not there — usually because an
+  // earlier answer invented it. Planning proceeds anyway, because naming
+  // something that does not exist yet is how a new feature is asked for; but
+  // the developer is told, before they read a plan built on it.
+  const premise = await new GroundingService()
+    .verify(prompt, { startPath: workspaceRoot })
+    .catch(() => undefined);
+  const absent = premise?.unverified.filter((result) => result.claim.kind === "symbol");
+
+  if (absent && absent.length > 0) {
+    stream.markdown(
+      `⚠️ Your request names ${absent
+        .map((result) => `\`${result.claim.text}\``)
+        .join(
+          ", "
+        )}, which ${absent.length === 1 ? "is" : "are"} not in this workspace. ` +
+        "If you meant something that already exists, the name may be wrong, or an earlier answer may have invented it. " +
+        "If you are asking for it to be created, this is expected.\n\n"
+    );
+  }
+
   const indexing = new IndexingService();
   // Wider than the plan will use: these are candidates to choose from, and
   // retrieval is local and cheap. Narrowing happens in the selection step,
