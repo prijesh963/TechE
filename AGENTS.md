@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               46 files, 480 tests
+├── tests/               47 files, 489 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -213,6 +213,14 @@ rather than left to be rediscovered.
 - Python (pytest, poetry, uv, ruff, mypy, flake8, black)
 - Java Maven
 - Java Gradle
+
+### Parsed symbol extraction
+
+Go and Rust symbols come from a tree-sitter grammar rather than a regex,
+so a declaration is found because the grammar says it is one. Both measured
+zero symbols per file before this: not silence, but every true claim about
+them reported as a fabrication. Every other language keeps the pattern
+list unchanged.
 
 ### Extended validation allowlist
 
@@ -303,7 +311,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 480 tests must pass before merging.
+Use Vitest. All 489 tests must pass before merging.
 
 Cover:
 
@@ -329,6 +337,8 @@ Cover:
 - file edits (unique-match requirement, all-or-nothing, literal replacement)
 - grounding (claim extraction including prose calls, verification, honest "not checked")
 - Java symbol extraction (methods indexed, control flow excluded)
+- parsed symbols (Go receivers, Rust items, start lines, kinds, and
+  declining a language so the pattern list still runs)
 - multi-repo path resolution (unique suffix, ambiguity, segment boundaries)
 - feature planning (JSON + Markdown output)
 - custom command config (parse, validate, merge)

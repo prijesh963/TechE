@@ -22,6 +22,8 @@ import {
   writeJsonFile
 } from "@copilot-architect/shared";
 
+import { extractParsedSymbols } from "./tree-sitter-symbols.js";
+
 import type {
   DocumentTokens,
   IndexedFile,
@@ -917,7 +919,7 @@ async function indexEntry(
       : { ...existing, searchTokens: computeDocumentTokens(existing) };
   }
 
-  return createIndexedFile({
+  return await createIndexedFile({
     fullPath: entry.absolutePath,
     relativePath: entry.relativePath,
     text,
@@ -927,14 +929,14 @@ async function indexEntry(
   });
 }
 
-function createIndexedFile(input: {
+async function createIndexedFile(input: {
   fullPath: string;
   relativePath: string;
   text: string;
   contentHash: string;
   modifiedTimeMs: number;
   fileSizeBytes: number;
-}): IndexedFile {
+}): Promise<IndexedFile> {
   const extension = path.extname(input.relativePath);
   const file: IndexedFile = {
     filePath: input.fullPath,
@@ -945,7 +947,7 @@ function createIndexedFile(input: {
     modifiedTimeMs: input.modifiedTimeMs,
     fileSizeBytes: input.fileSizeBytes,
     textPreview: input.text.slice(0, PREVIEW_LENGTH),
-    symbols: extractSymbols(input.relativePath, input.text),
+    symbols: await extractSymbols(input.relativePath, input.text),
     imports: extractImports(input.text),
     isTestFile: isTestFile(input.relativePath),
     isConfigFile: isConfigFile(input.relativePath),
@@ -1368,7 +1370,31 @@ function graphProximityScores(
     .sort((a, b) => b.score - a.score);
 }
 
-function extractSymbols(filePath: string, text: string): CodeSymbol[] {
+/**
+ * Symbols for one file, parsed where a grammar exists and matched by pattern
+ * otherwise.
+ *
+ * Parsing is tried first and only for the languages it covers; anything it
+ * declines falls through to the regex list unchanged. That ordering is what
+ * keeps this additive — a language the patterns already handle sees exactly
+ * the behaviour it saw before.
+ */
+async function extractSymbols(filePath: string, text: string): Promise<CodeSymbol[]> {
+  const parsed = await extractParsedSymbols(filePath, text);
+
+  if (parsed) {
+    return parsed.map((symbol) => ({
+      name: symbol.name,
+      kind: symbol.kind,
+      filePath,
+      startLine: symbol.startLine
+    }));
+  }
+
+  return extractSymbolsByPattern(filePath, text);
+}
+
+function extractSymbolsByPattern(filePath: string, text: string): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
   const patterns = [
     /\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g,

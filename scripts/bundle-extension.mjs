@@ -19,7 +19,8 @@
  */
 
 import { build } from "esbuild";
-import { mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -84,6 +85,42 @@ await build({
   }
 });
 
+// Grammars, and the tree-sitter runtime's own wasm, copied next to the
+// bundle. esbuild inlines the JavaScript that loads them but cannot inline a
+// `.wasm` file, and the runtime resolves both relative to the script it was
+// imported from — which stops existing once everything is one file. The
+// indexer looks for a `grammars/` directory beside the bundle first, so this
+// is where they go.
+//
+// Only the languages the parser actually covers are shipped. The grammar set
+// on npm is 50 MB; these two are ~1 MB, and they are the two measured at zero
+// symbols without them.
+const grammarOut = path.join(outDir, "grammars");
+await mkdir(grammarOut, { recursive: true });
+
+const grammarSources = [
+  ["node_modules/web-tree-sitter", "tree-sitter.wasm"],
+  ["node_modules/tree-sitter-wasms/out", "tree-sitter-go.wasm"],
+  ["node_modules/tree-sitter-wasms/out", "tree-sitter-rust.wasm"]
+];
+
+let grammarBytes = 0;
+for (const [dir, file] of grammarSources) {
+  const from = path.join(rootDir, dir, file);
+  if (!existsSync(from)) {
+    throw new Error(
+      `Missing ${file} in ${dir}. Symbol parsing would silently fall back to ` +
+        `patterns for every Go and Rust file in a packaged extension.`
+    );
+  }
+  await copyFile(from, path.join(grammarOut, file));
+  grammarBytes += statSync(from).size;
+}
+
 console.log(`\nBundled to ${path.relative(rootDir, outDir)}/`);
 console.log("  extension.cjs  — the extension host entry point");
 console.log("  cli.mjs        — spawned by the extension, no npm required");
+console.log(
+  `  grammars/      — ${grammarSources.length} wasm files, ` +
+    `${(grammarBytes / 1024 / 1024).toFixed(1)} MB, for Go and Rust symbols`
+);

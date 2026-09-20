@@ -110,6 +110,22 @@ await copyFile(
 );
 await copyFile(path.join(bundleDir, "cli.mjs"), path.join(stageDir, "cli.mjs"));
 
+// The grammars go in beside the CLI, which is where the indexer looks. Left
+// out, the packaged extension silently falls back to patterns for Go and
+// Rust — the exact "true claim reported as a fabrication" this closes — and
+// nothing in the package would say so.
+const grammarSrc = path.join(bundleDir, "grammars");
+const grammarDest = path.join(stageDir, "grammars");
+await mkdir(grammarDest, { recursive: true });
+
+const grammarFiles = (await readdir(grammarSrc)).filter((f) => f.endsWith(".wasm"));
+if (grammarFiles.length === 0) {
+  throw new Error("No grammars in the bundle — did bundle-extension.mjs run?");
+}
+for (const file of grammarFiles) {
+  await copyFile(path.join(grammarSrc, file), path.join(grammarDest, file));
+}
+
 await mkdir(path.join(stageDir, "resources"), { recursive: true });
 await copyFile(
   path.join(extensionDir, "resources", "copilot-architect.svg"),

@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–31 merged. The redesign is complete; what is below is
+**Status:** Phases 0–32 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -207,16 +207,31 @@ premise that does not hold. Telling apart "fix the thing that is there" from
 "build a thing that is not" needs intent, which is a model call and its own
 failure mode.
 
-### 1.18 Symbol extraction is regex, not parsing
+### 1.18 Symbol extraction is regex for everything but Go and Rust
 
-**Phase 23.** Java and C# methods are now indexed, matched on an access
-modifier and a lowercase name. That is convention, not grammar: a
-package-private method, an unconventional name, or a language whose pattern
-is not in the list is still invisible.
+**Phase 23, narrowed in Phase 32.** Go and Rust are parsed with a grammar.
+Everything else still matches on convention: Java and C# methods on an access
+modifier and a lowercase name, and a language whose pattern is not in the list
+is invisible. Measured, Kotlin yields its class and not its functions; C, C++,
+Swift and Ruby yield nothing.
 
 **Cost:** every existence check is only as good as the extraction behind it,
-and a symbol that is real but unextracted reads as a fabrication. The
-symbol-graph package parses TS/JS properly; the index does not use it.
+and a symbol that is real but unextracted reads as a fabrication. Closing it
+is now a row in a table rather than a new mechanism — the grammars exist on
+npm — but each one costs package size, which is why only the two measured at
+zero ship today.
+
+### 1.19 Only two grammars ship, chosen by size
+
+**Phase 32.** `tree-sitter-wasms` carries 36 grammars and weighs 50 MB. Go
+(230 KB) and Rust (799 KB) ship because they measured zero symbols and are
+cheap. C# (3.9 MB), Ruby (2 MB), Swift (3 MB) and C++ (4.5 MB) do not, and
+Kotlin is 4 MB for a language the pattern list already half-covers.
+
+**Cost:** a developer in a C# or Swift repository gets the old behaviour and
+nothing says which languages are parsed and which are guessed. Downloading a
+grammar on demand would decouple the two, at the price of a network call in a
+tool that is otherwise entirely local.
 
 ### 1.19 A large plan is a long scroll
 
