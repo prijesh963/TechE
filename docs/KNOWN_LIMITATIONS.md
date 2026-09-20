@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–34 merged. The redesign is complete; what is below is
+**Status:** Phases 0–35 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -525,6 +525,33 @@ entirely on its canonical filename. A file merely named `docker-compose.yml`
 with unrelated content would still be flagged — accepted because the
 filename is unambiguous in practice, the same trade the Java adapter already
 makes by treating `pom.xml` alone as high-confidence Maven evidence.
+
+### 4.13 Cucumber detection stops at "this repo uses Cucumber"
+
+**Phase 35.** Playwright, Cucumber and TestNG are detected the same way
+everything else on this axis is — by content or canonical filename — and each
+carries its own risk guidance into a plan. What Cucumber does not get is the
+one thing that would make that guidance actionable on its own: linking a
+specific `.feature` scenario to the step-definition code that implements it.
+
+That link is not a filename convention the way a unit test's sibling file is —
+a Gherkin step matches a step-definition by its text against a
+Cucumber-expression or regex, and one step-definition file commonly backs many
+`.feature` files and vice versa. Building it would be its own small parser,
+closer in scope to the tree-sitter symbol work than to a detector entry.
+
+**Cost:** the planner guidance already says "a step change can silently break
+scenarios still phrased the old way" — true, but the tool cannot yet say
+_which_ scenarios. A developer still has to search for callers of a changed
+step by hand.
+
+**Also open:** a third framework, referred to only as "FAST", was raised
+alongside Playwright and Cucumber but never got a config filename, dependency
+name or folder convention supplied — every concrete value needed to write a
+real signal, as opposed to a guess dressed as one. Deferred rather than
+built on a guess; the detection mechanism is ready and costs about fifteen
+lines once those markers exist, the same size as each of the nine signals
+already in `integration-detector.ts`.
 
 ---
 

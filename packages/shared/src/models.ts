@@ -116,7 +116,8 @@ export type IntegrationCategory =
   | "micro-frontend"
   | "microservice"
   | "orchestration"
-  | "monorepo-tooling";
+  | "monorepo-tooling"
+  | "test-automation";
 
 export interface IntegrationInfo {
   /** e.g. "Oracle", "MongoDB", "Kafka", "IBM MQ", "Module Federation". */

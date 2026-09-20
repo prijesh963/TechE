@@ -189,3 +189,91 @@ describe("orchestration and monorepo build tooling", () => {
     );
   });
 });
+
+describe("test automation frameworks", () => {
+  it("detects Playwright from a canonical config, or from its import anywhere", () => {
+    expect(names([file("playwright.config.ts", "export default {}")])).toContain(
+      "Playwright"
+    );
+    expect(
+      names([
+        file("tests/login.spec.ts", "import { test, expect } from '@playwright/test';")
+      ])
+    ).toContain("Playwright");
+  });
+
+  it("detects Playwright across its non-JS ports", () => {
+    expect(
+      names([file("tests/test_login.py", "from playwright.sync_api import expect")])
+    ).toContain("Playwright");
+    expect(
+      names([file("pom.xml", "<artifactId>com.microsoft.playwright</artifactId>")])
+    ).toContain("Playwright");
+  });
+
+  it("detects Cucumber by the .feature extension alone, wherever it lives", () => {
+    // Gherkin's own extension is as unambiguous as pom.xml is for Maven.
+    const [detected] = detectIntegrations([
+      file("features/login.feature", "Feature: Login\n  Scenario: ok\n")
+    ]);
+    expect(detected).toMatchObject({
+      name: "Cucumber",
+      category: "test-automation",
+      confidence: "high"
+    });
+  });
+
+  it("detects Cucumber from Java step definitions, without a scanned .feature file", () => {
+    // A repo can have Cucumber wired up (dependency, step defs) with no
+    // feature file captured in this particular scan.
+    expect(
+      names([
+        file("pom.xml", "<artifactId>io.cucumber</artifactId>"),
+        file("src/StepDefs.java", "import io.cucumber.java.en.Given;")
+      ])
+    ).toContain("Cucumber");
+  });
+
+  it("treats a bare 'behave' mention as medium confidence, like other bare keywords", () => {
+    // "behave" is Python's Gherkin runner, but also an ordinary English word.
+    const [weak] = detectIntegrations([file("requirements.txt", "behave==1.2.6")]);
+    expect(weak).toMatchObject({ name: "Cucumber", confidence: "medium" });
+  });
+
+  it("detects TestNG by its canonical suite file, or by @DataProvider alone", () => {
+    expect(names([file("testng.xml", '<suite name="S"/>')])).toContain("TestNG");
+    expect(
+      names([
+        file(
+          "src/LoginTest.java",
+          "import org.testng.annotations.DataProvider;\n@DataProvider\npublic Object[][] data() { return null; }"
+        )
+      ])
+    ).toContain("TestNG");
+  });
+
+  it("does not mistake a plain JUnit @Test for TestNG", () => {
+    // @DataProvider has no JUnit equivalent by that name; a bare @Test does
+    // not, since JUnit uses the same annotation name.
+    expect(
+      names([
+        file(
+          "src/LoginTest.java",
+          "import org.junit.jupiter.api.Test;\n@Test void login() {}"
+        )
+      ])
+    ).toEqual([]);
+  });
+
+  it("composes Playwright + Cucumber + TestNG with everything else, no special case", () => {
+    const detected = names([
+      file("playwright.config.ts", "export default {}"),
+      file("features/login.feature", "Feature: Login\n"),
+      file("testng.xml", '<suite name="S"/>'),
+      file("pom.xml", "<artifactId>ojdbc11</artifactId>")
+    ]);
+    expect(detected).toEqual(
+      expect.arrayContaining(["Playwright", "Cucumber", "TestNG", "Oracle"])
+    );
+  });
+});

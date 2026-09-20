@@ -301,6 +301,63 @@ const INTEGRATION_SIGNALS: IntegrationSignal[] = [
     ecosystem: "node",
     strongPath: [/(^|\/)turbo\.json$/i],
     strong: [/"turbo":\s*"[\^~]?\d/]
+  },
+
+  // --- Test automation ---------------------------------------------------------
+  // A separate axis from the language-adapter test frameworks (JUnit, pytest):
+  // these three cross language boundaries — Cucumber spans Java/JS/Python/Ruby,
+  // Playwright spans JS/Python/Java/.NET — so they compose the same way a
+  // datastore or messaging system does, rather than being repeated per adapter.
+  {
+    name: "Playwright",
+    category: "test-automation",
+    ecosystem: "any",
+    strongPath: [/(^|\/)playwright\.config\.[cm]?[jt]s$/i],
+    strong: [
+      /@playwright\/test/,
+      /\bplaywright-core\b/i,
+      /pytest-playwright/i,
+      /from\s+playwright\.(sync|async)_api\s+import/,
+      /com\.microsoft\.playwright/i,
+      /Microsoft\.Playwright/
+    ]
+  },
+  {
+    name: "Cucumber",
+    category: "test-automation",
+    ecosystem: "any",
+    // `.feature` is Gherkin's own extension — as unambiguous as `pom.xml` is
+    // for Maven, and the strongest signal here by far. Config filenames are a
+    // secondary path signal for a repo that has Cucumber wired up with no
+    // feature file scanned yet (unusual, but the config still counts).
+    strongPath: [/\.feature$/i, /(^|\/)cucumber\.(js|cjs|json|ya?ml)$/i],
+    strong: [
+      /@cucumber\/cucumber/,
+      /io\.cucumber/i,
+      /@RunWith\s*\(\s*Cucumber\.class\s*\)/,
+      /import\s+io\.cucumber/
+    ],
+    // "behave" is Python's Gherkin runner, but it is also an ordinary English
+    // word — weak rather than strong, same treatment "kafka" already gets as
+    // a bare keyword.
+    weak: [/\bbehave\b/]
+  },
+  {
+    name: "TestNG",
+    category: "test-automation",
+    ecosystem: "java",
+    // testng.xml is TestNG's own canonical suite file — same precedent as
+    // pom.xml for Maven.
+    strongPath: [/(^|\/)testng\.xml$/i],
+    strong: [
+      /org\.testng/i,
+      // @DataProvider has no JUnit equivalent by that name, so it is
+      // unambiguous evidence on its own, unlike the bare @Test annotation
+      // JUnit also uses.
+      /@DataProvider\b/,
+      /org\.testng\.annotations/,
+      /org\.testng\.Assert/
+    ]
   }
 ];
 

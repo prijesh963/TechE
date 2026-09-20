@@ -254,6 +254,33 @@ describe("Phase 21 advanced intelligence", () => {
     );
   });
 
+  it("does not flag MISSING_TESTS for a repo covered only by Cucumber features", async () => {
+    // Regression: a root-level features/ folder was invisible to the old
+    // isTestFile — the folder check required a leading slash a root-relative
+    // path never has — so a Cucumber-only repo read as untested.
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({
+        scripts: { test: "cucumber-js" },
+        devDependencies: { "@cucumber/cucumber": "^10.0.0" }
+      }),
+      "features/login.feature":
+        "Feature: Login\n  Scenario: Successful login\n    Given I am on the login page\n",
+      "src/login.ts": "export function login() {}\n"
+    });
+    const capture = createCapture();
+
+    const result = await runCli(
+      ["diagnostics", "--path", repoRoot, "--json"],
+      capture.io
+    );
+    const report = JSON.parse(capture.stdout.join("\n"));
+
+    expect(result.exitCode).toBe(0);
+    expect(
+      report.diagnostics.map((diagnostic: { code: string }) => diagnostic.code)
+    ).not.toContain("MISSING_TESTS");
+  });
+
   it("returns no git activity when the repo has no .git directory", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ name: "no-git" }),

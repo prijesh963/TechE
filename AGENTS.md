@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 508 tests
+├── tests/               48 files, 523 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -200,12 +200,21 @@ the other. If a shell needs repo intelligence, it imports the service.
 21. VSIX packaging, internal setup docs, npm link support.
 22. Integration detection: datastores, messaging, micro-frontend platforms,
     microservice platforms, deployment orchestration (Kubernetes, Helm,
-    Docker Compose) and monorepo build tooling (Nx, Turborepo) — detected
+    Docker Compose), monorepo build tooling (Nx, Turborepo) and test
+    automation frameworks (Playwright, Cucumber, TestNG) — detected
     independently of language/framework, so an arbitrary combination composes
     without a detector per combination. Each detection carries its own risk
     guidance into `/create-plan`, and a detection with no guidance of its own
     still gets its category's baseline, so a new detector is never
     plan-silent.
+23. One canonical, corrected `isTestFile`, used everywhere the question is
+    asked. It existed as four separate, disagreeing implementations before —
+    the same problem the Core Rule above describes for retrieval, just for a
+    smaller helper — and one of the disagreements meant a root-level `test/`,
+    `tests/` or `spec/` folder (no leading slash in a repo-relative path) was
+    silently invisible to some of them, which is exactly Cucumber's common
+    shape. Also recognizes `.feature` files and the JUnit/TestNG
+    `SomethingTests.java` suffix convention.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -242,10 +251,14 @@ way `pom.xml` is), independently of the language/framework adapters:
   OpenFeign.
 - **Orchestration** — Kubernetes, Helm, Docker Compose.
 - **Monorepo build tooling** — Nx, Turborepo.
+- **Test automation** — Playwright, Cucumber (`.feature` files), TestNG.
 
 A plain-service repo behind Kubernetes or Compose, or a monorepo wired
 together by Nx or Turborepo, is a common shape outside the Java ecosystem
 that Spring Cloud detection alone would miss — this is what catches it.
+Test automation is a separate axis from the per-language test frameworks
+(JUnit, pytest) the adapters already detect, because Playwright and Cucumber
+both cross language boundaries on their own.
 
 ### Extended validation allowlist
 
@@ -336,7 +349,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 508 tests must pass before merging.
+Use Vitest. All 523 tests must pass before merging.
 
 Cover:
 
@@ -367,8 +380,11 @@ Cover:
 - multi-repo path resolution (unique suffix, ambiguity, segment boundaries)
 - feature planning (JSON + Markdown output)
 - integration detection (datastore/messaging/micro-frontend/microservice/
-  orchestration/monorepo-tooling, by content and by canonical filename, and
-  the risk guidance each carries into a plan)
+  orchestration/monorepo-tooling/test-automation, by content and by
+  canonical filename, and the risk guidance each carries into a plan)
+- isTestFile (root-level test folders, .feature files, the Tests.java
+  suffix, and not false-positiving on an ordinary file whose name merely
+  contains "test")
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
 - MCP tools (all 30 tools)

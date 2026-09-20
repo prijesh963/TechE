@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { scanRepository } from "../packages/shared/src/index.js";
+import { isTestFile, scanRepository } from "../packages/shared/src/index.js";
 
 describe("scanRepository", () => {
   it("skips the built-in ignore set", async () => {
@@ -80,3 +80,48 @@ async function createRepo(files: Record<string, string>): Promise<string> {
 
   return root;
 }
+
+describe("isTestFile", () => {
+  it("recognizes a root-level test folder, not only a nested one", () => {
+    // A repo-relative path to a root-level test folder has no leading
+    // slash (`test/foo.ts`, not `/test/foo.ts`), so a naive
+    // `path.includes("/test/")` silently missed every file living directly
+    // in one — this was four separate, disagreeing implementations before
+    // being consolidated here, and this was the bug all four shared.
+    expect(isTestFile("test/login.ts")).toBe(true);
+    expect(isTestFile("tests/login.ts")).toBe(true);
+    expect(isTestFile("spec/login.ts")).toBe(true);
+    expect(isTestFile("__tests__/login.ts")).toBe(true);
+    // Nested still works, unaffected.
+    expect(isTestFile("src/test/login.ts")).toBe(true);
+  });
+
+  it("recognizes a Cucumber/Gherkin feature file", () => {
+    // The extension alone is unambiguous — nothing else uses `.feature` —
+    // so this works even without the folder fix above.
+    expect(isTestFile("features/login.feature")).toBe(true);
+    expect(isTestFile("login.feature")).toBe(true);
+    // A step-definition file is not itself a feature file.
+    expect(isTestFile("src/steps/LoginSteps.java")).toBe(false);
+  });
+
+  it("recognizes standard .test./.spec. naming and a test_ prefix", () => {
+    expect(isTestFile("e2e/login.spec.ts")).toBe(true);
+    expect(isTestFile("src/App.test.tsx")).toBe(true);
+    expect(isTestFile("tests/test_login.py")).toBe(true);
+  });
+
+  it("recognizes JUnit/TestNG's Tests.java suffix convention", () => {
+    // `SomethingTests.java` has no `.test.` separator for the generic name
+    // check to catch.
+    expect(isTestFile("src/UserServiceTests.java")).toBe(true);
+    expect(isTestFile("src/UserService.java")).toBe(false);
+  });
+
+  it("does not flag an ordinary file whose name merely contains 'test'", () => {
+    // A looser, path-wide "test_" check (one of the four disagreeing
+    // implementations had this) false-positived on this exact input.
+    expect(isTestFile("contest_entry.py")).toBe(false);
+    expect(isTestFile("src/index.ts")).toBe(false);
+  });
+});

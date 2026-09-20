@@ -720,7 +720,13 @@ const INTEGRATION_GUIDANCE: Record<string, string> = {
     "Docker Compose: service definitions (ports, env, volumes, depends_on) are a contract with the code that reads them — check the compose file alongside a config or startup change.",
   Nx: "Nx: check the workspace's own project graph (`nx graph`, or a project's `implicitDependencies`) for what else depends on the project being changed before assuming the change is isolated.",
   Turborepo:
-    "Turborepo: check turbo.json's task dependsOn graph for what else in the workspace depends on the project being changed before assuming the change is isolated."
+    "Turborepo: check turbo.json's task dependsOn graph for what else in the workspace depends on the project being changed before assuming the change is isolated.",
+  Playwright:
+    "Playwright: a shared locator, fixture or page object affects every spec that uses it, not just the file being changed — and a spec that starts failing intermittently is worth treating as a real regression before assuming it is flaky.",
+  Cucumber:
+    "Cucumber: a step definition is matched to feature files by its step text, not by filename — rewording or reparameterizing a step can silently stop matching every scenario still phrased the old way, across the whole suite, not just the file being edited.",
+  TestNG:
+    "TestNG: check testng.xml's suite and group membership, and any dependsOnMethods/dependsOnGroups — a renamed or reordered test can silently drop out of a suite or break an execution-order dependency."
 };
 
 const CATEGORY_GUIDANCE: Record<string, string> = {
@@ -738,7 +744,9 @@ const CATEGORY_GUIDANCE: Record<string, string> = {
   orchestration:
     "Deployment topology: check the manifest or compose file for the service alongside the code — ports, environment variables, resource limits and inter-service links can silently drift from what the code now needs.",
   "monorepo-tooling":
-    "Monorepo build graph: other projects in this repo may depend on the one being changed — check the build tool's own dependency graph, not just imports, before assuming the change is isolated."
+    "Monorepo build graph: other projects in this repo may depend on the one being changed — check the build tool's own dependency graph, not just imports, before assuming the change is isolated.",
+  "test-automation":
+    "Test automation: a change to a shared step, fixture, locator or page object can silently break every scenario or spec that uses it — check what else calls the changed helper before assuming the change is contained to one test file."
 };
 
 function createIntegrationGuidance(integrations: IntegrationInfo[]): string[] {

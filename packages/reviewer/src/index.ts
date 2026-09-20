@@ -14,6 +14,7 @@ import {
   type RiskItem,
   type ValidationResult,
   getArtifactDirectoryPath,
+  isTestFile,
   readJsonFile,
   writeJsonFile
 } from "@copilot-architect/shared";
@@ -851,10 +852,6 @@ function isExpectedChange(filePath: string, expectedFiles: string[]): boolean {
 
 function isSourceFile(filePath: string): boolean {
   return /\.(ts|tsx|js|jsx|py|java|go|rs|php|rb|c|cc|cpp|h|hpp)$/i.test(filePath);
-}
-
-function isTestFile(filePath: string): boolean {
-  return /(\btest\b|\bspec\b|__tests__|\.test\.|\.spec\.)/i.test(filePath);
 }
 
 function hasRelatedTestChange(sourceFile: string, testFiles: string[]): boolean {

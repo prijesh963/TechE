@@ -19,6 +19,7 @@ import {
   getArtifactDirectoryPath,
   getArtifactFilePath,
   isBinaryPath,
+  isTestFile,
   readJsonFile,
   scanRepository
 } from "@copilot-architect/shared";
@@ -1030,18 +1031,6 @@ function springMethod(annotation: string): string {
 function joinRoutes(prefix: string, routePath: string): string {
   const joined = `/${prefix}/${routePath}`.replace(/\/+/g, "/");
   return joined === "/" ? "/" : joined.replace(/\/$/, "");
-}
-
-function isTestFile(filePath: string): boolean {
-  const lower = filePath.toLowerCase();
-  return (
-    lower.includes("/test/") ||
-    lower.includes("/tests/") ||
-    lower.includes(".test.") ||
-    lower.includes(".spec.") ||
-    lower.includes("test_") ||
-    lower.endsWith("tests.java")
-  );
 }
 
 function hasDependencyManifest(files: ScannedFile[]): boolean {

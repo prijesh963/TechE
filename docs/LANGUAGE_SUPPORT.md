@@ -151,6 +151,7 @@ rather than per adapter — the same broker shows up in a Maven pom, an npm
 | **Microservice**     | Spring Cloud, Service Discovery (Eureka/Consul), API Gateway, OpenFeign |
 | **Orchestration**    | Kubernetes, Helm, Docker Compose                                        |
 | **Monorepo tooling** | Nx, Turborepo                                                           |
+| **Test automation**  | Playwright, Cucumber (`.feature` files), TestNG                         |
 
 Because these compose, **arbitrary combinations need no special case**: a
 "Java + Oracle + Kafka + IBM MQ" service is the Java adapter plus three
@@ -176,6 +177,19 @@ together by Kubernetes/Compose, or several frontends wired together by
 Nx/Turborepo, is the more common shape outside the Java and webpack
 ecosystems specifically.
 
+Test automation (Playwright, Cucumber, TestNG) is kept on this axis rather
+than folded into the language adapters' own framework lists (which is where
+JUnit and pytest are detected), because Playwright and Cucumber both cross
+language boundaries on their own — detecting them per adapter would mean
+repeating the same signals in the JS, Python and Java adapters alike.
+
+Cucumber's `.feature` files also get a second, independent fix: they are now
+recognized by `isTestFile` — previously four separate, disagreeing
+implementations, one of which required a leading `/` before `test/`,
+`tests/` or `spec/` that a root-level folder in a repo-relative path never
+has. A Cucumber-only repo, with its conventional root `features/` folder,
+read as having no tests at all before this.
+
 Detected integrations appear in `repo-map.json` under `integrations`, and the
 Feature Planner, FeatureImplementer and CodeReviewer agents are instructed to
 treat message payloads, REST contracts, persisted schemas and micro-frontend
@@ -195,8 +209,14 @@ Feign),
 `vercel/turborepo` (Turborepo's own `turbo.json`, and Module Federation and
 Redis found incidentally inside it),
 `docker/awesome-compose` (Docker Compose),
-`kubernetes/examples` (raw Kubernetes manifests, not curated fixtures), and
-`nrwl/nx-examples` (Nx).
+`kubernetes/examples` (raw Kubernetes manifests, not curated fixtures),
+`nrwl/nx-examples` (Nx),
+`microsoft/playwright-mcp` (Playwright's own `playwright.config.ts` and real
+specs, as an external consumer would have it — Playwright's own monorepo
+tests itself through internal fixtures rather than the published package, so
+was not representative for this),
+`cucumber/cucumber-js` (real `.feature` files), and
+`testng-team/testng` (its own `testng.xml`).
 
 ---
 

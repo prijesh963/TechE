@@ -190,6 +190,26 @@ describe("FeaturePlanningService", () => {
     expect(guidance).toContain("Monorepo build graph");
   });
 
+  it("surfaces test-automation guidance for Playwright and Cucumber", async () => {
+    const repoRoot = await createRepo({
+      "playwright.config.ts": "export default {}",
+      "features/login.feature": "Feature: Login\n  Scenario: ok\n",
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/index.ts": "export const add = (a: number, b: number) => a + b;"
+    });
+
+    const { plan } = await new FeaturePlanningService().createPlanPreview({
+      startPath: repoRoot,
+      strictRoot: true,
+      request: "Add a subtract helper"
+    });
+    const guidance = plan.stackSpecificPlan.integrations.join("\n");
+
+    expect(guidance).toContain("Playwright");
+    expect(guidance).toContain("Cucumber");
+    expect(guidance).toContain("Test automation");
+  });
+
   it("leaves integration guidance empty when the repo has none", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),

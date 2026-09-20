@@ -15,6 +15,7 @@ import {
   getArtifactDirectoryPath,
   getArtifactFilePath,
   isBinaryPath,
+  isTestFile,
   readGitHead,
   readJsonFile,
   resolveRegisteredRepos,
@@ -1592,20 +1593,6 @@ function guessLanguage(filePath: string): string {
   if (name === "dockerfile" || name === "makefile") return "Config";
 
   return extension ? extension.slice(1).toUpperCase() : "Text";
-}
-
-function isTestFile(filePath: string): boolean {
-  const lower = filePath.toLowerCase();
-  const name = path.basename(lower);
-  return (
-    lower.includes("/test/") ||
-    lower.includes("/tests/") ||
-    lower.includes("/__tests__/") ||
-    lower.includes("/spec/") ||
-    name.includes(".test.") ||
-    name.includes(".spec.") ||
-    name.startsWith("test_")
-  );
 }
 
 function isConfigFile(filePath: string): boolean {

@@ -98,6 +98,43 @@ export function isBinaryPath(filePath: string): boolean {
   return BINARY_FILE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
+/**
+ * Whether a path is a test file, by convention.
+ *
+ * This answer existed as four separate, disagreeing implementations before
+ * being consolidated here — the same "one door" reasoning the tokenizer and
+ * the retrieval engine were already consolidated under, for the same reason:
+ * a fix applied to one copy never reached the others.
+ *
+ * The folder check adds a leading boundary rather than assuming one is
+ * already there. A repo-relative path to a root-level `test/`, `tests/` or
+ * `spec/` folder has no leading slash (`test/foo.ts`, not `/test/foo.ts`),
+ * so the naive `path.includes("/test/")` silently missed every file living
+ * directly in one — exactly Cucumber's common shape (`features/login.feature`
+ * at the repo root), which is how a Cucumber-only repo read as MISSING_TESTS
+ * before this.
+ */
+export function isTestFile(filePath: string): boolean {
+  const bounded = `/${filePath.toLowerCase()}`;
+  const name = path.basename(bounded);
+
+  return (
+    bounded.includes("/test/") ||
+    bounded.includes("/tests/") ||
+    bounded.includes("/__tests__/") ||
+    bounded.includes("/spec/") ||
+    name.includes(".test.") ||
+    name.includes(".spec.") ||
+    name.startsWith("test_") ||
+    // JUnit/TestNG's `SomethingTests.java` convention has no `.test.`
+    // separator for the generic check above to catch.
+    name.endsWith("tests.java") ||
+    // Cucumber/Gherkin. The extension alone is unambiguous — nothing else
+    // uses `.feature`.
+    name.endsWith(".feature")
+  );
+}
+
 export function normalizeRelativePath(relativePath: string): string {
   return relativePath.split(path.sep).join("/");
 }
