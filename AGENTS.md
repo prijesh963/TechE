@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               45 files, 476 tests
+├── tests/               45 files, 478 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -303,7 +303,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 476 tests must pass before merging.
+Use Vitest. All 478 tests must pass before merging.
 
 Cover:
 
@@ -347,6 +347,8 @@ Cover:
 - node version check in doctor
 - the release workflow (full history for the build number, checks before
   packaging, one package or none)
+- the packaged README (a repository for its relative links to resolve
+  against, and no flag suppressing the check)
 
 ```bash
 npm test                      # run all tests

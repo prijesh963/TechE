@@ -152,3 +152,44 @@ describe("publishing the VSIX", () => {
     expect(script).toContain('entry.endsWith(".vsix")');
   });
 });
+
+describe("the packaged README", () => {
+  it("declares a repository, because INSTALL.md links by relative path", async () => {
+    // docs/INSTALL.md is copied into the package as its README, and points at
+    // the Releases page with `../../releases`. `vsce` resolves relative links
+    // against the declared repository and refuses to package without one, so
+    // these two facts have to stay true together. They did not: the link was
+    // added and the manifest was not, and packaging failed on the first
+    // release run.
+    const install = await readFile(
+      path.join(process.cwd(), "docs", "INSTALL.md"),
+      "utf8"
+    );
+    const relativeLinks = install.match(/\]\((?!https?:|#)[^)]+\)/g) ?? [];
+
+    if (relativeLinks.length === 0) {
+      return;
+    }
+
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(process.cwd(), "packages", "vscode-extension", "package.json"),
+        "utf8"
+      )
+    );
+
+    expect(manifest.repository?.url).toMatch(/^https:\/\/github\.com\//);
+  });
+
+  it("packages without suppressing the missing-repository check", async () => {
+    // The flag existed to quiet a warning about a real gap. The gap is closed,
+    // so keeping the flag would only hide the next one.
+    const script = await readFile(
+      path.join(process.cwd(), "scripts", "package-vsix.mjs"),
+      "utf8"
+    );
+
+    expect(script).not.toContain("--allow-missing-repository");
+    expect(script).toContain("repository: manifest.repository");
+  });
+});

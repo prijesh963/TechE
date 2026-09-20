@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–28 merged. The redesign is complete; what is below is
+**Status:** Phases 0–29 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -298,7 +298,20 @@ release worth cutting as against one that merely happened.
 "latest" means most recent rather than most ready. Tagging deliberately would
 fix it and put a manual step back in the path this phase exists to remove.
 
-### 1.26 Nothing checks that the published package runs
+### 1.26 Packaging is only proven by packaging
+
+**Phase 29.** The unit suite checks the packaging script's inputs — that a
+repository is declared, that stale packages are cleared — but it does not run
+`vsce`. Only CI does, at the end of a full build, and a packaging fault is
+therefore found minutes after a push rather than seconds after an edit.
+
+**Cost:** this is how the first release run failed. A relative link was added
+to `docs/INSTALL.md`, which becomes the package README, and `vsce` refused it
+because no repository was declared to resolve it against; the suite was green
+throughout. Running `npm run package:vsix` in the suite would close it and
+cost every test run an 11.5 MB bundle.
+
+### 1.27 Nothing checks that the published package runs
 
 **Phase 28.** The workflow runs format, lint, build and the suite before
 packaging, then publishes whatever `vsce` produced. Nothing installs the
@@ -309,7 +322,7 @@ shim, a missing contributed command — ships as a green release and is found by
 whoever installs it. `@vscode/test-electron` would close it, and is a
 different piece of work from packaging.
 
-### 1.27 The CLI shell-outs are still subprocesses
+### 1.28 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

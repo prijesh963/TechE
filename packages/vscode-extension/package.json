@@ -8,6 +8,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "publisher": "internal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prijesh963/TechE.git"
+  },
   "categories": [
     "Other"
   ],

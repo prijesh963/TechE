@@ -80,6 +80,12 @@ const staged = {
   description: manifest.description,
   version: buildInfo.version,
   publisher: manifest.publisher,
+  // Carried into the package because the README is docs/INSTALL.md, which
+  // links to the repository's Releases page by relative path. `vsce` resolves
+  // those against the declared repository and refuses to package when it
+  // cannot — a broken link in an installed extension is a dead end for
+  // whoever is trying to find the next build.
+  repository: manifest.repository,
   license: "SEE LICENSE IN README.md",
   categories: manifest.categories,
   engines: manifest.engines,
@@ -125,18 +131,7 @@ await writeFile(
 );
 
 const vsixPath = path.join(outDir, `copilot-architect-${staged.version}.vsix`);
-run(
-  "npx",
-  [
-    "vsce",
-    "package",
-    "--no-dependencies",
-    "--allow-missing-repository",
-    "--out",
-    vsixPath
-  ],
-  stageDir
-);
+run("npx", ["vsce", "package", "--no-dependencies", "--out", vsixPath], stageDir);
 
 console.log(`\nVSIX: ${path.relative(rootDir, vsixPath)}`);
 console.log(`Build: ${buildInfo.version} (${buildInfo.commit})`);
