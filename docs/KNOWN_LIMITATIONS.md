@@ -513,16 +513,17 @@ would ship the same bytes as `node_modules`.
 
 **Found in Phase 28.** 110 `mkdtemp` calls across 33 test files; two clean up
 after themselves. A machine that has run the suite a few dozen times carries
-thousands of abandoned fixture directories — this one had 2,700, enough that
-`du` over the temp directory did not finish inside two minutes.
+thousands of abandoned fixture directories — this one had 2,700, holding
+**14 GB**, which was most of the 22 GB in use on the volume.
 
-**Cost:** the suite gets slower on a machine that runs it often, and it is the
-best current explanation for an intermittent failure in the sample matrix,
-whose copy-heavy test failed once and then passed on four consecutive runs.
-That matters more now than it did: the release workflow gates a published
-build on this suite, so a flake is a release that did not happen. Fixing it is
-mechanical but touches 33 files, so it was left rather than folded into a
-packaging change.
+**Cost:** disk, first of all — a developer who runs the suite regularly loses
+gigabytes to it and has nothing pointing at the cause. It is also the best
+explanation for an intermittent failure in the sample matrix, whose
+copy-heavy test failed once here and then passed on four consecutive runs;
+the samples are copied per fixture and never reclaimed. That matters more now
+than it did: the release workflow gates a published build on this suite, so a
+flake is a release that did not happen. Fixing it is mechanical but touches 33
+files, so it was left rather than folded into a packaging change.
 
 ---
 
