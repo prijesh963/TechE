@@ -17,6 +17,7 @@ import {
   buildCommandLmPrompt,
   buildLabel,
   languageHint,
+  renderApprovedSteps,
   reportApplied,
   createCliCommandLine,
   createDashboardHtml,
@@ -1138,6 +1139,45 @@ describe("showing code in the plan draft", () => {
     expect(manifest.activationEvents).toContain(
       "onCommand:copilotArchitect.openPlannedFile"
     );
+  });
+});
+
+describe("what the plan says it will do", () => {
+  it("hands implementation the steps the developer approved", () => {
+    // Implementation that is told only why a file is in scope is free to
+    // build something else and call it the plan.
+    const lines = renderApprovedSteps({
+      kind: "update",
+      relativePath: "src/users/UserService.java",
+      rationale: "this is where passwords are compared",
+      intent: ["add hashPassword(String)", "call it from create()"]
+    });
+
+    expect(lines.join("\n")).toContain("do this and not more");
+    expect(lines).toContain("- add hashPassword(String)");
+    expect(lines).toContain("- call it from create()");
+  });
+
+  it("says nothing when the plan carried no steps", () => {
+    // An older plan, or one drafted with no model available. An empty heading
+    // would read as "there is nothing to do in this file", which is a claim
+    // the plan never made.
+    expect(
+      renderApprovedSteps({
+        kind: "update",
+        relativePath: "src/users/UserService.java",
+        rationale: "this is where passwords are compared"
+      })
+    ).toEqual([]);
+
+    expect(
+      renderApprovedSteps({
+        kind: "update",
+        relativePath: "src/users/UserService.java",
+        rationale: "this is where passwords are compared",
+        intent: []
+      })
+    ).toEqual([]);
   });
 });
 

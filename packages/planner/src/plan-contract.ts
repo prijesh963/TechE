@@ -36,6 +36,11 @@ export interface PlanContract extends GeneratedArtifact {
    */
   decisions: Decision[];
   changes: PlannedChange[];
+  /**
+   * What the change does as a whole, above the file-by-file detail. Absent
+   * when no model was available to ask.
+   */
+  approach?: string[];
   validation: PlanCommand[];
   /** Anything the plan depends on that is not a file — contracts, conventions. */
   notes: string[];
@@ -48,6 +53,18 @@ export interface PlannedChange {
   relativePath: string;
   /** Why this change, in the plan's own words. Model-written, and fine to be. */
   rationale: string;
+  /**
+   * What this change actually does to the file, a step at a time.
+   *
+   * Distinct from `rationale`, which says why the file is in scope. A
+   * developer approving a plan needs the second question answered too:
+   * "this file is where passwords are compared" is not a change, and a plan
+   * made only of those is a file list wearing a plan's name.
+   *
+   * Absent when no model was available to ask, which the draft says rather
+   * than passing the change off as specified.
+   */
+  intent?: string[];
   /**
    * The code as it stood when the plan was built. Absent for an `add`, since
    * there is nothing to quote.
@@ -130,6 +147,8 @@ export interface BuildChangeOptions {
   relativePath: string;
   kind: ChangeKind;
   rationale: string;
+  /** What this change does to the file, a step at a time. */
+  intent?: string[];
   repoName?: string;
   /**
    * Line to centre the excerpt on — the symbol anchor the index already
@@ -159,7 +178,8 @@ export async function buildPlannedChange(
     kind: options.kind,
     ...(options.repoName ? { repoName: options.repoName } : {}),
     relativePath: options.relativePath,
-    rationale: options.rationale.trim()
+    rationale: options.rationale.trim(),
+    ...(options.intent && options.intent.length > 0 ? { intent: options.intent } : {})
   };
 
   if (options.kind === "add") {
@@ -262,6 +282,7 @@ export interface CreatePlanContractOptions {
   version: number;
   decisions: Decision[];
   changes: PlannedChange[];
+  approach?: string[];
   validation?: PlanCommand[];
   notes?: string[];
 }
@@ -278,6 +299,9 @@ export function createPlanContract(options: CreatePlanContractOptions): PlanCont
     version: options.version,
     decisions: options.decisions,
     changes: options.changes,
+    ...(options.approach && options.approach.length > 0
+      ? { approach: options.approach }
+      : {}),
     validation: options.validation ?? [],
     notes: options.notes ?? []
   };

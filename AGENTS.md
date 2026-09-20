@@ -120,7 +120,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               44 files, 455 tests
+├── tests/               45 files, 471 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -175,7 +175,11 @@ the other. If a shell needs repo intelligence, it imports the service.
     is flagged rather than read as fact. A new file carries an outline —
     each export's signature and purpose, imports, rough size — so an `add` is
     approved as something concrete rather than a sentence, and `/implement`
-    checks the file that landed against it.
+    checks the file that landed against it. The draft also says what the
+    change does — an approach, and a step per file saying what happens to it,
+    so approval is given to a change rather than to a file list. The steps
+    are what `/implement` is instructed with and what `/review` compares
+    against.
 11. Grounding: claims verified against the index, unverified ones flagged. A
     path is resolved by unique suffix, so an answer that writes a path the way
     its own repo does is not reported as a fabrication.
@@ -295,7 +299,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 455 tests must pass before merging.
+Use Vitest. All 471 tests must pass before merging.
 
 Cover:
 
@@ -311,6 +315,8 @@ Cover:
 - change selection (invented paths, add-of-existing, traversal, caps)
 - rationale evidence (verified, unverified, and honestly unchecked)
 - new-file outlines (exports, unreal imports dropped, size bounds)
+- plan approach and per-file steps (records parsed, unplanned paths
+  dropped, caps, and the steps handed to `/implement`)
 - outline checked against the written file, end to end through the index
 - write previews (line deltas, truncation guard, staging lost on reload)
 - staged diff URIs and the read-only content provider behind them

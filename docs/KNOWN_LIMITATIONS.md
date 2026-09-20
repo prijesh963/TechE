@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–26 merged. The redesign is complete; what is below is
+**Status:** Phases 0–27 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -252,7 +252,43 @@ the developer most needs the file names, and reads a number instead. A
 notification has room for a sentence, not a list, so closing this means the
 chat thread, which is 1.20.
 
-### 1.22 The CLI shell-outs are still subprocesses
+### 1.22 A plan's steps are intent, and nothing checks them
+
+**Phase 27.** The draft now says what the change does — an approach, and a
+step per file. None of it is verified: a step is a sentence about code that
+does not exist yet, so there is nothing to check it against the way a
+rationale's cited symbol is checked against the index.
+
+**Cost:** a plausible, wrong step reads exactly like a correct one, and it is
+now what `/implement` is instructed with — so a bad step propagates into the
+code rather than stopping at the draft. What can be checked is the symbols a
+step names in a file the plan already quotes; that is a narrower check than it
+sounds, and was left rather than half-built.
+
+### 1.23 A file can be planned with no step against it
+
+**Phase 27.** When the model returns an approach but says nothing about one of
+the selected files, the draft says so under that file. The plan is not
+redrafted and the file is not dropped.
+
+**Cost:** approving that plan approves a file whose change was never
+described, and `/implement` falls back to the rationale for it. Dropping the
+file would silently narrow a plan the developer never saw; asking again costs
+a round trip on every draft where the model was merely terse.
+
+### 1.24 The approach is asked for in a separate model call
+
+**Phase 27.** Selection, outlines, the approach and the decision proposals are
+four calls. The approach is asked after the files are chosen, so it explains a
+selection rather than driving one.
+
+**Cost:** a draft costs another round trip, and the model cannot say "this
+needs a file you did not give me" — it can only describe work in the files
+already selected. Folding intent into the selection call would save the trip
+and make the reply much harder to parse, which is how the selection format got
+its own step in the first place.
+
+### 1.25 The CLI shell-outs are still subprocesses
 
 **Phase 3, addressed differently in Phase 7.** The extension still runs its
 command workflows as subprocesses. Phase 7 fixed the part that was broken —

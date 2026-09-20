@@ -418,3 +418,67 @@ describe("planValidationCommands", () => {
     );
   });
 });
+
+describe("what a plan says it will do", () => {
+  it("carries the approved steps on the change", async () => {
+    // The rationale says why a file is in scope. Without this the plan never
+    // says what happens to it, and approving it is approving a file list.
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-intent-"));
+    await writeFile(path.join(repoRoot, "UserService.java"), "class A {}\n", "utf8");
+
+    const change = await buildPlannedChange({
+      repoRoot,
+      relativePath: "UserService.java",
+      kind: "update",
+      rationale: "this is where passwords are compared",
+      intent: ["add hashPassword(String)", "call it from create()"]
+    });
+
+    expect(change.intent).toEqual([
+      "add hashPassword(String)",
+      "call it from create()"
+    ]);
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("leaves intent off a change that has none", async () => {
+    // Absent rather than empty: an empty list would read as "nothing to do
+    // here", which is a different claim from "nothing was asked".
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-intent-none-"));
+    await writeFile(path.join(repoRoot, "UserService.java"), "class A {}\n", "utf8");
+
+    const change = await buildPlannedChange({
+      repoRoot,
+      relativePath: "UserService.java",
+      kind: "update",
+      rationale: "this is where passwords are compared",
+      intent: []
+    });
+
+    expect(change.intent).toBeUndefined();
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("carries the overall approach on the contract", () => {
+    const plan = createPlanContract({
+      request: "hash passwords",
+      version: 1,
+      decisions: [],
+      changes: [],
+      approach: ["Hash on write, verify on login."]
+    });
+
+    expect(plan.approach).toEqual(["Hash on write, verify on login."]);
+  });
+
+  it("omits the approach when none was produced", () => {
+    const plan = createPlanContract({
+      request: "hash passwords",
+      version: 1,
+      decisions: [],
+      changes: []
+    });
+
+    expect(plan.approach).toBeUndefined();
+  });
+});

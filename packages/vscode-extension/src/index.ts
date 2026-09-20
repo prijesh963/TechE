@@ -17,6 +17,7 @@ import {
 } from "@copilot-architect/indexer";
 import {
   buildPlannedChange,
+  parsePlanApproach,
   createPlanContract,
   writeApprovedPlan,
   applyPlanChanges,
@@ -39,6 +40,7 @@ import {
   selectByRelevance,
   verifySelectedChanges,
   type PlanContract,
+  type ParsedApproach,
   type PlannedOutline,
   type PlannedChange,
   type VerifiedChange
@@ -2529,10 +2531,20 @@ async function runPlanPhase(
         )
       : new Map<string, PlannedOutline>();
 
+  stream.progress?.("Working out what the change actually does…");
+  const approach = await requestPlanApproach(
+    vscode,
+    prompt,
+    selection,
+    outlines,
+    token
+  );
+
   // Snapshots are read from disk by buildPlannedChange — never written by the
   // model, which paraphrases existing code and corrupts the patch.
   const changes: PlannedChange[] = [];
   for (const choice of selection) {
+    const intent = approach?.intents.get(choice.relativePath);
     changes.push(
       await buildPlannedChange({
         repoRoot: workspaceRoot,
@@ -2540,6 +2552,7 @@ async function runPlanPhase(
         kind: choice.kind,
         rationale: choice.rationale,
         anchorLine: anchors.get(choice.relativePath),
+        ...(intent && intent.length > 0 ? { intent } : {}),
         ...(outlines.has(choice.relativePath)
           ? { outline: outlines.get(choice.relativePath) }
           : {})
@@ -2553,6 +2566,7 @@ async function runPlanPhase(
     version,
     decisions: sessions.activeDecisions(session),
     changes,
+    ...(approach && approach.summary.length > 0 ? { approach: approach.summary } : {}),
     // What the plan commits to running afterwards, taken from what the repo
     // already has. Approving a plan should mean agreeing to the checks too.
     validation: planValidationCommands(
@@ -2565,6 +2579,25 @@ async function runPlanPhase(
 
   stream.markdown(`## Plan v${version} — draft\n\n**${prompt}**\n`);
   stream.markdown(renderDecisions(sessions, withDraft));
+
+  // What the change is, before which files it lands in. A plan that opens on
+  // a file list asks the developer to reconstruct the intent from the paths,
+  // which is exactly the guessing this tool exists to remove.
+  if (approach === undefined) {
+    stream.markdown(
+      "\n_No language model was available, so this draft says which files are involved and what is in them today — not what the change would do. That is a file list, not a plan: read it as one._\n"
+    );
+  } else if (approach.summary.length > 0) {
+    stream.markdown("\n**What this does**\n");
+    for (const line of approach.summary) {
+      stream.markdown(`- ${line}\n`);
+    }
+  } else {
+    stream.markdown(
+      "\n_The model named no overall approach for this change. The per-file steps below are all there is._\n"
+    );
+  }
+
   stream.markdown("\n**Files this would touch**\n");
   const verdicts = new Map(selection.map((choice) => [choice.relativePath, choice]));
 
@@ -2583,6 +2616,21 @@ async function runPlanPhase(
     stream.markdown(
       `- **${change.kind}** \`${change.relativePath}\` — ${change.rationale}${flag} _(${quoted})_\n`
     );
+
+    // What will be done to this file, next to the file. The rationale above
+    // says why it is in scope; without this the developer has no statement of
+    // the change at all, only the code it would be made to.
+    if (change.intent && change.intent.length > 0) {
+      for (const step of change.intent) {
+        stream.markdown(`  - ↳ ${step}\n`);
+      }
+    } else if (approach !== undefined && change.kind !== "delete") {
+      // Said, not hidden: a file with no step is one the plan chose and then
+      // did not say what to do with, and approving it is approving a guess.
+      stream.markdown(
+        "  - ↳ _no step given for this file — the plan does not say what changes here_\n"
+      );
+    }
 
     if (change.kind === "add") {
       const outline = renderOutline(change.outline);
@@ -2623,7 +2671,7 @@ async function runPlanPhase(
   }
 
   stream.markdown(
-    "\n_Above is the code as it stands. What replaces it is produced at `/implement`, where every change is diffed against your files before anything is written._\n"
+    "\n_The steps are what this plan intends; the code blocks are the files as they stand today. The code that replaces them is written at `/implement`, where every change is diffed against your files before anything lands._\n"
   );
 
   const unverified = selection.filter((choice) => choice.evidence === "unverified");
@@ -2811,6 +2859,10 @@ async function runImplementPhase(
           "",
           `Write this file to satisfy: ${plan.request}`,
           `Reason this file is in scope: ${change.rationale}`,
+          // What the developer approved this file as, not just why it is
+          // here. Implementation that does not receive the approved steps is
+          // free to build something else and call it the plan.
+          ...renderApprovedSteps(change),
           "",
           "Return ONLY the complete file contents. No explanation, no fences.",
           "",
@@ -3166,10 +3218,21 @@ async function reportReviewFindings(
       "",
       `The developer asked for: ${plan.request}`,
       "",
+      ...(plan.approach && plan.approach.length > 0
+        ? [
+            "What the approved plan set out to do:",
+            ...plan.approach.map((line) => `- ${line}`),
+            ""
+          ]
+        : []),
+      // The approved steps, not only the file list. "Was this built as
+      // approved" is the question /review exists to answer, and it cannot be
+      // asked against a list of paths.
       "The plan approved these files:",
-      ...plan.changes.map(
-        (change) => `- ${change.kind} ${change.relativePath} — ${change.rationale}`
-      ),
+      ...plan.changes.flatMap((change) => [
+        `- ${change.kind} ${change.relativePath} — ${change.rationale}`,
+        ...(change.intent ?? []).map((step) => `    - approved step: ${step}`)
+      ]),
       "",
       ...(open.length > 0
         ? [
@@ -3989,6 +4052,7 @@ async function editExistingFile(
       "",
       `Edit this file to satisfy: ${plan.request}`,
       `Reason this file is in scope: ${change.rationale}`,
+      ...renderApprovedSteps(change),
       "",
       "Return only search/replace blocks, in this exact form:",
       "",
@@ -4165,6 +4229,99 @@ async function reportOutlineDivergence(
       .join(", ");
     stream.markdown(`_Outline not checked for ${rows}._\n\n`);
   }
+}
+
+/**
+ * The steps this file's change was approved as, for the implement prompt.
+ *
+ * Empty when the plan carries none — an older plan, or a draft built with no
+ * model available. Implementation then works from the request and the
+ * rationale as it always did, rather than being handed an empty heading that
+ * reads as "there is nothing to do here".
+ */
+export function renderApprovedSteps(change: PlannedChange): string[] {
+  if (!change.intent || change.intent.length === 0) {
+    return [];
+  }
+
+  return [
+    "",
+    "What the developer approved for this file — do this and not more:",
+    ...change.intent.map((step) => `- ${step}`)
+  ];
+}
+
+/**
+ * Asks what the plan actually does.
+ *
+ * Selection answers "which files", and the rationale answers "why this file".
+ * Neither answers "what is the change", and a draft made only of those is a
+ * file list next to the code as it stands — which is what a developer read
+ * before approving the writing of code they had no description of.
+ *
+ * The code itself is deliberately not asked for here. It is produced at
+ * `/implement`, diffed against the real files, and written on a click;
+ * generating it twice would double the cost of every redraft and move the
+ * expensive step to the side of the gate where nothing has been approved yet.
+ *
+ * Returns `undefined` when no model was available, which the draft reports
+ * rather than presenting a file list as a considered plan.
+ */
+async function requestPlanApproach(
+  vscode: VscodeApiLike,
+  request: string,
+  selection: VerifiedChange[],
+  outlines: Map<string, PlannedOutline>,
+  token: unknown
+): Promise<ParsedApproach | undefined> {
+  const text = await requestLmText(
+    vscode,
+    [
+      "A developer asked for this change:",
+      request,
+      "",
+      "A plan has already chosen the files. For each one:",
+      ...selection.map((choice) => {
+        const outline = renderOutline(outlines.get(choice.relativePath));
+        return `${choice.kind} ${choice.relativePath} — ${choice.rationale}${
+          outline ? ` (will contain: ${outline})` : ""
+        }`;
+      }),
+      "",
+      "Say what the change does. The developer is about to authorize writing",
+      "code and can currently see only which files are involved and what is",
+      "in them today — not what it will become.",
+      "",
+      "Do not write the code. Say what the code will do, concretely enough",
+      "to be disagreed with: what gets added, what it is called from, what",
+      "is left alone.",
+      "",
+      "Two record kinds, pipe-separated, nothing else — no prose, no headings.",
+      "",
+      "approach | one line of what the change does overall",
+      "step | path | what changes in that file",
+      "",
+      "Two to four `approach` lines. One `step` line per distinct edit, using",
+      "a path exactly as written above — do not invent files, and do not",
+      "describe a file that is not in the list.",
+      "",
+      "Example:",
+      "approach | Hash passwords on write and verify on login, instead of comparing them in plain text.",
+      "approach | Existing rows stay readable: verification falls back to the old comparison once, then rewrites the hash.",
+      "step | src/users/UserService.java | add hashPassword(String) and verifyPassword(String, String), both delegating to BCrypt",
+      "step | src/users/UserService.java | call hashPassword from create(), leaving the rest of the method as it is",
+      "step | src/users/LoginResource.java | replace the equals() comparison in authenticate() with verifyPassword"
+    ].join("\n"),
+    token
+  );
+
+  if (text === undefined) {
+    return undefined;
+  }
+
+  return parsePlanApproach(text, {
+    plannedPaths: new Set(selection.map((choice) => choice.relativePath))
+  });
 }
 
 /**

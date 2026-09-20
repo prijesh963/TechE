@@ -220,7 +220,7 @@ Copilot Chat:
 | Type this                 | What it does                                                                                                                                          |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@architect /analyze`     | Explains what is in the repo, grounded in a real index of the files.                                                                                  |
-| `@architect /create-plan` | Turns the request into a plan you can read, correct, and approve.                                                                                     |
+| `@architect /create-plan` | Turns the request into a plan you can read, correct, and approve: what the change does, what happens in each file, and the code as it stands today.   |
 | `@architect /implement`   | Diffs what the plan comes to, then applies it on a click. The apply reports back as a notification — written, refused, and the checks the plan named. |
 | `@architect /review`      | Compares what was built against what was approved.                                                                                                    |
 
@@ -451,7 +451,7 @@ GitHub Copilot Chat artifacts:
 
 ```bash
 npm run build     # compile all TypeScript packages
-npm test          # run all 455 Vitest tests
+npm test          # run all 471 Vitest tests
 npm run lint      # ESLint
 npm run format    # Prettier check
 npm run format:write  # Prettier fix
