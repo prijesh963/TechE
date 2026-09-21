@@ -1,5 +1,6 @@
 package com.copilotarchitect.intellij
 
+import com.intellij.ide.impl.OpenProjectTask
 import com.intellij.ide.impl.ProjectUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooser
@@ -78,9 +79,15 @@ object ActionDispatcher {
                 // VS Code's own `forceNewWindow: false` — a fresh window can
                 // launch without this plugin loaded on some install paths.
                 // Opening a project is a UI operation — needs the EDT, same
-                // as pickFolder above.
+                // as pickFolder above. `openOrImport`'s second parameter is
+                // an OpenProjectTask (CI's compileKotlin caught the earlier
+                // version of this line passing `project` directly, which
+                // was never a valid overload).
                 ApplicationManager.getApplication().invokeAndWait {
-                    ProjectUtil.openOrImport(Path.of(chosen.path), project)
+                    ProjectUtil.openOrImport(
+                        Path.of(chosen.path),
+                        OpenProjectTask(projectToClose = project, forceOpenInNewFrame = false)
+                    )
                 }
                 null
             }

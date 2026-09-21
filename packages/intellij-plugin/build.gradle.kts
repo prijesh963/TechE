@@ -35,13 +35,17 @@ dependencies {
     }
 }
 
+// IntelliJ Platform 2024.2 (sinceBuild "242" below) moved its own runtime to
+// JBR 21 — `verifyPluginProjectConfiguration` flagged 17 here as mismatched
+// against the "2024.2.3" IDE version created above (CI's own findings, not
+// assumed ahead of time).
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 intellijPlatform {

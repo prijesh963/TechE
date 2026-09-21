@@ -30,7 +30,10 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          # IntelliJ Platform 2024.2 (see build.gradle.kts) runs on JBR 21;
+          # 17 here made compileKotlin's toolchain resolution fail once the
+          # Gradle config itself was fixed to target 21.
+          java-version: "21"
       - name: Build
         run: ./gradlew build --no-daemon
       - name: Verify plugin
