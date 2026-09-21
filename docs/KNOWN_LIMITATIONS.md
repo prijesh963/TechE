@@ -719,6 +719,75 @@ the card says so in place of a number rather than silently reading as zero.
 
 ---
 
+### 4.17 IntelliJ edition, Phase 1: dashboard only, unverified Gradle build
+
+**Phase 42.** A second shell, `packages/intellij-plugin` (Kotlin/Gradle),
+alongside the VS Code extension. Phase 1 scope is deliberately narrow — the
+same Core Rule the rest of the product follows ("a shell calls the CLI/
+core/MCP services, it never owns the logic itself"), extended to a shell
+that cannot import TypeScript at all:
+
+- `createDashboardHtml` and its loaders (`loadDashboardArtifacts`,
+  `loadDashboardSession`) moved out of `packages/vscode-extension` into a
+  new `packages/dashboard`, which the extension now imports unchanged (a
+  thin wrapper assembles VS Code's own `command:` action-row HTML and
+  passes it in, so VS Code's rendered output is byte-for-byte identical to
+  before the move — verified by the full existing test suite passing
+  unmodified). A new CLI command, `copilot-architect dashboard [--path]
+[--json]`, imports the same package and prints the HTML to stdout for a
+  non-Node host to consume.
+- The IntelliJ plugin's `DashboardPanel` spawns that CLI command
+  (`CliBridge.kt`) and loads its stdout HTML into a JBCef (embedded
+  Chromium) view — no rendering logic of its own, matching the extension.
+
+**Known boundaries, by design or by environment, not by oversight:**
+
+- **The Gradle build could not be compiled or verified in the sandbox it
+  was written in.** That environment's egress policy allows Maven Central
+  and the Gradle Plugin Portal (so the Kotlin and IntelliJ Platform Gradle
+  plugins resolve) but returns 403 for every JetBrains-owned host
+  (`cache-redirector.jetbrains.com`, `www.jetbrains.com`,
+  `plugins.jetbrains.com`) — confirmed directly with `curl` before writing
+  a single line of Kotlin, not assumed after the fact. `./gradlew build`
+  there gets exactly as far as `Could not resolve all dependencies for
+configuration ':compileClasspath': No IntelliJ Platform dependency
+found.` — i.e. it never reaches compiling a single `.kt` file. The Kotlin
+  sources lean on plain `javax.swing.UIManager`/`java.awt.Color` rather
+  than less certain IntelliJ Platform SDK convenience methods specifically
+  to reduce the odds of an uncaught API mistake (see `ThemeColors.kt`), but
+  none of it is proven to compile yet — `.github/workflows/intellij-ci.yml`
+  (path-filtered, targets the `intellij-main` branch) is the first place
+  that will actually try, since GitHub-hosted runners are not behind this
+  restriction.
+- **No bundled CLI.** `CliBridge` resolves the CLI from a
+  `COPILOT_ARCHITECT_CLI` environment variable or a relative dev-checkout
+  path — there is no analogue yet to how the VS Code `.vsix` bundles
+  `cli.mjs` (`scripts/bundle-extension.mjs`). Packaging one is Phase 2.
+- **No action row.** The CLI's `dashboard` command has no caller-specific
+  command/URI scheme to render, so it emits an empty one — Setup Repo,
+  Build Index, etc. are not yet reachable from the IntelliJ dashboard.
+- **`--vscode-*` CSS custom property names, reused verbatim.** `ThemeColors`
+  maps IntelliJ's current Look and Feel onto the same variable names the
+  shared dashboard HTML already uses, rather than the dashboard package
+  taking a host-neutral theme parameter — functionally harmless (a CSS
+  custom property name is just a string) but a naming leak worth a rename
+  once a third host needs its own reason to.
+- **The `--vscode-charts-*` accent colors are fixed**, not derived from the
+  active IntelliJ theme — there is no IntelliJ theme key as standardized as
+  VS Code's `charts.*` tokens to map from. They will not adapt to a Light
+  theme the way the rest of the dashboard's colors, which are genuinely
+  theme-derived, do.
+- **Dashboard only.** No chat, plan approval, or diff surface — those are
+  later phases; a real Tool Window UI for them needs the Gradle build
+  actually verified first.
+
+**Cost:** the Gradle-build gap is the one that matters — everything else is
+a small, explicit, and reversible scope cut. Do not treat any of this
+Kotlin code as working until it has compiled somewhere with real network
+access.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

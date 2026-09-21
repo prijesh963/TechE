@@ -95,6 +95,7 @@ export const REQUIRED_PACKAGE_DIRECTORIES = [
   "packages/cli",
   "packages/dashboard",
   "packages/vscode-extension",
+  "packages/intellij-plugin",
   "packages/web"
 ] as const;
 

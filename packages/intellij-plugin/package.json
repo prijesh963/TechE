@@ -1,0 +1,10 @@
+{
+  "name": "@copilot-architect/intellij-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "IntelliJ edition of Copilot Architect. Kotlin/Gradle, not TypeScript — kept out of the npm workspace build (tsc -b, vitest) entirely. See README.md.",
+  "scripts": {
+    "build": "gradle build",
+    "test": "gradle test"
+  }
+}

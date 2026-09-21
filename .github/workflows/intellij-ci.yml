@@ -1,0 +1,37 @@
+name: IntelliJ plugin CI
+
+# Separate from the npm-based CI workflow on purpose: this package is
+# Kotlin/Gradle, not TypeScript, and lives on its own integration branch
+# (intellij-main) rather than main. Path-filtered so a change elsewhere in
+# the monorepo doesn't spend minutes resolving an IDE SDK for nothing.
+
+on:
+  pull_request:
+    paths:
+      - "packages/intellij-plugin/**"
+      - ".github/workflows/intellij-ci.yml"
+  push:
+    branches:
+      - intellij-main
+    paths:
+      - "packages/intellij-plugin/**"
+      - ".github/workflows/intellij-ci.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/intellij-plugin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build
+        run: ./gradlew build --no-daemon
+      - name: Verify plugin
+        run: ./gradlew verifyPlugin --no-daemon

@@ -1,0 +1,20 @@
+<idea-plugin>
+    <id>com.copilotarchitect.intellij</id>
+    <name>Copilot Architect</name>
+    <vendor>Internal</vendor>
+    <description><![CDATA[
+        Grounds AI coding agents in what is actually in the repository —
+        the IntelliJ edition of Copilot Architect. Shares its engine with
+        the VS Code extension through the same bundled CLI; this plugin
+        owns only the IntelliJ-side presentation.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Copilot Architect"
+                    secondary="true"
+                    anchor="right"
+                    factoryClass="com.copilotarchitect.intellij.DashboardToolWindowFactory"/>
+    </extensions>
+</idea-plugin>

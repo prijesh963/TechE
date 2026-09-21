@@ -97,7 +97,7 @@ minimal setup.
 
 ## Core Architecture
 
-A TypeScript monorepo:
+A TypeScript-first monorepo, with one deliberate exception noted below:
 
 ```text
 copilot-architect/
@@ -120,6 +120,10 @@ copilot-architect/
 │   ├── dashboard/       shared dashboard render+load logic (used by vscode-extension and the CLI's `dashboard` command)
 │   ├── cli/             CLI entry point and command routing
 │   ├── vscode-extension the @architect chat participant and dashboard
+│   ├── intellij-plugin  the IntelliJ edition — Kotlin/Gradle, the one
+│   │                    non-TypeScript package, kept out of `tsc -b`/`vitest`
+│   │                    entirely; see its own README.md. Lives on this
+│   │                    branch (intellij-main), not on main.
 │   └── web/             optional local web UI shell (thin)
 ├── templates/
 │   ├── instructions/
@@ -259,6 +263,22 @@ the other. If a shell needs repo intelligence, it imports the service.
     `--json`) for a host that cannot import it directly. Done ahead of an
     IntelliJ edition that needs the exact same dashboard without being able
     to import TypeScript at all — see the `intellij-main` branch.
+27. That IntelliJ edition, Phase 1: `packages/intellij-plugin` (Kotlin/
+    Gradle — the one non-TypeScript package). A single Tool Window renders
+    the shared dashboard by spawning the CLI's `dashboard` command and
+    loading its stdout HTML into a JBCef (embedded Chromium) view, themed to
+    the current IntelliJ Look and Feel — the same "a shell calls the CLI,
+    never reimplements the logic" rule the VS Code extension follows,
+    extended to a shell that cannot import TypeScript at all. Its own
+    path-filtered CI job (`.github/workflows/intellij-ci.yml`), since Gradle
+    and `tsc -b`/`vitest` have nothing to say to each other. Chat, plan
+    approval and diff are later phases; see `docs/KNOWN_LIMITATIONS.md` 4.17
+    and `packages/intellij-plugin/README.md` for exactly what Phase 1 does
+    and does not cover, including that the Gradle build itself could not be
+    verified in the sandbox it was written in (JetBrains' distribution
+    hosts are blocked by that environment's network policy, confirmed
+    directly rather than assumed) and needs a first real build in CI or on
+    a developer machine before anyone relies on it.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
