@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 541 tests
+├── tests/               48 files, 554 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -220,26 +220,34 @@ the other. If a shell needs repo intelligence, it imports the service.
 24. Cross-repo interlink matching, both reported in
     `AdvancedAnalysis.interlinks`, tagged with both repos:
     - HTTP-route: an HTTP client call (`axios`/`fetch`/`requests`, an
-      OpenFeign client method) whose literal path matches a route exposed by
-      a *different* registered repo, confidence based on HTTP-method
+      OpenFeign client method) whose path matches a route exposed by a
+      *different* registered repo, confidence based on HTTP-method
       agreement. A `@FeignClient` interface's own `@GetMapping`-style
       annotations are read as the call they are, not misreported as a route
       the calling repo itself exposes.
-    - Messaging: a producer (kafkajs/kafka-python, amqplib/pika, Spring
-      Kafka/AMQP/JMS) whose literal topic/queue/destination name and broker
-      match a consumer in a *different* registered repo — Kafka, RabbitMQ,
-      and JMS (the API IBM MQ and ActiveMQ are also normally driven through
-      in Java). A topic name held in a constant rather than a repeated
-      string literal is not followed — see `docs/KNOWN_LIMITATIONS.md` 4.14
-      for the full list of what each matcher does and does not catch.
+    - Messaging: a producer (kafkajs/kafka-python/confluent-kafka,
+      amqplib/pika, Spring Kafka/AMQP/JMS) whose topic/queue/destination
+      name and broker match a consumer in a *different* registered repo —
+      Kafka, RabbitMQ, and JMS (the API IBM MQ and ActiveMQ are also
+      normally driven through in Java).
+    - Both matchers resolve a path/topic given as a named constant
+      (`kafkaTemplate.send(ORDER_TOPIC, ...)`), not only a repeated string
+      literal — a value built from a variable at runtime (an interpolated
+      template literal) is still not followed. A non-relative TS/JS import
+      of another registered repo's own declared package name also resolves
+      in the symbol graph. See `docs/KNOWN_LIMITATIONS.md` 4.14 for the
+      full list of what each matcher does and does not catch.
 25. Symbol-graph call resolution through a field, a constructor parameter
-    property, a plain parameter, or a local variable — not only a bare
-    identifier or a single-level property access. `this.repo.save(...)` and
-    a method-local `OrderRepository repo = new OrderRepositoryImpl();
-    repo.save(...)` both resolve now, in both the TypeScript and Java
-    extractors, with a local variable correctly shadowing a same-named field.
-    Remaining gaps (array/generic/union-typed fields, enhanced-for locals,
-    method chaining) are in `docs/KNOWN_LIMITATIONS.md` 4.15.
+    property, a plain parameter (varargs included in Java), a local
+    variable, or a `for...of`/enhanced-for loop variable resolved to an
+    array's element type — not only a bare identifier or a single-level
+    property access. `this.repo.save(...)`, a method-local
+    `OrderRepository repo = new OrderRepositoryImpl(); repo.save(...)`, and
+    `for (const order of this.orders) { order.approve(); }` all resolve now,
+    in both the TypeScript and Java extractors, with a local variable
+    correctly shadowing a same-named field. Remaining gaps (union-typed
+    fields, method chaining, data-flow/reassignment) are in
+    `docs/KNOWN_LIMITATIONS.md` 4.15.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -374,7 +382,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 541 tests must pass before merging.
+Use Vitest. All 554 tests must pass before merging.
 
 Cover:
 
@@ -401,9 +409,15 @@ Cover:
 - grounding (claim extraction including prose calls, verification, honest "not checked")
 - Java symbol extraction (methods indexed, control flow excluded)
 - call-graph resolution through a field, a constructor parameter property, a
-  plain parameter, and a local variable (explicit type or inferred from
-  `new`), in both the TypeScript and Java extractors, including a local
-  correctly shadowing a same-named field
+  plain parameter (varargs included in Java), and a local variable (explicit
+  type or inferred from `new`), in both the TypeScript and Java extractors,
+  including a local correctly shadowing a same-named field
+- call-graph array/loop resolution: a `for...of` (TypeScript) or
+  enhanced-for (Java) loop variable resolved to a param/field/local array's
+  element type, `this.`-reached fields included
+- cross-repo TS/JS package-name import resolution (exact and subpath, via
+  `main`/`module`/`types` and the `index.*`/`src/index.*` fallback; a real
+  external package still unresolved)
 - parsed symbols (Go receivers, Rust items, start lines, kinds, and
   declining a language so the pattern list still runs)
 - multi-repo path resolution (unique suffix, ambiguity, segment boundaries)
@@ -415,9 +429,13 @@ Cover:
   different repo; a same-repo match not reported as an interlink; a
   `@FeignClient`'s own mappings excluded from the routes it exposes)
 - cross-repo messaging interlinks (Kafka producer matched to a consumer in
-  another repo across kafkajs and Spring Kafka; RabbitMQ across Java and
-  Python; JMS covering IBM MQ/ActiveMQ's own API; a different channel name
-  not matched; a same-repo producer/consumer pair not reported)
+  another repo across kafkajs/kafka-python/confluent-kafka and Spring Kafka;
+  RabbitMQ across Java and Python; JMS covering IBM MQ/ActiveMQ's own API; a
+  different channel name not matched; a same-repo producer/consumer pair not
+  reported)
+- constant resolution in interlink matchers and Spring/Feign route detection
+  (a named constant resolved to its declared value; an unresolved reference
+  dropped rather than read as literal path text)
 - feature planning (JSON + Markdown output)
 - integration detection (datastore/messaging/micro-frontend/microservice/
   orchestration/monorepo-tooling/test-automation, by content and by

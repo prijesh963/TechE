@@ -196,14 +196,20 @@ treat message payloads, REST contracts, persisted schemas and micro-frontend
 exposed modules as published contracts when a change touches them.
 
 In a multi-repo workspace, a plan also gets `AdvancedAnalysis.interlinks`: an
-HTTP client call in one registered repo whose literal path matches a route
-in a different one, and a message producer in one repo whose literal
-topic/queue/destination name and broker match a consumer in a different one
-(Kafka, RabbitMQ, and JMS — the API IBM MQ and ActiveMQ are also normally
-driven through in Java). Both are evidence-based path/name matches, not
-runtime confirmation, and both read literal strings only — a topic name held
-in a constant rather than repeated as a string literal is invisible to it,
-the most common real-world miss. See `docs/KNOWN_LIMITATIONS.md` 4.14 for the
+HTTP client call in one registered repo whose path matches a route in a
+different one, and a message producer in one repo whose topic/queue/
+destination name and broker match a consumer in a different one (Kafka,
+RabbitMQ, and JMS — the API IBM MQ and ActiveMQ are also normally driven
+through in Java). Both are evidence-based path/name matches, not runtime
+confirmation. A path or topic name given as a **named constant** is
+resolved (`kafkaTemplate.send(ORDER_TOPIC, ...)` resolves `ORDER_TOPIC`
+against its declaration in the same file) — the norm rather than the
+exception in idiomatic Kafka code; a value built from a variable at
+runtime (an interpolated template literal, string concatenation) is a
+different, harder problem and is still invisible to either matcher. A
+non-relative TS/JS import that matches a different registered repo's own
+declared package name also resolves in the symbol graph, the same as a
+relative import already did. See `docs/KNOWN_LIMITATIONS.md` 4.14 for the
 full list of what each does and does not catch.
 
 ### Validated against
@@ -266,14 +272,15 @@ string cannot throw off brace matching).
 
 Java resolution is package-aware rather than path-based: imports resolve
 through a repo-wide qualified-name index, a call receiver is mapped from its
-declared type — a field, a method parameter, or a local variable declared in
-the method body, checked in that order so a local correctly shadows a
-same-named field — and an inherited call is found by walking resolved
-supertypes. `repo.save(…)` reaches `OrderRepository.save` whether `repo` is a
-field, a parameter, or `OrderRepository repo = new OrderRepositoryImpl();`
-declared inside the method itself. A call that resolves to no known method —
-a JDK or third-party call — is dropped rather than pointed at the enclosing
-class.
+declared type — a field, a method parameter (varargs included), a local
+variable declared in the method body, or an enhanced-for loop's own variable
+(`for (Order order : orders)`), checked in that order so a local correctly
+shadows a same-named field — and an inherited call is found by walking
+resolved supertypes. `repo.save(…)` reaches `OrderRepository.save` whether
+`repo` is a field, a parameter, or `OrderRepository repo = new
+OrderRepositoryImpl();` declared inside the method itself. A call that
+resolves to no known method — a JDK or third-party call — is dropped rather
+than pointed at the enclosing class.
 
 The TypeScript/JavaScript path resolves a call receiver the same way: a class
 field's own type annotation or constructor parameter property
@@ -281,7 +288,11 @@ field's own type annotation or constructor parameter property
 annotation, or a local variable's explicit annotation or its type inferred
 from a `new ClassName(...)` initializer — checked in that order, local
 shadowing a field included. `this.repo.save(...)` and a bare `repo.save(...)`
-both resolve once `repo`'s declared type is known.
+both resolve once `repo`'s declared type is known. An array-typed field,
+parameter or local (`Repository[]` or `Array<Repository>`) additionally
+resolves a `for (const r of that binding)` loop's own variable to the
+array's element type, `this.repos` included, so the loop variable's own
+calls resolve too.
 
 Known limits, consistent with the TS path's "best effort, degrade gracefully"
 contract: annotations are not modelled, anonymous and local classes get no node
@@ -291,8 +302,11 @@ sense of yields fewer nodes, never wrong ones.
 No benchmark of the Java scanner is committed, so no counts are claimed here.
 What is covered is in `tests/java-graph.test.ts`: class, interface and method
 nodes, `extends` chains across files, and controller → repository call edges
-resolved through a field, a parameter, and a method-local variable, with a
-local's type taking precedence over a same-named field's. `tests/graph.test.ts`
-covers the same set for TypeScript, including a call reached through `this.`.
+resolved through a field, a parameter (varargs included), a method-local
+variable, and an enhanced-for loop variable, with a local's type taking
+precedence over a same-named field's. `tests/graph.test.ts` covers the same
+set for TypeScript, including a call reached through `this.`, a `for...of`
+loop variable resolved to a param/field/local array's element type, and a
+non-relative import of another registered repo's own package name.
 A figure quoted without an artifact that reproduces it is the kind of claim
 this tool exists to flag, so it is not quoted.

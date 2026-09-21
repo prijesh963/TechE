@@ -415,6 +415,84 @@ async function detectDependencyManifests(
   return manifests.sort((left, right) => left.filePath.localeCompare(right.filePath));
 }
 
+/**
+ * Name -> string value, from `const X = "...";` (JS/TS), an ALL_CAPS module-
+ * level assignment (Python), or a `String X = "...";` declaration (Java,
+ * with or without `final`/`static`). A call site that references a named
+ * constant instead of repeating a string literal — the norm for a Kafka
+ * topic name, and common enough for a route path — otherwise either gets
+ * silently dropped (an HTTP path/messaging channel with no literal to read)
+ * or, worse, has the constant's own NAME read as if it were the value (a
+ * Spring/Feign mapping annotation's argument was previously read this way
+ * regardless of whether it was quoted).
+ */
+function findStringBindings(file: ScannedFile, text: string): Map<string, string> {
+  if (/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file.relativePath)) {
+    return findJsStringBindings(text);
+  }
+  if (file.relativePath.endsWith(".py")) {
+    return findPythonStringBindings(text);
+  }
+  if (file.relativePath.endsWith(".java")) {
+    return findJavaStringBindings(text);
+  }
+  return new Map();
+}
+
+function findJsStringBindings(text: string): Map<string, string> {
+  const bindings = new Map<string, string>();
+
+  for (const match of text.matchAll(
+    /\bconst\s+(\w+)\s*(?::\s*\w+\s*)?=\s*["'`]([^"'`]+)["'`]/g
+  )) {
+    bindings.set(match[1], match[2]);
+  }
+
+  return bindings;
+}
+
+function findPythonStringBindings(text: string): Map<string, string> {
+  const bindings = new Map<string, string>();
+
+  for (const match of text.matchAll(/^([A-Z][A-Z0-9_]*)\s*=\s*["']([^"']+)["']/gm)) {
+    bindings.set(match[1], match[2]);
+  }
+
+  return bindings;
+}
+
+function findJavaStringBindings(text: string): Map<string, string> {
+  const bindings = new Map<string, string>();
+
+  for (const match of text.matchAll(/\bString\s+(\w+)\s*=\s*["']([^"']+)["']/g)) {
+    bindings.set(match[1], match[2]);
+  }
+
+  return bindings;
+}
+
+/**
+ * `literal` is set when a regex's quoted-string branch matched (used as-is,
+ * even when empty — a bare `@GetMapping()` legitimately means "no extra
+ * path"). Otherwise `identifier` holds whatever the regex's bare-word branch
+ * matched: empty means no argument was given at all (resolves the same as
+ * an empty literal), a real name is looked up in `constants` and dropped
+ * (`undefined`) rather than guessed at when not found there.
+ */
+function resolveLiteralOrConstant(
+  literal: string | undefined,
+  identifier: string | undefined,
+  constants: Map<string, string>
+): string | undefined {
+  if (literal !== undefined) {
+    return literal;
+  }
+  if (!identifier) {
+    return identifier;
+  }
+  return constants.get(identifier);
+}
+
 function detectRoutes(files: ScannedFile[]): RouteApiEndpoint[] {
   return files.flatMap((file) => {
     const text = file.text;
@@ -423,11 +501,13 @@ function detectRoutes(files: ScannedFile[]): RouteApiEndpoint[] {
       return [];
     }
 
+    const constants = findStringBindings(file, text);
+
     return [
       ...detectExpressRoutes(file, text),
       ...detectPythonRoutes(file, text),
       ...detectDjangoRoutes(file, text),
-      ...detectSpringRoutes(file, text),
+      ...detectSpringRoutes(file, text, constants),
       ...detectAngularRoutes(file, text),
       ...detectReactRoutes(file, text),
       ...detectNextRoutes(file)
@@ -516,7 +596,11 @@ function detectDjangoRoutes(file: ScannedFile, text: string): RouteApiEndpoint[]
   return routes;
 }
 
-function detectSpringRoutes(file: ScannedFile, text: string): RouteApiEndpoint[] {
+function detectSpringRoutes(
+  file: ScannedFile,
+  text: string,
+  constants: Map<string, string>
+): RouteApiEndpoint[] {
   // A @FeignClient interface's own @GetMapping-style annotations declare a
   // route it CALLS on another service, not one it exposes — the opposite of
   // what this function reports. detectFeignClientCalls covers those instead.
@@ -528,16 +612,23 @@ function detectSpringRoutes(file: ScannedFile, text: string): RouteApiEndpoint[]
   const classMapping =
     text.match(/@RequestMapping\(\s*(?:value\s*=\s*)?["']([^"']+)["']/)?.[1] ?? "";
   const pattern =
-    /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\(\s*(?:value\s*=\s*)?["']?([^"')]*)["']?/g;
+    /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\(\s*(?:value\s*=\s*)?(?:["']([^"')]*)["']|(\w*))/g;
 
   for (const match of text.matchAll(pattern)) {
     const annotation = match[1] ?? "RequestMapping";
-    const routePath = joinRoutes(classMapping, match[2] ?? "");
+    const rawPath = resolveLiteralOrConstant(match[2], match[3], constants);
+
+    // An unresolved constant reference is dropped rather than read as
+    // literal path text — @GetMapping(INVOICE_PATH) is not a route at
+    // "/INVOICE_PATH" just because the value could not be looked up.
+    if (rawPath === undefined) {
+      continue;
+    }
 
     routes.push({
       kind: "spring",
       method: springMethod(annotation),
-      routePath,
+      routePath: joinRoutes(classMapping, rawPath),
       filePath: file.relativePath,
       line: lineNumberAt(text, match.index ?? 0)
     });
@@ -647,26 +738,38 @@ function detectOutboundCalls(files: ScannedFile[]): OutboundCallSite[] {
       return [];
     }
 
+    const constants = findStringBindings(file, text);
+
     return [
-      ...detectJsHttpClientCalls(file, text),
-      ...detectPythonHttpClientCalls(file, text),
-      ...detectFeignClientCalls(file, text)
+      ...detectJsHttpClientCalls(file, text, constants),
+      ...detectPythonHttpClientCalls(file, text, constants),
+      ...detectFeignClientCalls(file, text, constants)
     ];
   });
 }
 
-function detectJsHttpClientCalls(file: ScannedFile, text: string): OutboundCallSite[] {
+function detectJsHttpClientCalls(
+  file: ScannedFile,
+  text: string,
+  constants: Map<string, string>
+): OutboundCallSite[] {
   if (!/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file.relativePath)) {
     return [];
   }
 
   const calls: OutboundCallSite[] = [];
-  const axiosPattern = /\baxios\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/g;
+  const axiosPattern =
+    /\baxios\.(get|post|put|patch|delete)\(\s*(?:["'`]([^"'`]+)["'`]|(\w+))/g;
 
   for (const match of text.matchAll(axiosPattern)) {
+    const callPath = resolveLiteralOrConstant(match[2], match[3], constants);
+    if (!callPath) {
+      continue;
+    }
+
     calls.push({
       method: match[1]?.toUpperCase() ?? "GET",
-      path: match[2] ?? "",
+      path: callPath,
       filePath: file.relativePath,
       line: lineNumberAt(text, match.index ?? 0)
     });
@@ -675,14 +778,19 @@ function detectJsHttpClientCalls(file: ScannedFile, text: string): OutboundCallS
   // fetch(url) defaults to GET unless an inline { method: "..." } is given —
   // a method built at runtime (a variable, a shared options object) is not
   // followed, so it is read as GET, matching the fetch default for that case.
-  const fetchPattern = /\bfetch\(\s*["'`]([^"'`]+)["'`](?:\s*,\s*\{([^}]*)\})?/g;
+  const fetchPattern =
+    /\bfetch\(\s*(?:["'`]([^"'`]+)["'`]|(\w+))(?:\s*,\s*\{([^}]*)\})?/g;
 
   for (const match of text.matchAll(fetchPattern)) {
-    const method = match[2]?.match(/method\s*:\s*["'`](\w+)["'`]/)?.[1];
+    const callPath = resolveLiteralOrConstant(match[1], match[2], constants);
+    if (!callPath) {
+      continue;
+    }
+    const method = match[3]?.match(/method\s*:\s*["'`](\w+)["'`]/)?.[1];
 
     calls.push({
       method: method?.toUpperCase() ?? "GET",
-      path: match[1] ?? "",
+      path: callPath,
       filePath: file.relativePath,
       line: lineNumberAt(text, match.index ?? 0)
     });
@@ -693,19 +801,26 @@ function detectJsHttpClientCalls(file: ScannedFile, text: string): OutboundCallS
 
 function detectPythonHttpClientCalls(
   file: ScannedFile,
-  text: string
+  text: string,
+  constants: Map<string, string>
 ): OutboundCallSite[] {
   if (!file.relativePath.endsWith(".py")) {
     return [];
   }
 
   const calls: OutboundCallSite[] = [];
-  const pattern = /\brequests\.(get|post|put|patch|delete)\(\s*["']([^"']+)["']/g;
+  const pattern =
+    /\brequests\.(get|post|put|patch|delete)\(\s*(?:["']([^"']+)["']|(\w+))/g;
 
   for (const match of text.matchAll(pattern)) {
+    const callPath = resolveLiteralOrConstant(match[2], match[3], constants);
+    if (!callPath) {
+      continue;
+    }
+
     calls.push({
       method: match[1]?.toUpperCase() ?? "GET",
-      path: match[2] ?? "",
+      path: callPath,
       filePath: file.relativePath,
       line: lineNumberAt(text, match.index ?? 0)
     });
@@ -714,7 +829,11 @@ function detectPythonHttpClientCalls(
   return calls;
 }
 
-function detectFeignClientCalls(file: ScannedFile, text: string): OutboundCallSite[] {
+function detectFeignClientCalls(
+  file: ScannedFile,
+  text: string,
+  constants: Map<string, string>
+): OutboundCallSite[] {
   if (!file.relativePath.endsWith(".java") || !text.includes("@FeignClient")) {
     return [];
   }
@@ -723,14 +842,19 @@ function detectFeignClientCalls(file: ScannedFile, text: string): OutboundCallSi
   const classMapping =
     text.match(/@RequestMapping\(\s*(?:value\s*=\s*)?["']([^"']+)["']/)?.[1] ?? "";
   const pattern =
-    /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\(\s*(?:value\s*=\s*)?["']?([^"')]*)["']?/g;
+    /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\(\s*(?:value\s*=\s*)?(?:["']([^"')]*)["']|(\w*))/g;
 
   for (const match of text.matchAll(pattern)) {
     const annotation = match[1] ?? "RequestMapping";
+    const rawPath = resolveLiteralOrConstant(match[2], match[3], constants);
+
+    if (rawPath === undefined) {
+      continue;
+    }
 
     calls.push({
       method: springMethod(annotation),
-      path: joinRoutes(classMapping, match[2] ?? ""),
+      path: joinRoutes(classMapping, rawPath),
       filePath: file.relativePath,
       line: lineNumberAt(text, match.index ?? 0)
     });
@@ -840,37 +964,46 @@ function detectMessagingEndpoints(files: ScannedFile[]): MessagingEndpoint[] {
       return [];
     }
 
+    const constants = findStringBindings(file, text);
+
     return [
-      ...detectKafkaMessaging(file, text),
-      ...detectRabbitMqMessaging(file, text),
-      ...detectJmsMessaging(file, text)
+      ...detectKafkaMessaging(file, text, constants),
+      ...detectRabbitMqMessaging(file, text, constants),
+      ...detectJmsMessaging(file, text, constants)
     ];
   });
 }
 
 function matchChannels(
   text: string,
-  pattern: RegExp
+  pattern: RegExp,
+  constants: Map<string, string>
 ): Array<{ channel: string; index: number }> {
   const results: Array<{ channel: string; index: number }> = [];
 
   for (const match of text.matchAll(pattern)) {
-    if (match[1]) {
-      results.push({ channel: match[1], index: match.index ?? 0 });
+    const channel = resolveLiteralOrConstant(match[1], match[2], constants);
+    if (channel) {
+      results.push({ channel, index: match.index ?? 0 });
     }
   }
 
   return results;
 }
 
-function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoint[] {
+function detectKafkaMessaging(
+  file: ScannedFile,
+  text: string,
+  constants: Map<string, string>
+): MessagingEndpoint[] {
   const endpoints: MessagingEndpoint[] = [];
 
   if (/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file.relativePath)) {
     // kafkajs: producer.send({ topic: "..." }), consumer.subscribe({ topic: "..." })
     for (const { channel, index } of matchChannels(
       text,
-      /\bproducer\.send\(\s*\{[^}]*\btopic\s*:\s*["'`]([^"'`]+)["'`]/g
+      /\bproducer\.send\(\s*\{[^}]*\btopic\s*:\s*(?:["'`]([^"'`]+)["'`]|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("kafka", "producer", channel, file, text, index)
@@ -878,7 +1011,8 @@ function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoin
     }
     for (const { channel, index } of matchChannels(
       text,
-      /\bconsumer\.subscribe\(\s*\{[^}]*\btopics?\s*:\s*(?:\[\s*)?["'`]([^"'`]+)["'`]/g
+      /\bconsumer\.subscribe\(\s*\{[^}]*\btopics?\s*:\s*(?:\[\s*)?(?:["'`]([^"'`]+)["'`]|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("kafka", "consumer", channel, file, text, index)
@@ -887,10 +1021,14 @@ function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoin
   }
 
   if (file.relativePath.endsWith(".py")) {
-    // kafka-python / confluent-kafka: producer.send("..."), consumer.subscribe(["..."])
+    // kafka-python: producer.send("...")
+    // confluent-kafka: producer.produce("...") or produce(topic="...") -- a
+    // different method name, not just a different import, so it needs its
+    // own pattern rather than falling under the kafka-python one.
     for (const { channel, index } of matchChannels(
       text,
-      /\bproducer\.send\(\s*["']([^"']+)["']/g
+      /\bproducer\.send\(\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("kafka", "producer", channel, file, text, index)
@@ -898,7 +1036,27 @@ function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoin
     }
     for (const { channel, index } of matchChannels(
       text,
-      /\bconsumer\.subscribe\(\s*(?:topics\s*=\s*)?\[\s*["']([^"']+)["']/g
+      /\bproducer\.produce\(\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "producer", channel, file, text, index)
+      );
+    }
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bproducer\.produce\([^)]*\btopic\s*=\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "producer", channel, file, text, index)
+      );
+    }
+    // kafka-python / confluent-kafka: consumer.subscribe(["..."])
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bconsumer\.subscribe\(\s*(?:topics\s*=\s*)?\[\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("kafka", "consumer", channel, file, text, index)
@@ -910,7 +1068,8 @@ function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoin
     // Spring Kafka: kafkaTemplate.send("...", ...), @KafkaListener(topics = "...")
     for (const { channel, index } of matchChannels(
       text,
-      /\b\w*[Kk]afkaTemplate\.send\(\s*["']([^"']+)["']/g
+      /\b\w*[Kk]afkaTemplate\.send\(\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("kafka", "producer", channel, file, text, index)
@@ -918,7 +1077,8 @@ function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoin
     }
     for (const { channel, index } of matchChannels(
       text,
-      /@KafkaListener\([^)]*\btopics\s*=\s*\{?\s*["']([^"']+)["']/g
+      /@KafkaListener\([^)]*\btopics\s*=\s*\{?\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("kafka", "consumer", channel, file, text, index)
@@ -929,14 +1089,19 @@ function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoin
   return endpoints;
 }
 
-function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndpoint[] {
+function detectRabbitMqMessaging(
+  file: ScannedFile,
+  text: string,
+  constants: Map<string, string>
+): MessagingEndpoint[] {
   const endpoints: MessagingEndpoint[] = [];
 
   if (/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file.relativePath)) {
     // amqplib: channel.sendToQueue("...", ...), channel.consume("...", ...)
     for (const { channel, index } of matchChannels(
       text,
-      /\bchannel\.sendToQueue\(\s*["'`]([^"'`]+)["'`]/g
+      /\bchannel\.sendToQueue\(\s*(?:["'`]([^"'`]+)["'`]|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("rabbitmq", "producer", channel, file, text, index)
@@ -944,7 +1109,8 @@ function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndp
     }
     for (const { channel, index } of matchChannels(
       text,
-      /\bchannel\.consume\(\s*["'`]([^"'`]+)["'`]/g
+      /\bchannel\.consume\(\s*(?:["'`]([^"'`]+)["'`]|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("rabbitmq", "consumer", channel, file, text, index)
@@ -956,7 +1122,8 @@ function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndp
     // pika: channel.basic_publish(..., routing_key="..."), channel.basic_consume(queue="...", ...)
     for (const { channel, index } of matchChannels(
       text,
-      /\bchannel\.basic_publish\([^)]*routing_key\s*=\s*["']([^"']+)["']/g
+      /\bchannel\.basic_publish\([^)]*routing_key\s*=\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("rabbitmq", "producer", channel, file, text, index)
@@ -964,7 +1131,8 @@ function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndp
     }
     for (const { channel, index } of matchChannels(
       text,
-      /\bchannel\.basic_consume\([^)]*queue\s*=\s*["']([^"']+)["']/g
+      /\bchannel\.basic_consume\([^)]*queue\s*=\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("rabbitmq", "consumer", channel, file, text, index)
@@ -976,7 +1144,8 @@ function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndp
     // Spring AMQP: rabbitTemplate.convertAndSend("...", ...), @RabbitListener(queues = "...")
     for (const { channel, index } of matchChannels(
       text,
-      /\b\w*[Rr]abbitTemplate\.convertAndSend\(\s*["']([^"']+)["']/g
+      /\b\w*[Rr]abbitTemplate\.convertAndSend\(\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("rabbitmq", "producer", channel, file, text, index)
@@ -984,7 +1153,8 @@ function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndp
     }
     for (const { channel, index } of matchChannels(
       text,
-      /@RabbitListener\([^)]*\bqueues\s*=\s*\{?\s*["']([^"']+)["']/g
+      /@RabbitListener\([^)]*\bqueues\s*=\s*\{?\s*(?:["']([^"']+)["']|(\w+))/g,
+      constants
     )) {
       endpoints.push(
         messagingEndpoint("rabbitmq", "consumer", channel, file, text, index)
@@ -998,7 +1168,11 @@ function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndp
 // JMS covers IBM MQ and ActiveMQ too — both are commonly driven through the
 // same javax.jms/jakarta.jms API in Java, so one pattern pair covers all
 // three integrations already detected on this axis.
-function detectJmsMessaging(file: ScannedFile, text: string): MessagingEndpoint[] {
+function detectJmsMessaging(
+  file: ScannedFile,
+  text: string,
+  constants: Map<string, string>
+): MessagingEndpoint[] {
   if (!file.relativePath.endsWith(".java")) {
     return [];
   }
@@ -1007,13 +1181,15 @@ function detectJmsMessaging(file: ScannedFile, text: string): MessagingEndpoint[
 
   for (const { channel, index } of matchChannels(
     text,
-    /\b\w*[Jj]msTemplate\.convertAndSend\(\s*["']([^"']+)["']/g
+    /\b\w*[Jj]msTemplate\.convertAndSend\(\s*(?:["']([^"']+)["']|(\w+))/g,
+    constants
   )) {
     endpoints.push(messagingEndpoint("jms", "producer", channel, file, text, index));
   }
   for (const { channel, index } of matchChannels(
     text,
-    /@JmsListener\([^)]*\bdestination\s*=\s*["']([^"']+)["']/g
+    /@JmsListener\([^)]*\bdestination\s*=\s*(?:["']([^"']+)["']|(\w+))/g,
+    constants
   )) {
     endpoints.push(messagingEndpoint("jms", "consumer", channel, file, text, index));
   }

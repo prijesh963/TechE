@@ -7,6 +7,7 @@ import {
   findRepoRoot,
   getArtifactFilePath,
   isBinaryPath,
+  readJsonFile,
   resolveRegisteredRepos,
   scanRepository,
   writeJsonFile,
@@ -42,7 +43,7 @@ export class SymbolGraphService {
   async build(options: SymbolGraphOptions = {}): Promise<SymbolGraphResult> {
     const startPath = path.resolve(options.startPath ?? process.cwd());
     const repoRoot = options.strictRoot ? startPath : await findRepoRoot(startPath);
-    const { entries, repos } = await scanGraphEntries(repoRoot);
+    const { entries, repos, packageIndex } = await scanGraphEntries(repoRoot);
     const knownFiles = new Set(entries.map((entry) => entry.relativePath));
 
     const nodes: SymbolNode[] = [];
@@ -144,7 +145,8 @@ export class SymbolGraphService {
         const target = resolveImportSpecifier(
           entry.relativePath,
           specifier,
-          knownFiles
+          knownFiles,
+          packageIndex
         );
         if (target) {
           addEdge({ kind: "imports", from: entry.relativePath, to: target });
@@ -209,7 +211,8 @@ export class SymbolGraphService {
                 localSymbols,
                 importSpecifiers,
                 localSymbolsByFile,
-                knownFiles
+                knownFiles,
+                packageIndex
               );
           if (!resolved) {
             continue;
@@ -302,13 +305,16 @@ export class SymbolGraphService {
  * `com.acme.OrderService` links to wherever that class is actually declared,
  * and a relative TS specifier still resolves because both sides shift equally.
  */
-async function scanGraphEntries(
-  repoRoot: string
-): Promise<{ entries: ScannedEntry[]; repos?: string[] }> {
+async function scanGraphEntries(repoRoot: string): Promise<{
+  entries: ScannedEntry[];
+  repos?: string[];
+  packageIndex: Map<string, RepoPackageInfo>;
+}> {
   const registered = await resolveRegisteredRepos(repoRoot);
+  const packageIndex = new Map<string, RepoPackageInfo>();
 
   if (registered.length === 0) {
-    return { entries: await scanRepository(repoRoot) };
+    return { entries: await scanRepository(repoRoot), packageIndex };
   }
 
   const entries: ScannedEntry[] = [];
@@ -326,9 +332,28 @@ async function scanGraphEntries(
         relativePath: path.posix.join(repo.name, entry.relativePath)
       });
     }
+
+    // A repo's own package.json "name" is what a DIFFERENT repo would
+    // import it as if it were an ordinary published dependency rather than
+    // a relative path — the same repo the workspace already scanned, just
+    // referenced the way a real consumer would write it.
+    const declaredPackage = await readJsonFile<{
+      name?: string;
+      main?: string;
+      module?: string;
+      types?: string;
+    }>(path.join(repo.repoRoot, "package.json")).catch(() => undefined);
+
+    if (declaredPackage?.name) {
+      packageIndex.set(declaredPackage.name, {
+        repoRoot: repo.name,
+        entryHint:
+          declaredPackage.module ?? declaredPackage.main ?? declaredPackage.types
+      });
+    }
   }
 
-  return { entries, repos: registered.map((repo) => repo.name) };
+  return { entries, repos: registered.map((repo) => repo.name), packageIndex };
 }
 
 /**
@@ -351,10 +376,22 @@ function countCrossRepoEdges(edges: SymbolEdge[]): number {
 const RESOLVABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".d.ts"];
 
 /**
+ * A registered repo's own declared package name, so a *different* repo's
+ * non-relative import of it (`import { X } from "@acme/order-client"`,
+ * rather than a relative path) can still resolve within the workspace
+ * instead of being dropped as external. `entryHint` is the raw
+ * `main`/`module`/`types` field from that repo's `package.json`, tried
+ * before the `index.*`/`src/index.*` convention fallback.
+ */
+export interface RepoPackageInfo {
+  /** Relative-path prefix matching how this repo's files are keyed
+   *  (`repo.name`, the same prefix `scanGraphEntries` uses). */
+  repoRoot: string;
+  entryHint?: string;
+}
+
+/**
  * Resolves a relative import specifier to a known in-repo file path.
- * External package specifiers (anything not starting with ".") are
- * intentionally left unresolved — they are not part of this repo's symbol
- * graph.
  *
  * Handles the common TS/ESM pattern of importing a `.js` specifier that
  * actually resolves to a `.ts` source file (`moduleResolution: NodeNext`):
@@ -362,17 +399,10 @@ const RESOLVABLE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".d.ts"];
  * that extension stripped and each candidate extension tried in turn — not
  * just specifiers with no extension at all.
  */
-function resolveImportSpecifier(
-  fromFilePath: string,
-  specifier: string,
+function resolveCandidatePath(
+  resolvedBase: string,
   knownFiles: Set<string>
 ): string | undefined {
-  if (!specifier.startsWith(".")) {
-    return undefined;
-  }
-
-  const baseDir = path.posix.dirname(fromFilePath);
-  const resolvedBase = path.posix.normalize(path.posix.join(baseDir, specifier));
   const existingExtension = RESOLVABLE_EXTENSIONS.find((extension) =>
     resolvedBase.endsWith(extension)
   );
@@ -389,6 +419,68 @@ function resolveImportSpecifier(
   ];
 
   return candidates.find((candidate) => knownFiles.has(candidate));
+}
+
+/**
+ * A non-relative specifier is external (a real third-party package) unless
+ * it matches, exactly or as a subpath, another registered repo's own
+ * declared package name — the same repo the workspace already scanned,
+ * just imported the way any consumer of the published package would write
+ * it rather than by relative path. Anything that does not match a known
+ * package name is left unresolved, same as an external package always has
+ * been.
+ */
+function resolvePackageSpecifier(
+  specifier: string,
+  packageIndex: Map<string, RepoPackageInfo>,
+  knownFiles: Set<string>
+): string | undefined {
+  for (const [packageName, info] of packageIndex) {
+    if (specifier !== packageName && !specifier.startsWith(`${packageName}/`)) {
+      continue;
+    }
+
+    const subpath = specifier.slice(packageName.length).replace(/^\//, "");
+
+    if (subpath) {
+      return resolveCandidatePath(
+        path.posix.normalize(path.posix.join(info.repoRoot, subpath)),
+        knownFiles
+      );
+    }
+
+    if (info.entryHint) {
+      const hinted = resolveCandidatePath(
+        path.posix.normalize(path.posix.join(info.repoRoot, info.entryHint)),
+        knownFiles
+      );
+      if (hinted) {
+        return hinted;
+      }
+    }
+
+    return (
+      resolveCandidatePath(info.repoRoot, knownFiles) ??
+      resolveCandidatePath(path.posix.join(info.repoRoot, "src"), knownFiles)
+    );
+  }
+
+  return undefined;
+}
+
+function resolveImportSpecifier(
+  fromFilePath: string,
+  specifier: string,
+  knownFiles: Set<string>,
+  packageIndex: Map<string, RepoPackageInfo>
+): string | undefined {
+  if (!specifier.startsWith(".")) {
+    return resolvePackageSpecifier(specifier, packageIndex, knownFiles);
+  }
+
+  const baseDir = path.posix.dirname(fromFilePath);
+  const resolvedBase = path.posix.normalize(path.posix.join(baseDir, specifier));
+  return resolveCandidatePath(resolvedBase, knownFiles);
 }
 
 /**
@@ -474,7 +566,8 @@ function resolveIdentifier(
   localSymbols: Map<string, string>,
   importSpecifiers: Map<string, string>,
   localSymbolsByFile: Map<string, Map<string, string>>,
-  knownFiles: Set<string>
+  knownFiles: Set<string>,
+  packageIndex: Map<string, RepoPackageInfo>
 ): string | undefined {
   const local = localSymbols.get(name);
   if (local) {
@@ -486,7 +579,12 @@ function resolveIdentifier(
     return undefined;
   }
 
-  const targetFile = resolveImportSpecifier(filePath, specifier, knownFiles);
+  const targetFile = resolveImportSpecifier(
+    filePath,
+    specifier,
+    knownFiles,
+    packageIndex
+  );
   if (!targetFile) {
     return undefined;
   }

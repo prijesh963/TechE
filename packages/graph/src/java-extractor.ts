@@ -402,9 +402,12 @@ function findFieldTypes(code: string, type: JavaTypeDeclaration): Map<string, st
 
 /**
  * Local variable name -> declared type, for one method: its own parameters
- * plus any `TypeName varName = ...;` declared inside its body. A local
- * shadows a same-named field, matching real Java scoping, so the caller
- * checks this map before `findFieldTypes`'s.
+ * (including varargs), any `TypeName varName = ...;` declared inside its
+ * body, and an enhanced-for loop's own variable (`for (Order order :
+ * orders)`) — a `:` terminator, not the `;`/`=` a plain declaration ends
+ * with, so it needs its own pattern. A local shadows a same-named field,
+ * matching real Java scoping, so the caller checks this map before
+ * `findFieldTypes`'s.
  *
  * Scans the body as flat text rather than respecting nested block boundaries
  * (an `if`/`for` inside the method), the same over-attribution trade the
@@ -421,8 +424,9 @@ function findLocalVariableTypes(
   if (parenStart !== -1 && parenEnd !== -1) {
     for (const segment of code.slice(parenStart + 1, parenEnd).split(",")) {
       const match =
-        /\b([A-Z]\w*)(?:<[^<>]*>)?(?:\[\])?\s+(\w+)\s*$/.exec(segment.trim()) ??
-        undefined;
+        /\b([A-Z]\w*)(?:<[^<>]*>)?(?:\[\])?(?:\.\.\.)?\s+(\w+)\s*$/.exec(
+          segment.trim()
+        ) ?? undefined;
       if (match) {
         locals.set(match[2], match[1]);
       }
@@ -431,6 +435,13 @@ function findLocalVariableTypes(
 
   const body = code.slice(method.bodyStart, method.bodyEnd);
   for (const match of body.matchAll(/\b([A-Z]\w*)(?:<[^<>]*>)?\s+(\w+)\s*[;=]/g)) {
+    if (!locals.has(match[2])) {
+      locals.set(match[2], match[1]);
+    }
+  }
+  for (const match of body.matchAll(
+    /\bfor\s*\(\s*([A-Z]\w*)(?:<[^<>]*>)?\s+(\w+)\s*:/g
+  )) {
     if (!locals.has(match[2])) {
       locals.set(match[2], match[1]);
     }

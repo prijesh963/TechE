@@ -9,6 +9,7 @@ import { runCli } from "../packages/cli/src/index.js";
 import {
   SymbolGraphService,
   extractFileSymbols,
+  type SymbolEdge,
   type SymbolNode
 } from "../packages/graph/src/index.js";
 import { getArtifactFilePath } from "../packages/shared/src/index.js";
@@ -447,6 +448,106 @@ describe("SymbolGraphService", () => {
     });
   });
 
+  it("resolves a for-of loop variable to a parameter array's element type", async () => {
+    const repoRoot = await createRepo({
+      "src/order.ts": [
+        "export class Order {",
+        "  approve() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/service.ts": [
+        "import { Order } from './order.js';",
+        "",
+        "export function approveAll(orders: Order[]) {",
+        "  for (const order of orders) {",
+        "    order.approve();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toContainEqual({
+      kind: "calls",
+      from: "src/service.ts#approveAll",
+      to: "src/order.ts#Order.approve"
+    });
+  });
+
+  it("resolves a for-of loop variable to a field array's element type via this.", async () => {
+    const repoRoot = await createRepo({
+      "src/order.ts": [
+        "export class Order {",
+        "  approve() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/service.ts": [
+        "import { Order } from './order.js';",
+        "",
+        "export class OrderService {",
+        "  private orders: Order[] = [];",
+        "  approveAll() {",
+        "    for (const order of this.orders) {",
+        "      order.approve();",
+        "    }",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toContainEqual({
+      kind: "calls",
+      from: "src/service.ts#OrderService.approveAll",
+      to: "src/order.ts#Order.approve"
+    });
+  });
+
+  it("resolves a for-of loop variable to a local array's element type, Array<T> form", async () => {
+    const repoRoot = await createRepo({
+      "src/order.ts": [
+        "export class Order {",
+        "  approve() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/service.ts": [
+        "import { Order } from './order.js';",
+        "",
+        "export function approveAll() {",
+        "  const orders: Array<Order> = [];",
+        "  for (const order of orders) {",
+        "    order.approve();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toContainEqual({
+      kind: "calls",
+      from: "src/service.ts#approveAll",
+      to: "src/order.ts#Order.approve"
+    });
+  });
+
   it("emits a file-level node for non-TS/JS files without failing the build", async () => {
     const repoRoot = await createRepo({
       "src/service.py": "def approve():\n    return True\n",
@@ -500,6 +601,157 @@ describe("graph CLI", () => {
     expect(existsSync(getArtifactFilePath(repoRoot, "graph"))).toBe(true);
   });
 });
+
+describe("SymbolGraphService (cross-repo package-name imports)", () => {
+  it("resolves an import of another registered repo's own package name", async () => {
+    const { workspaceRoot } = await createPackageWorkspace({
+      "order-client": {
+        "package.json": JSON.stringify({ name: "@acme/order-client" }),
+        "index.ts": "export class OrderClient { fetch() { return true; } }"
+      },
+      "web-app": {
+        "package.json": JSON.stringify({ name: "web-app" }),
+        "src/app.ts": [
+          "import { OrderClient } from '@acme/order-client';",
+          "export function load() {",
+          "  const client = new OrderClient();",
+          "  return client.fetch();",
+          "}"
+        ].join("\n")
+      }
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: workspaceRoot,
+      strictRoot: true
+    });
+    const has = (kind: SymbolEdge["kind"], from: string, to: string): boolean =>
+      graph.edges.some(
+        (edge) => edge.kind === kind && edge.from.endsWith(from) && edge.to.endsWith(to)
+      );
+
+    expect(has("imports", "web-app/src/app.ts", "order-client/index.ts")).toBe(true);
+    expect(
+      has("calls", "web-app/src/app.ts#load", "order-client/index.ts#OrderClient.fetch")
+    ).toBe(true);
+  });
+
+  it("resolves a subpath import of another registered repo's package", async () => {
+    const { workspaceRoot } = await createPackageWorkspace({
+      "order-client": {
+        "package.json": JSON.stringify({ name: "@acme/order-client" }),
+        "lib/invoices.ts": "export function loadInvoices() { return []; }"
+      },
+      "web-app": {
+        "package.json": JSON.stringify({ name: "web-app" }),
+        "src/app.ts":
+          "import { loadInvoices } from '@acme/order-client/lib/invoices.js';"
+      }
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: workspaceRoot,
+      strictRoot: true
+    });
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.kind === "imports" &&
+          edge.from.endsWith("web-app/src/app.ts") &&
+          edge.to.endsWith("order-client/lib/invoices.ts")
+      )
+    ).toBe(true);
+  });
+
+  it("resolves via package.json's main field when the entry isn't index.ts", async () => {
+    const { workspaceRoot } = await createPackageWorkspace({
+      "order-client": {
+        "package.json": JSON.stringify({
+          name: "@acme/order-client",
+          main: "src/entry.ts"
+        }),
+        "src/entry.ts": "export class OrderClient { fetch() { return true; } }"
+      },
+      "web-app": {
+        "package.json": JSON.stringify({ name: "web-app" }),
+        "src/app.ts": "import { OrderClient } from '@acme/order-client';"
+      }
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: workspaceRoot,
+      strictRoot: true
+    });
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.kind === "imports" &&
+          edge.from.endsWith("web-app/src/app.ts") &&
+          edge.to.endsWith("order-client/src/entry.ts")
+      )
+    ).toBe(true);
+  });
+
+  it("still does not resolve a real external package", async () => {
+    const { workspaceRoot } = await createPackageWorkspace({
+      "order-client": {
+        "package.json": JSON.stringify({ name: "@acme/order-client" }),
+        "index.ts": "export class OrderClient {}"
+      },
+      "web-app": {
+        "package.json": JSON.stringify({
+          name: "web-app",
+          dependencies: { express: "^4" }
+        }),
+        "src/app.ts":
+          "import express from 'express'; export function start() { return express(); }"
+      }
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: workspaceRoot,
+      strictRoot: true
+    });
+
+    expect(
+      graph.edges.some((edge) => edge.kind === "imports" && edge.to === "express")
+    ).toBe(false);
+  });
+});
+
+async function createPackageWorkspace(
+  repos: Record<string, Record<string, string>>
+): Promise<{ workspaceRoot: string }> {
+  const parent = await mkdtemp(path.join(tmpdir(), "copilot-graph-pkg-"));
+  const workspaceRoot = path.join(parent, "workspace");
+  const repoEntries = Object.entries(repos).map(([name, files]) => ({
+    name,
+    path: `../${name}`,
+    files
+  }));
+
+  await mkdir(workspaceRoot, { recursive: true });
+  for (const repo of repoEntries) {
+    for (const [relativePath, contents] of Object.entries(repo.files)) {
+      const fullPath = path.join(parent, repo.name, relativePath);
+      await mkdir(path.dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, contents, "utf8");
+    }
+  }
+
+  await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+  await writeFile(
+    path.join(workspaceRoot, ".copilot-architect", "workspace.json"),
+    JSON.stringify({
+      repos: repoEntries.map((repo) => ({ name: repo.name, path: repo.path }))
+    }),
+    "utf8"
+  );
+
+  return { workspaceRoot };
+}
 
 async function createRepo(files: Record<string, string>): Promise<string> {
   const repoRoot = await mkdtemp(path.join(tmpdir(), "copilot-graph-"));

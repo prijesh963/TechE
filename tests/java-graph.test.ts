@@ -256,6 +256,77 @@ describe("SymbolGraphService (Java)", () => {
     ).toBe(true);
   });
 
+  it("resolves calls through a varargs parameter", async () => {
+    const repoRoot = await createJavaRepo({
+      "src/main/java/com/acme/orders/OrderRepository.java": [
+        "package com.acme.orders;",
+        "public class OrderRepository {",
+        "  public void save(String order) { }",
+        "}"
+      ].join("\n"),
+      "src/main/java/com/acme/orders/OrderService.java": [
+        "package com.acme.orders;",
+        "public class OrderService {",
+        "  public void placeOrders(OrderRepository... repos) {",
+        '    repos.save("x");',
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+    const has = (kind: SymbolEdge["kind"], from: string, to: string): boolean =>
+      graph.edges.some(
+        (edge) => edge.kind === kind && edge.from.endsWith(from) && edge.to.endsWith(to)
+      );
+
+    expect(
+      has(
+        "calls",
+        "OrderService.placeOrders",
+        "OrderRepository.java#OrderRepository.save"
+      )
+    ).toBe(true);
+  });
+
+  it("resolves calls through an enhanced-for loop variable", async () => {
+    const repoRoot = await createJavaRepo({
+      "src/main/java/com/acme/orders/Order.java": [
+        "package com.acme.orders;",
+        "public class Order {",
+        "  public void approve() { }",
+        "}"
+      ].join("\n"),
+      "src/main/java/com/acme/orders/OrderService.java": [
+        "package com.acme.orders;",
+        "import java.util.List;",
+        "public class OrderService {",
+        "  public void approveAll(List<Order> orders) {",
+        "    for (Order order : orders) {",
+        "      order.approve();",
+        "    }",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+    const has = (kind: SymbolEdge["kind"], from: string, to: string): boolean =>
+      graph.edges.some(
+        (edge) => edge.kind === kind && edge.from.endsWith(from) && edge.to.endsWith(to)
+      );
+
+    expect(has("calls", "OrderService.approveAll", "Order.java#Order.approve")).toBe(
+      true
+    );
+  });
+
   it("prefers a local variable's type over a same-named field's", async () => {
     const repoRoot = await createJavaRepo({
       "src/main/java/com/acme/FieldType.java": [

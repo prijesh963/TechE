@@ -563,6 +563,43 @@ describe("messaging interlinks", () => {
     );
   });
 
+  it("matches confluent-kafka's produce(), not only kafka-python's send()", async () => {
+    const fixture = await createTwoRepoWorkspace("pricing-service", "invoice-service", {
+      "pricing-service": {
+        "requirements.txt": "confluent-kafka\n",
+        "src/producer.py": [
+          "from confluent_kafka import Producer",
+          "producer = Producer({})",
+          "def publish(order):",
+          "    producer.produce('price.updated', order)"
+        ].join("\n")
+      },
+      "invoice-service": {
+        "requirements.txt": "confluent-kafka\n",
+        "src/consumer.py": [
+          "from confluent_kafka import Consumer",
+          "consumer = Consumer({})",
+          "consumer.subscribe(['price.updated'])"
+        ].join("\n")
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "messaging",
+        method: "kafka",
+        path: "price.updated",
+        fromRepo: "pricing-service",
+        toRepo: "invoice-service",
+        confidence: "high"
+      })
+    );
+  });
+
   it("matches a RabbitMQ producer in Java to a consumer in Python", async () => {
     const fixture = await createTwoRepoWorkspace("payment-service", "ledger-service", {
       "payment-service": {
@@ -700,6 +737,109 @@ describe("messaging interlinks", () => {
         (interlink) =>
           interlink.kind === "messaging" && interlink.fromRepo === "order-service"
       )
+    ).toBe(false);
+  });
+
+  it("resolves a Kafka topic held in a named constant, not only a repeated literal", async () => {
+    const fixture = await createTwoRepoWorkspace("order-service", "invoice-service", {
+      "order-service": {
+        "pom.xml": "<project><artifactId>spring-kafka</artifactId></project>",
+        "src/main/java/com/acme/OrderPublisher.java": [
+          "package com.acme;",
+          "public class OrderPublisher {",
+          '  private static final String ORDER_TOPIC = "order.created";',
+          "  private KafkaTemplate kafkaTemplate;",
+          "  public void publish(String order) {",
+          "    kafkaTemplate.send(ORDER_TOPIC, order);",
+          "  }",
+          "}"
+        ].join("\n")
+      },
+      "invoice-service": {
+        "pom.xml": "<project><artifactId>spring-kafka</artifactId></project>",
+        "src/main/java/com/acme/OrderListener.java": [
+          "package com.acme;",
+          "import org.springframework.kafka.annotation.KafkaListener;",
+          "public class OrderListener {",
+          '  @KafkaListener(topics = "order.created")',
+          "  public void onOrderCreated(String payload) { }",
+          "}"
+        ].join("\n")
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "messaging",
+        method: "kafka",
+        path: "order.created",
+        fromRepo: "order-service",
+        toRepo: "invoice-service",
+        confidence: "high"
+      })
+    );
+  });
+
+  it("resolves an HTTP client path held in a JS constant", async () => {
+    const fixture = await createTwoRepoWorkspace("web-app", "api-repo", {
+      "web-app": {
+        "package.json": JSON.stringify({ dependencies: { axios: "^1.6.0" } }),
+        "src/invoiceClient.ts": [
+          "import axios from 'axios';",
+          "const INVOICES_PATH = '/invoices';",
+          "export function loadInvoices() {",
+          "  return axios.get(INVOICES_PATH);",
+          "}"
+        ].join("\n")
+      },
+      "api-repo": {
+        "package.json": JSON.stringify({ dependencies: { express: "^4.18.0" } }),
+        "src/server.ts":
+          "import express from 'express'; const app = express(); app.get('/invoices', handler);"
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "http-route",
+        method: "GET",
+        path: "/invoices",
+        fromRepo: "web-app",
+        toRepo: "api-repo",
+        confidence: "high"
+      })
+    );
+  });
+
+  it("does not fabricate a route path from an unresolved Spring mapping constant", async () => {
+    const repoRoot = await createRepo({
+      "pom.xml": "<project><artifactId>spring-boot-starter-web</artifactId></project>",
+      "src/main/java/com/acme/InvoiceController.java": [
+        "import org.springframework.web.bind.annotation.*;",
+        "@RestController",
+        "public class InvoiceController {",
+        // INVOICE_PATH is referenced but never declared in this file --
+        // unresolvable, so this must not become a route at "/INVOICE_PATH".
+        "@GetMapping(INVOICE_PATH)",
+        "void list() {}",
+        "}"
+      ].join("\n")
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: repoRoot
+    });
+
+    expect(
+      analysis.routes.some((route) => route.routePath.includes("INVOICE_PATH"))
     ).toBe(false);
   });
 });

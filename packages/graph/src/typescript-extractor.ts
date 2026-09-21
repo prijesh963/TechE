@@ -195,7 +195,8 @@ export function extractFileSymbols(
 
   const visitClassMembers = (classNode: ts.ClassDeclaration, classId: string): void => {
     const classExported = isExported(classNode);
-    const fieldTypes = collectFieldTypes(classNode);
+    const { types: fieldTypes, arrayElementTypes: fieldArrayElementTypes } =
+      collectFieldTypes(classNode);
 
     for (const member of classNode.members) {
       if (
@@ -213,7 +214,7 @@ export function extractFileSymbols(
         visitCallsWithin(
           member.body,
           methodId,
-          localTypesFor(member.parameters, member.body),
+          localTypesFor(member.parameters, member.body, fieldArrayElementTypes),
           fieldTypes
         );
       } else if (ts.isConstructorDeclaration(member)) {
@@ -227,7 +228,7 @@ export function extractFileSymbols(
         visitCallsWithin(
           member.body,
           methodId,
-          localTypesFor(member.parameters, member.body),
+          localTypesFor(member.parameters, member.body, fieldArrayElementTypes),
           fieldTypes
         );
       }
@@ -347,9 +348,11 @@ export function extractFileSymbols(
 }
 
 /** The root identifier of a type reference (`Repository` from `Repository<Order>`,
- *  the rightmost segment of a qualified name). Array, union, and other
- *  non-reference type shapes are intentionally left unhandled — the same
- *  best-effort scope as the rest of this extractor. */
+ *  the rightmost segment of a qualified name). Union and other non-reference
+ *  type shapes are intentionally left unhandled — the same best-effort scope
+ *  as the rest of this extractor. Array shapes are handled separately by
+ *  `arrayElementTypeName`, since a receiver typed `Repository[]` is not
+ *  itself a `Repository` — only what a `for...of` over it yields is. */
 function typeReferenceName(typeNode: ts.TypeNode): string | undefined {
   if (!ts.isTypeReferenceNode(typeNode)) {
     return undefined;
@@ -364,65 +367,172 @@ function typeReferenceName(typeNode: ts.TypeNode): string | undefined {
   return undefined;
 }
 
+/** The element type of an array-shaped type node: `Repository` from either
+ *  `Repository[]` or `Array<Repository>`. Checked before `typeReferenceName`
+ *  everywhere it matters — `Array<Repository>` is itself a `TypeReferenceNode`
+ *  named "Array", so `typeReferenceName` alone would report the binding's
+ *  type as the literal word "Array" rather than reaching this. */
+function arrayElementTypeName(typeNode: ts.TypeNode): string | undefined {
+  if (ts.isArrayTypeNode(typeNode)) {
+    return typeReferenceName(typeNode.elementType);
+  }
+  if (
+    ts.isTypeReferenceNode(typeNode) &&
+    ts.isIdentifier(typeNode.typeName) &&
+    typeNode.typeName.text === "Array" &&
+    typeNode.typeArguments?.[0]
+  ) {
+    return typeReferenceName(typeNode.typeArguments[0]);
+  }
+  return undefined;
+}
+
+/** Classifies a type node as either a usable receiver type or an array's
+ *  element type, never both — the array check always runs first, for the
+ *  reason `arrayElementTypeName` documents. */
+function classifyType(typeNode: ts.TypeNode): {
+  type?: string;
+  elementType?: string;
+} {
+  const elementType = arrayElementTypeName(typeNode);
+  if (elementType) {
+    return { elementType };
+  }
+  return { type: typeReferenceName(typeNode) };
+}
+
+interface CollectedTypes {
+  types: Map<string, string>;
+  /** Element type of an array-typed binding — not itself a usable receiver
+   *  type, but what a `for...of` loop over that binding resolves its own
+   *  loop variable to. */
+  arrayElementTypes: Map<string, string>;
+}
+
 function collectParamTypes(
   parameters: ts.NodeArray<ts.ParameterDeclaration>
-): Map<string, string> {
+): CollectedTypes {
   const types = new Map<string, string>();
+  const arrayElementTypes = new Map<string, string>();
+
   for (const param of parameters) {
     if (!ts.isIdentifier(param.name) || !param.type) {
       continue;
     }
-    const type = typeReferenceName(param.type);
+    const { type, elementType } = classifyType(param.type);
     if (type) {
       types.set(param.name.text, type);
+    } else if (elementType) {
+      arrayElementTypes.set(param.name.text, elementType);
     }
   }
-  return types;
+
+  return { types, arrayElementTypes };
 }
 
 /**
  * Local variable declarations anywhere inside a function/method body — an
  * explicit type annotation (`const repo: OrderRepository = ...`) or, failing
  * that, a `new` expression's constructor name (`const repo = new
- * OrderRepositoryImpl()`). Walks the whole body rather than respecting nested
+ * OrderRepositoryImpl()`) — plus a `for...of` loop's own variable, resolved
+ * to the element type of whatever it iterates (a param, a field reached via
+ * `this.`, or another local array declared earlier in the same body).
+ * `knownArrayElementTypes` carries the param/field array types in scope
+ * before this body is even scanned, so a `for...of` over one of those
+ * resolves too. Walks the whole body rather than respecting nested
  * block/closure boundaries, the same over-attribution trade `visitCallsWithin`
  * already makes.
  */
-function collectLocalVariableTypes(bodyNode: ts.Node | undefined): Map<string, string> {
+function collectLocalVariableTypes(
+  bodyNode: ts.Node | undefined,
+  knownArrayElementTypes: Map<string, string>
+): Map<string, string> {
   const types = new Map<string, string>();
   if (!bodyNode) {
     return types;
   }
 
+  const localArrayElementTypes = new Map<string, string>();
+  const forOfNodes: ts.ForOfStatement[] = [];
+
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-      const explicit = node.type ? typeReferenceName(node.type) : undefined;
+      const classified = node.type ? classifyType(node.type) : undefined;
       const inferred =
-        !explicit &&
+        !classified?.type &&
+        !classified?.elementType &&
         node.initializer &&
         ts.isNewExpression(node.initializer) &&
         ts.isIdentifier(node.initializer.expression)
           ? node.initializer.expression.text
           : undefined;
-      const type = explicit ?? inferred;
+      const type = classified?.type ?? inferred;
+
       if (type) {
         types.set(node.name.text, type);
+      } else if (classified?.elementType) {
+        localArrayElementTypes.set(node.name.text, classified.elementType);
       }
+    } else if (ts.isForOfStatement(node)) {
+      forOfNodes.push(node);
     }
     ts.forEachChild(node, visit);
   };
 
   ts.forEachChild(bodyNode, visit);
+
+  const arrayElementTypes = new Map([
+    ...knownArrayElementTypes,
+    ...localArrayElementTypes
+  ]);
+
+  for (const forOf of forOfNodes) {
+    if (
+      !ts.isVariableDeclarationList(forOf.initializer) ||
+      forOf.initializer.declarations.length !== 1
+    ) {
+      continue;
+    }
+    const loopVar = forOf.initializer.declarations[0].name;
+    if (!ts.isIdentifier(loopVar) || types.has(loopVar.text)) {
+      continue;
+    }
+
+    const iterated = forOf.expression;
+    let sourceName: string | undefined;
+    if (ts.isIdentifier(iterated)) {
+      sourceName = iterated.text;
+    } else if (
+      ts.isPropertyAccessExpression(iterated) &&
+      iterated.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      ts.isIdentifier(iterated.name)
+    ) {
+      sourceName = iterated.name.text;
+    }
+
+    const elementType = sourceName ? arrayElementTypes.get(sourceName) : undefined;
+    if (elementType) {
+      types.set(loopVar.text, elementType);
+    }
+  }
+
   return types;
 }
 
 function localTypesFor(
   parameters: ts.NodeArray<ts.ParameterDeclaration>,
-  bodyNode: ts.Node | undefined
+  bodyNode: ts.Node | undefined,
+  fieldArrayElementTypes?: Map<string, string>
 ): Map<string, string> {
+  const params = collectParamTypes(parameters);
+  const knownArrayElementTypes = new Map([
+    ...(fieldArrayElementTypes ?? []),
+    ...params.arrayElementTypes
+  ]);
+
   return new Map([
-    ...collectParamTypes(parameters),
-    ...collectLocalVariableTypes(bodyNode)
+    ...params.types,
+    ...collectLocalVariableTypes(bodyNode, knownArrayElementTypes)
   ]);
 }
 
@@ -438,10 +548,23 @@ const PROPERTY_MODIFIER_KINDS = new Set([
  * constructor parameter properties (`constructor(private repo:
  * OrderRepository)`), the TS shorthand for declaring and assigning a field in
  * one place. Mirrors the Java extractor's `findFieldTypes`: a call receiver
- * reached through `this.` is usually a field, not a type.
+ * reached through `this.` is usually a field, not a type. `arrayElementTypes`
+ * covers an array-typed field (`private repos: OrderRepository[]`) the same
+ * way — not a usable receiver type on its own, but what `for (const r of
+ * this.repos)` resolves `r` to.
  */
-function collectFieldTypes(classNode: ts.ClassDeclaration): Map<string, string> {
+function collectFieldTypes(classNode: ts.ClassDeclaration): CollectedTypes {
   const types = new Map<string, string>();
+  const arrayElementTypes = new Map<string, string>();
+
+  const record = (name: string, typeNode: ts.TypeNode): void => {
+    const { type, elementType } = classifyType(typeNode);
+    if (type) {
+      types.set(name, type);
+    } else if (elementType) {
+      arrayElementTypes.set(name, elementType);
+    }
+  };
 
   for (const member of classNode.members) {
     if (
@@ -449,10 +572,7 @@ function collectFieldTypes(classNode: ts.ClassDeclaration): Map<string, string> 
       ts.isIdentifier(member.name) &&
       member.type
     ) {
-      const type = typeReferenceName(member.type);
-      if (type) {
-        types.set(member.name.text, type);
-      }
+      record(member.name.text, member.type);
       continue;
     }
 
@@ -472,14 +592,11 @@ function collectFieldTypes(classNode: ts.ClassDeclaration): Map<string, string> 
       if (!isParameterProperty) {
         continue;
       }
-      const type = typeReferenceName(param.type);
-      if (type) {
-        types.set(param.name.text, type);
-      }
+      record(param.name.text, param.type);
     }
   }
 
-  return types;
+  return { types, arrayElementTypes };
 }
 
 function scriptKindFor(filePath: string): ts.ScriptKind {
