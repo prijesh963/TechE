@@ -1,5 +1,5 @@
 <idea-plugin>
-    <id>com.copilotarchitect.intellij</id>
+    <id>com.copilotarchitect.architect</id>
     <name>Copilot Architect</name>
     <vendor>Internal</vendor>
     <description><![CDATA[
