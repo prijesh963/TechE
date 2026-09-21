@@ -18,6 +18,10 @@ repositories {
     mavenCentral()
     intellijPlatform {
         defaultRepositories()
+        // `:instrumentCode` (NotNull assertions etc.) needs a Java compiler
+        // dependency it resolves from here — CI failed with "No Java
+        // Compiler dependency found" without this, naming this exact fix.
+        intellijDependencies()
     }
 }
 
@@ -32,6 +36,10 @@ dependencies {
         // own plugin JAR, which it does not: CI failed with "Could not find
         // bundled plugin with ID: 'com.intellij.modules.platform'" for
         // exactly this reason.
+
+        // Pairs with `intellijDependencies()` above — the actual Java
+        // Compiler artifact `:instrumentCode` needs.
+        instrumentationTools()
     }
 }
 
