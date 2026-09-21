@@ -49,6 +49,46 @@ describe("Phase 12 CLI completion", () => {
     );
   });
 
+  it("renders the shared dashboard as HTML for a host that cannot import it directly", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "dashboard-html" })
+    });
+    const capture = createCapture();
+
+    const result = await runCli(["dashboard", "--path", repoRoot], capture.io);
+    const html = capture.stdout.join("\n");
+
+    expect(result.exitCode).toBe(0);
+    expect(html).toContain("<!doctype html>");
+    expect(html).toContain("Current work");
+    expect(html).toContain("Agent insights");
+    // No session/MCP process for a one-shot CLI call to introspect — honest
+    // about both rather than guessing.
+    expect(html).toContain("No session open");
+    expect(html).toContain(">stopped<");
+    // No caller-specific command scheme to assume, so no action row.
+    expect(html).toContain('<div class="actions"></div>');
+  });
+
+  it("supports dashboard JSON output with the underlying data, not just HTML", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "dashboard-json" })
+    });
+    const capture = createCapture();
+
+    const result = await runCli(
+      ["dashboard", "--path", repoRoot, "--json"],
+      capture.io
+    );
+    const json = JSON.parse(capture.stdout.join("\n"));
+
+    expect(result.exitCode).toBe(0);
+    expect(json.workspaceRoot).toBe(repoRoot);
+    expect(json.html).toContain("<!doctype html>");
+    expect(json.session).toBeUndefined();
+    expect(json.artifacts).toBeDefined();
+  });
+
   it("runs workspace init, add, show, search, and validate-plan commands", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({

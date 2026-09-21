@@ -78,6 +78,13 @@ import {
   type WebServerStartResult
 } from "@copilot-architect/web";
 import {
+  createDashboardHtml,
+  loadDashboardArtifacts,
+  loadDashboardSession,
+  type DashboardArtifacts,
+  type DashboardSession
+} from "@copilot-architect/dashboard";
+import {
   ARTIFACT_DIRECTORY,
   CLI_COMMANDS,
   COPILOT_ARCHITECT_VERSION,
@@ -123,6 +130,8 @@ const commandDescriptions = {
   workspace: "Inspect or manage multi-repo workspace context.",
   mcp: "Start the local MCP server or write Copilot Chat MCP config.",
   serve: "Start the optional local web UI shell.",
+  dashboard:
+    "Render the same dashboard every shell shows, as HTML on stdout — for a host that cannot import it directly.",
   diagnostics: "Report repo readiness and advanced local intelligence.",
   status: "Show local Copilot Architect status.",
   doctor: "Run environment and project checks.",
@@ -164,6 +173,7 @@ const commandUsage = {
   mcp: "npm run cli -- mcp [--path <repo>] | npm run cli -- mcp config [--path <repo>] [--force] [--json]",
   serve:
     "npm run cli -- serve [--path <repo>] [--host 127.0.0.1] [--port <n>] [--json]",
+  dashboard: "npm run cli -- dashboard [--path <repo>] [--json]",
   diagnostics: "npm run cli -- diagnostics [--path <repo>] [--json]",
   status: "npm run cli -- status [--path <repo>] [--json]",
   doctor: "npm run cli -- doctor [--json]",
@@ -879,6 +889,18 @@ export async function runCli(
       const options = parseStatusArgs(commandArgs);
       const result = await getStatus(options);
       stdout(options.json ? JSON.stringify(result, null, 2) : getStatusText(result));
+      return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
+  if (rawCommand === "dashboard") {
+    try {
+      const options = parseDashboardArgs(commandArgs);
+      const result = await buildDashboardPayload(options);
+      stdout(options.json ? JSON.stringify(result, null, 2) : result.html);
       return { exitCode: 0 };
     } catch (error) {
       stderr(error instanceof Error ? error.message : String(error));
@@ -2199,6 +2221,18 @@ interface StatusCliOptions {
   json: boolean;
 }
 
+interface DashboardCliOptions {
+  startPath?: string;
+  json: boolean;
+}
+
+export interface DashboardCliResult {
+  html: string;
+  workspaceRoot: string;
+  artifacts: DashboardArtifacts;
+  session: DashboardSession | undefined;
+}
+
 interface ServeCliOptions {
   startPath?: string;
   host?: string;
@@ -2558,6 +2592,63 @@ function parseStatusArgs(args: string[]): StatusCliOptions {
   }
 
   return options;
+}
+
+function parseDashboardArgs(args: string[]): DashboardCliOptions {
+  const options: DashboardCliOptions = { json: false };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--path") {
+      options.startPath = requiredValue(args, index, "--path");
+      index += 1;
+      continue;
+    }
+
+    throw new Error(`Unknown dashboard argument: ${arg}`);
+  }
+
+  return options;
+}
+
+/**
+ * Builds the same dashboard any shell renders, for a shell that is not
+ * VS Code and cannot import `@copilot-architect/dashboard` directly — the
+ * IntelliJ plugin, or any other non-Node host. It spawns this CLI command
+ * and reads the HTML (or, with `--json`, the underlying data) from stdout,
+ * the same "shell spawns CLI, never reimplements the logic" pattern the
+ * VS Code extension already follows for everything else.
+ *
+ * `mcpStatus` is always reported "stopped": a one-shot CLI invocation has no
+ * running process to introspect, and guessing would be worse than saying so.
+ * `actionsHtml` is left empty for the same reason `mcpStatus` is honest
+ * rather than guessed — this command doesn't know its caller's command/URI
+ * scheme, so it renders no action row rather than inventing VS Code's.
+ */
+async function buildDashboardPayload(
+  options: DashboardCliOptions
+): Promise<DashboardCliResult> {
+  const workspaceRoot = path.resolve(options.startPath ?? process.cwd());
+  const [artifacts, session] = await Promise.all([
+    loadDashboardArtifacts(workspaceRoot),
+    loadDashboardSession(workspaceRoot)
+  ]);
+
+  const html = createDashboardHtml({
+    workspaceRoot,
+    mcpStatus: "stopped",
+    artifacts,
+    session,
+    buildVersion: COPILOT_ARCHITECT_VERSION
+  });
+
+  return { html, workspaceRoot, artifacts, session };
 }
 
 async function runInstructionsCommand(

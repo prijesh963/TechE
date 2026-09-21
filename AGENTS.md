@@ -117,6 +117,7 @@ copilot-architect/
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
 │   ├── mcp-server/      MCP server and 30 tools
+│   ├── dashboard/       shared dashboard render+load logic (used by vscode-extension and the CLI's `dashboard` command)
 │   ├── cli/             CLI entry point and command routing
 │   ├── vscode-extension the @architect chat participant and dashboard
 │   └── web/             optional local web UI shell (thin)
@@ -124,7 +125,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               49 files, 567 tests
+├── tests/               50 files, 575 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -155,7 +156,7 @@ the other. If a shell needs repo intelligence, it imports the service.
 
 ## Implemented
 
-1. TypeScript CLI with 24 commands including `demo`.
+1. TypeScript CLI with 25 commands including `demo`.
 2. Local MCP server with 30 tools, including the session, plan contract and
    grounding — so a policy-blocked developer gets the same product.
 3. VS Code extension with the `@architect` chat participant and four phases.
@@ -248,6 +249,16 @@ the other. If a shell needs repo intelligence, it imports the service.
     correctly shadowing a same-named field. Remaining gaps (union-typed
     fields, method chaining, data-flow/reassignment) are in
     `docs/KNOWN_LIMITATIONS.md` 4.15.
+26. `createDashboardHtml` and its loaders (`loadDashboardArtifacts`,
+    `loadDashboardSession`) moved out of `vscode-extension` into a new
+    `packages/dashboard`, which the extension now imports unchanged (a thin
+    wrapper assembles its own `command:` action-row HTML and passes it in,
+    so its rendered output is unaffected) — plus a new CLI command,
+    `copilot-architect dashboard [--path] [--json]`, that imports the same
+    package and prints the identical HTML (or the underlying data, with
+    `--json`) for a host that cannot import it directly. Done ahead of an
+    IntelliJ edition that needs the exact same dashboard without being able
+    to import TypeScript at all — see the `intellij-main` branch.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -382,7 +393,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 567 tests must pass before merging.
+Use Vitest. All 575 tests must pass before merging.
 
 Cover:
 
@@ -403,6 +414,11 @@ Cover:
   on the commit that was `HEAD` at that time rather than `Session.gitHead`,
   which does not move for a same-branch commit) and its honest fallback when
   no git history reaches that far back
+- the shared dashboard package's own contract in isolation (no host-specific
+  actions/build-version wiring assumed, honest "unknown" build fallback,
+  host-supplied action HTML rendered exactly as given) and the CLI's
+  `dashboard` command (HTML on stdout, `--json` for the underlying data, no
+  session/MCP process to introspect reported honestly rather than guessed)
 - plan contract (freshness, approval gating, path constraints)
 - change selection (invented paths, add-of-existing, traversal, caps)
 - rationale evidence (verified, unverified, and honestly unchecked)

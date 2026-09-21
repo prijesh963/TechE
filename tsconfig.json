@@ -19,6 +19,7 @@
     { "path": "./packages/adapters" },
     { "path": "./packages/indexer" },
     { "path": "./packages/session" },
+    { "path": "./packages/dashboard" },
     { "path": "./packages/grounding" },
     { "path": "./packages/graph" },
     { "path": "./packages/intent" },

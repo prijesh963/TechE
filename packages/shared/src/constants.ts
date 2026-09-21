@@ -68,6 +68,7 @@ export const CLI_COMMANDS = [
   "workspace",
   "mcp",
   "serve",
+  "dashboard",
   "diagnostics",
   "status",
   "doctor",
@@ -92,6 +93,7 @@ export const REQUIRED_PACKAGE_DIRECTORIES = [
   "packages/instructions",
   "packages/mcp-server",
   "packages/cli",
+  "packages/dashboard",
   "packages/vscode-extension",
   "packages/web"
 ] as const;
