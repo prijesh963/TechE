@@ -70,6 +70,16 @@ intellijPlatform {
             sinceBuild = "242"
         }
     }
+
+    // :verifyPlugin needs to know which IDE(s) to verify against — without
+    // this, CI failed with "No IDE resolved for verification", naming this
+    // exact fix. `recommended()` derives them from `sinceBuild`/`untilBuild`
+    // above rather than a separately hand-picked list to keep in sync.
+    pluginVerification {
+        ides {
+            recommended()
+        }
+    }
 }
 
 tasks {
