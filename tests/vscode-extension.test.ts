@@ -880,6 +880,28 @@ describe("VS Code extension shell", () => {
     expect(html).not.toMatch(/--accent:#[0-9a-fA-F]{3,6}/);
   });
 
+  it("stacks cards in a single column with a small local icon left of each title", () => {
+    const html = createDashboardHtml({
+      workspaceRoot: "/workspace/repo",
+      mcpStatus: "running"
+    });
+
+    // Single column, not the old auto-fit grid.
+    expect(html).toContain(".grid{display:flex;flex-direction:column");
+    expect(html).not.toContain("grid-template-columns");
+
+    // Every card title has a small circular icon immediately before it, and
+    // the icon is inline SVG markup — no <img>, no external/CDN reference —
+    // so it renders with zero network access, inside or outside VS Code.
+    const iconedTitles =
+      html.match(/<h2><span class="icon-circle"[^>]*>.*?<\/h2>/g) ?? [];
+    expect(iconedTitles.length).toBeGreaterThanOrEqual(9);
+    expect(html).toContain('<span class="icon-circle" style="background:');
+    expect(html).toContain("<svg viewBox=");
+    expect(html).not.toContain("<img");
+    expect(html).not.toMatch(/https?:\/\//);
+  });
+
   it("colors MCP status by state rather than a fixed accent", () => {
     const running = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "running" });
     const starting = createDashboardHtml({
@@ -888,14 +910,18 @@ describe("VS Code extension shell", () => {
     });
     const stopped = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "stopped" });
 
-    expect(running).toContain(
-      '<section style="--accent:var(--vscode-charts-green)"><h2>MCP status</h2>'
+    // The section's own accent and its icon circle's background must be the
+    // same color, and both immediately precede this exact card's title —
+    // anchored so a same-colored sibling card (e.g. Agent insights is also
+    // green) can't make this pass for the wrong reason.
+    expect(running).toMatch(
+      /<section style="--accent:var\(--vscode-charts-green\)"><h2><span class="icon-circle" style="background:var\(--vscode-charts-green\)">[\s\S]*?<\/span>MCP status<\/h2>/
     );
-    expect(starting).toContain(
-      '<section style="--accent:var(--vscode-charts-yellow)"><h2>MCP status</h2>'
+    expect(starting).toMatch(
+      /<section style="--accent:var\(--vscode-charts-yellow\)"><h2><span class="icon-circle" style="background:var\(--vscode-charts-yellow\)">[\s\S]*?<\/span>MCP status<\/h2>/
     );
-    expect(stopped).toContain(
-      '<section style="--accent:var(--vscode-charts-red)"><h2>MCP status</h2>'
+    expect(stopped).toMatch(
+      /<section style="--accent:var\(--vscode-charts-red\)"><h2><span class="icon-circle" style="background:var\(--vscode-charts-red\)">[\s\S]*?<\/span>MCP status<\/h2>/
     );
   });
 

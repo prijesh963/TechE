@@ -1611,6 +1611,38 @@ function formatMcpStatusAccent(status: ExtensionState["mcpStatus"]): string {
   }
 }
 
+/**
+ * One small hand-drawn glyph per card, inlined as raw SVG markup — never a
+ * fetched icon font or image, so the dashboard renders identically offline
+ * and needs no webview resource root. Each is a 16x16 viewBox, white on the
+ * card's own accent color, sized for the ~12px circle it sits in.
+ */
+const DASHBOARD_ICONS = {
+  currentWork: '<polygon points="4,3 4,13 13,8" fill="white"/>',
+  repoSummary:
+    '<path d="M2 4a1 1 0 0 1 1-1h3l1.5 2H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4z" fill="white"/>',
+  languages:
+    '<path d="M5 3L1.5 8 5 13M11 3l3.5 5L11 13" stroke="white" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  validation:
+    '<path d="M3 8.5l3 3 7-7.5" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  review:
+    '<circle cx="6.5" cy="6.5" r="4" stroke="white" stroke-width="1.6" fill="none"/><line x1="9.8" y1="9.8" x2="14" y2="14" stroke="white" stroke-width="1.8" stroke-linecap="round"/>',
+  agentStatus:
+    '<rect x="3" y="5" width="10" height="8" rx="2" stroke="white" stroke-width="1.4" fill="none"/><circle cx="6" cy="9" r="1" fill="white"/><circle cx="10" cy="9" r="1" fill="white"/><line x1="8" y1="5" x2="8" y2="2.5" stroke="white" stroke-width="1.4"/><circle cx="8" cy="2" r="1" fill="white"/>',
+  mcpStatus:
+    '<path d="M5 2v4M11 2v4M4 6h8v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6zM8 12v3" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
+  build:
+    '<path d="M8 2v7m0 0L5 6m3 3l3-3M3 12h10" stroke="white" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  agentInsights:
+    '<rect x="2" y="9" width="3" height="5" fill="white"/><rect x="6.5" y="5" width="3" height="9" fill="white"/><rect x="11" y="2" width="3" height="12" fill="white"/>',
+  lastCommand:
+    '<rect x="2" y="3" width="12" height="10" rx="1.5" stroke="white" stroke-width="1.4" fill="none"/><path d="M4.5 6.5l2 2-2 2M8.5 10.5h3" stroke="white" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+} as const;
+
+function renderIconCircle(accent: string, iconInner: string): string {
+  return `<span class="icon-circle" style="background:${accent}"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">${iconInner}</svg></span>`;
+}
+
 export function createDashboardHtml(state: ExtensionState): string {
   const artifacts = state.artifacts;
   const sections = [
@@ -1619,7 +1651,8 @@ export function createDashboardHtml(state: ExtensionState): string {
       // dashboard exists to answer and previously could not.
       title: "Current work",
       body: formatSession(state.session),
-      accent: "var(--vscode-charts-blue)"
+      accent: "var(--vscode-charts-blue)",
+      icon: DASHBOARD_ICONS.currentWork
     },
     {
       title: "Repo summary",
@@ -1628,44 +1661,52 @@ export function createDashboardHtml(state: ExtensionState): string {
           ? `${state.workspaceRoot} · ${artifacts.repoCount} registered repo(s)`
           : state.workspaceRoot
       ),
-      accent: "var(--vscode-charts-purple)"
+      accent: "var(--vscode-charts-purple)",
+      icon: DASHBOARD_ICONS.repoSummary
     },
     {
       title: "Languages/frameworks",
       body: escapeHtml(formatLanguagesFrameworks(artifacts)),
-      accent: "var(--vscode-charts-orange)"
+      accent: "var(--vscode-charts-orange)",
+      icon: DASHBOARD_ICONS.languages
     },
     {
       title: "Validation runs",
       body: escapeHtml(formatValidation(artifacts)),
-      accent: "var(--vscode-charts-yellow)"
+      accent: "var(--vscode-charts-yellow)",
+      icon: DASHBOARD_ICONS.validation
     },
     {
       title: "Review reports",
       body: escapeHtml(formatReview(artifacts)),
-      accent: "var(--vscode-charts-red)"
+      accent: "var(--vscode-charts-red)",
+      icon: DASHBOARD_ICONS.review
     },
     {
       title: "Agent status",
       body: escapeHtml(formatAgents(artifacts)),
-      accent: "var(--vscode-charts-purple)"
+      accent: "var(--vscode-charts-purple)",
+      icon: DASHBOARD_ICONS.agentStatus
     },
     {
       title: "MCP status",
       body: state.mcpStatus,
-      accent: formatMcpStatusAccent(state.mcpStatus)
+      accent: formatMcpStatusAccent(state.mcpStatus),
+      icon: DASHBOARD_ICONS.mcpStatus
     },
     {
       // So a developer re-testing a fix can see which build is running
       // without having to deduce it from behaviour.
       title: "Build",
       body: escapeHtml(EXTENSION_VERSION),
-      accent: "var(--vscode-charts-blue)"
+      accent: "var(--vscode-charts-blue)",
+      icon: DASHBOARD_ICONS.build
     },
     {
       title: "Agent insights",
       body: formatAgentInsights(artifacts, state.session),
-      accent: "var(--vscode-charts-green)"
+      accent: "var(--vscode-charts-green)",
+      icon: DASHBOARD_ICONS.agentInsights
     }
   ];
 
@@ -1679,9 +1720,10 @@ export function createDashboardHtml(state: ExtensionState): string {
     "<style>",
     "body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background);margin:0;padding:16px;}",
     "h1{font-size:20px;font-weight:600;margin:0 0 12px;}",
-    ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;}",
-    "section{border:1px solid var(--vscode-panel-border);border-left:4px solid var(--accent, var(--vscode-panel-border));border-radius:6px;padding:10px;background:var(--vscode-sideBar-background);min-height:74px;}",
-    "h2{font-size:13px;font-weight:600;margin:0 0 8px;color:var(--accent, var(--vscode-foreground));}",
+    ".grid{display:flex;flex-direction:column;gap:10px;}",
+    "section{border:1px solid var(--vscode-panel-border);border-left:4px solid var(--accent, var(--vscode-panel-border));border-radius:6px;padding:10px;background:var(--vscode-sideBar-background);}",
+    "h2{display:flex;align-items:center;font-size:13px;font-weight:600;margin:0 0 8px;color:var(--accent, var(--vscode-foreground));}",
+    ".icon-circle{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;margin-right:6px;}",
     "p{font-size:12px;line-height:1.4;margin:0;color:var(--vscode-descriptionForeground);overflow-wrap:anywhere;}",
     ".actions{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px;}",
     "a{font-size:12px;color:var(--vscode-textLink-foreground);text-decoration:none;}",
@@ -1694,11 +1736,11 @@ export function createDashboardHtml(state: ExtensionState): string {
     '<div class="grid">',
     ...sections.map(
       (section) =>
-        `<section style="--accent:${section.accent}"><h2>${section.title}</h2><p>${section.body}</p></section>`
+        `<section style="--accent:${section.accent}"><h2>${renderIconCircle(section.accent, section.icon)}${section.title}</h2><p>${section.body}</p></section>`
     ),
     "</div>",
-    '<section style="margin-top:10px">',
-    "<h2>Last command</h2>",
+    '<section style="margin-top:10px;--accent:var(--vscode-charts-blue)">',
+    `<h2>${renderIconCircle("var(--vscode-charts-blue)", DASHBOARD_ICONS.lastCommand)}Last command</h2>`,
     `<p>${escapeHtml(state.lastCommand ?? "None")}</p>`,
     `<p>Exit code: ${state.lastExitCode ?? "n/a"}</p>`,
     state.lastStdout ? `<pre>${escapeHtml(state.lastStdout)}</pre>` : "",
