@@ -40,6 +40,12 @@ dependencies {
         // Pairs with `intellijDependencies()` above — the actual Java
         // Compiler artifact `:instrumentCode` needs.
         instrumentationTools()
+
+        // `build`'s `check` dependency pulls in `:verifyPlugin` (as does
+        // this workflow's own separate `verifyPlugin` step) — without this,
+        // CI failed with "No IntelliJ Plugin Verifier executable found",
+        // naming this exact fix.
+        pluginVerifier()
     }
 }
 
