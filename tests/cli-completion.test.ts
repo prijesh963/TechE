@@ -63,11 +63,46 @@ describe("Phase 12 CLI completion", () => {
     expect(html).toContain("Current work");
     expect(html).toContain("Agent insights");
     // No session/MCP process for a one-shot CLI call to introspect — honest
-    // about both rather than guessing.
+    // about both rather than guessing, absent an explicit --mcp-status flag.
     expect(html).toContain("No session open");
     expect(html).toContain(">stopped<");
-    // No caller-specific command scheme to assume, so no action row.
-    expect(html).toContain('<div class="actions"></div>');
+    // The action row is host-neutral (architect-action: links), not VS
+    // Code's own command: scheme, but it is always rendered.
+    expect(html).toContain('<a href="architect-action:setupRepo">Setup Repo</a>');
+    expect(html).toContain(
+      '<a href="architect-action:buildGraph">Build Symbol Graph</a>'
+    );
+  });
+
+  it("reports a caller-supplied MCP status and last-command outcome instead of guessing", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "dashboard-runtime-state" })
+    });
+    const capture = createCapture();
+
+    const result = await runCli(
+      [
+        "dashboard",
+        "--path",
+        repoRoot,
+        "--mcp-status",
+        "running",
+        "--last-command",
+        "setup",
+        "--last-exit-code",
+        "0",
+        "--last-stdout",
+        "all steps ok"
+      ],
+      capture.io
+    );
+    const html = capture.stdout.join("\n");
+
+    expect(result.exitCode).toBe(0);
+    expect(html).toContain(">running<");
+    expect(html).toContain("<p>setup</p>");
+    expect(html).toContain("Exit code: 0");
+    expect(html).toContain("all steps ok");
   });
 
   it("supports dashboard JSON output with the underlying data, not just HTML", async () => {
@@ -144,6 +179,178 @@ describe("Phase 12 CLI completion", () => {
     expect(addCapture.stdout.join("\n")).toContain("Repos: 2");
     expect(searchCapture.stdout.join("\n")).toContain("Results:");
     expect(validateCapture.stdout.join("\n")).toContain("Status: ok");
+  });
+
+  it("scans a parent folder and registers only its real-repo subdirectories", async () => {
+    const parentDir = await mkdtemp(path.join(tmpdir(), "copilot-scan-parent-"));
+    await mkdir(path.join(parentDir, "repo-a"), { recursive: true });
+    await writeFile(
+      path.join(parentDir, "repo-a", "package.json"),
+      JSON.stringify({ name: "repo-a" }),
+      "utf8"
+    );
+    await mkdir(path.join(parentDir, "repo-b"), { recursive: true });
+    await writeFile(
+      path.join(parentDir, "repo-b", "package.json"),
+      JSON.stringify({ name: "repo-b" }),
+      "utf8"
+    );
+    // No package.json, pom.xml, build.gradle or equivalent — must be skipped,
+    // not registered as a 13th "repo" that is really just documentation.
+    await mkdir(path.join(parentDir, "docs"), { recursive: true });
+    await writeFile(path.join(parentDir, "docs", "README.md"), "# Notes", "utf8");
+
+    const workspaceRoot = await createRepo({});
+    const capture = createCapture();
+
+    const result = await runCli(
+      ["workspace", "scan", parentDir, "--path", workspaceRoot, "--json"],
+      capture.io
+    );
+    const json = JSON.parse(capture.stdout.join("\n"));
+
+    expect(result.exitCode).toBe(0);
+    expect(json.registered.sort()).toEqual(["repo-a", "repo-b"]);
+    expect(json.skipped).toEqual(["docs"]);
+
+    const showCapture = createCapture();
+    await runCli(
+      ["workspace", "show", "--path", workspaceRoot, "--json"],
+      showCapture.io
+    );
+    const workspace = JSON.parse(showCapture.stdout.join("\n"));
+    // Plus the workspace root itself — `workspace init` always registers it
+    // (role: "workspace root"), existing behavior this command reuses rather
+    // than works around.
+    const names = workspace.repos.map((repo: { name: string }) => repo.name);
+    expect(names).toContain("repo-a");
+    expect(names).toContain("repo-b");
+  });
+
+  it("reports failure rather than a false success when nothing in the folder looks like a repo", async () => {
+    const parentDir = await mkdtemp(path.join(tmpdir(), "copilot-scan-empty-"));
+    await mkdir(path.join(parentDir, "docs"), { recursive: true });
+    const workspaceRoot = await createRepo({});
+    const capture = createCapture();
+
+    const result = await runCli(
+      ["workspace", "scan", parentDir, "--path", workspaceRoot, "--json"],
+      capture.io
+    );
+    const json = JSON.parse(capture.stdout.join("\n"));
+
+    expect(result.exitCode).toBe(1);
+    expect(json.registered).toEqual([]);
+    expect(json.skipped).toEqual(["docs"]);
+  });
+
+  it("runs one-shot setup for a single repo: init through MCP config", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "src/invoice.ts": "export const invoice = true;"
+    });
+    const capture = createCapture();
+
+    const result = await runCli(["setup", "--path", repoRoot, "--json"], capture.io);
+    const json = JSON.parse(capture.stdout.join("\n"));
+
+    expect(result.exitCode).toBe(0);
+    expect(json.mode).toBe("single");
+    expect(json.ok).toBe(true);
+    const repoLabel = path.basename(repoRoot);
+    const labels = json.steps.map((step: { label: string }) => step.label);
+    expect(labels).toEqual([
+      `Initialize artifacts (${repoLabel})`,
+      `Analyze repo (${repoLabel})`,
+      `Build symbol graph (${repoLabel})`,
+      `Repo assessment (${repoLabel})`,
+      "Build index",
+      "Configure MCP server"
+    ]);
+    expect(json.steps.every((step: { ok: boolean }) => step.ok)).toBe(true);
+
+    await access(path.join(repoRoot, ".copilot-architect/repo-map.json"));
+    await access(path.join(repoRoot, ".copilot-architect/graph.json"));
+    await access(path.join(repoRoot, ".vscode/mcp.json"));
+  });
+
+  it("runs one-shot setup across a scanned workspace, per repo then combined steps", async () => {
+    const parentDir = await mkdtemp(path.join(tmpdir(), "copilot-setup-parent-"));
+    await mkdir(path.join(parentDir, "repo-a"), { recursive: true });
+    await writeFile(
+      path.join(parentDir, "repo-a", "package.json"),
+      JSON.stringify({ name: "repo-a" }),
+      "utf8"
+    );
+    await mkdir(path.join(parentDir, "repo-b"), { recursive: true });
+    await writeFile(
+      path.join(parentDir, "repo-b", "package.json"),
+      JSON.stringify({ name: "repo-b" }),
+      "utf8"
+    );
+    const workspaceRoot = await createRepo({});
+    const scanCapture = createCapture();
+    expect(
+      (
+        await runCli(
+          ["workspace", "scan", parentDir, "--path", workspaceRoot, "--json"],
+          scanCapture.io
+        )
+      ).exitCode
+    ).toBe(0);
+
+    const setupCapture = createCapture();
+    const result = await runCli(
+      ["setup", "--path", workspaceRoot, "--workspace", "--json"],
+      setupCapture.io
+    );
+    const json = JSON.parse(setupCapture.stdout.join("\n"));
+
+    expect(result.exitCode).toBe(0);
+    expect(json.mode).toBe("workspace");
+    expect(json.ok).toBe(true);
+    const labels = json.steps.map((step: { label: string }) => step.label);
+    expect(labels).toEqual([
+      "Initialize artifacts (repo-a)",
+      "Analyze repo (repo-a)",
+      "Build symbol graph (repo-a)",
+      "Repo assessment (repo-a)",
+      "Initialize artifacts (repo-b)",
+      "Analyze repo (repo-b)",
+      "Build symbol graph (repo-b)",
+      "Repo assessment (repo-b)",
+      "Build workspace index",
+      "Build workspace symbol graph",
+      "Configure MCP server"
+    ]);
+    expect(json.steps.every((step: { ok: boolean }) => step.ok)).toBe(true);
+  });
+
+  it("reports failed steps rather than a false success when the workspace root has no repos", async () => {
+    const workspaceRoot = await createRepo({});
+    const initCapture = createCapture();
+    expect(
+      (await runCli(["workspace", "init", "--path", workspaceRoot], initCapture.io))
+        .exitCode
+    ).toBe(0);
+
+    const capture = createCapture();
+    const result = await runCli(
+      ["setup", "--path", workspaceRoot, "--workspace", "--json"],
+      capture.io
+    );
+    const json = JSON.parse(capture.stdout.join("\n"));
+
+    // No repos beyond the auto-registered workspace root itself, so there is
+    // nothing to set up per-repo — just the combined workspace steps.
+    expect(result.exitCode).toBe(0);
+    expect(json.mode).toBe("workspace");
+    const labels = json.steps.map((step: { label: string }) => step.label);
+    expect(labels).toEqual([
+      "Build workspace index",
+      "Build workspace symbol graph",
+      "Configure MCP server"
+    ]);
   });
 
   it("runs the instructions command family", async () => {

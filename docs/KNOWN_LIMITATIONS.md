@@ -762,10 +762,7 @@ found.` — i.e. it never reaches compiling a single `.kt` file. The Kotlin
 - **No bundled CLI.** `CliBridge` resolves the CLI from a
   `COPILOT_ARCHITECT_CLI` environment variable or a relative dev-checkout
   path — there is no analogue yet to how the VS Code `.vsix` bundles
-  `cli.mjs` (`scripts/bundle-extension.mjs`). Packaging one is Phase 2.
-- **No action row.** The CLI's `dashboard` command has no caller-specific
-  command/URI scheme to render, so it emits an empty one — Setup Repo,
-  Build Index, etc. are not yet reachable from the IntelliJ dashboard.
+  `cli.mjs` (`scripts/bundle-extension.mjs`). Packaging one is a later phase.
 - **`--vscode-*` CSS custom property names, reused verbatim.** `ThemeColors`
   maps IntelliJ's current Look and Feel onto the same variable names the
   shared dashboard HTML already uses, rather than the dashboard package
@@ -785,6 +782,90 @@ found.` — i.e. it never reaches compiling a single `.kt` file. The Kotlin
 a small, explicit, and reversible scope cut. Do not treat any of this
 Kotlin code as working until it has compiled somewhere with real network
 access.
+
+---
+
+### 4.18 IntelliJ edition, Phase 2: action row wired, orchestration duplicated by explicit decision, still unverified
+
+**Phase 43.** Every dashboard action link VS Code exposes — Setup Repo,
+Start & Setup MCP, Stop MCP, Generate Instructions, Open Repo, Scan &
+Register Sub-repos, Analyze Repo, Build Index, Build Symbol Graph — is now
+reachable from the IntelliJ dashboard, closing the "No action buttons" gap
+4.17 left open.
+
+- **CLI side (verified — builds, and 581/581 tests pass):**
+  `packages/cli`'s `dashboard` command now renders every action as an
+  `architect-action:<id>` link (`buildDashboardActionsHtml`) — a host-neutral
+  scheme this plugin defines and intercepts itself, since JCEF has no
+  built-in analogue to VS Code's webview `command:` URIs. Two new CLI
+  commands back the orchestrated actions: `workspace scan <dir>` (registers
+  every real-repo subdirectory of a folder, mirroring VS Code's
+  `registerSubRepos`) and `setup [--workspace]` (the full
+  init→analyze→graph→diagnostics→index→mcp-config sequence VS Code's
+  `setupRepo` runs, single-repo or across every registered repo). The
+  `dashboard` command also gained `--mcp-status`/`--last-command`/
+  `--last-exit-code`/`--last-stdout`/`--last-stderr` flags, since a one-shot
+  CLI render has no running process or command history of its own to
+  report honestly — a long-lived caller (this plugin) supplies its own.
+- **Kotlin side (unverified — see 4.17; the network block is unchanged):**
+  `ActionLinkInterceptor.kt` intercepts `architect-action:` navigation on
+  the JBCefBrowser; `ActionDispatcher.kt` routes each id to `CliBridge` (for
+  `setup`/`analyze`/`index`/`graph`/`instructions generate`/`workspace
+scan`), to a new `McpProcessManager.kt` (a project-level service holding
+  the long-lived `mcp` server `Process` handle — the same shell-local state
+  VS Code's `activeMcpProcess` is, since a process cannot be reported by a
+  one-shot CLI call), or to native IntelliJ APIs (`FileChooser` for the
+  folder pickers Scan and Open Repo need, `ProjectUtil.openOrImport` for
+  Open Repo itself, reusing the current window to match VS Code's own
+  `forceNewWindow: false`). `DashboardPanel` now supplies `McpProcessManager`
+  status and the last action's outcome back into every render via the new
+  CLI flags. `./gradlew build --offline` was re-run after writing all of
+  this and fails at the identical point as 4.17 (`No IntelliJ Platform
+dependency found`) — confirming the build script and file layout are
+  intact, but not that a single one of these new `.kt` files actually
+  compiles. Treat all of it as unproven until CI or a developer machine
+  builds it.
+
+**Deliberate duplication, not a silent Core Rule violation.** VS Code's
+`registerSubRepos`/`setupRepo`/`shouldBuildWorkspaceGraph` (in
+`vscode-extension/src/index.ts`) were left completely untouched, by explicit
+user instruction, rather than refactored into a shared call both shells make
+— the safer option was available and named at the time, and declined in
+favor of shipping IntelliJ's action row sooner. The CLI's `runSetupCommand`
+and `shouldBuildWorkspaceGraph` in `packages/cli/src/index.ts` are therefore
+an **independent reimplementation** of that same step sequence and skip
+heuristic, not a shared one. The two copies can drift: a fix to one (a new
+setup step, a change to the workspace-graph skip condition) will not
+propagate to the other unless someone remembers to also change it. This is
+the same failure mode the Core Rule's own preamble in `AGENTS.md` names —
+`@architect` and the MCP tools once answered questions differently because
+retrieval was reimplemented rather than shared — accepted here explicitly
+rather than repeated by accident.
+
+**Also new, smaller:**
+
+- `McpProcessManager` starts the server with stdout/stderr redirected to
+  `ProcessBuilder.Redirect.DISCARD`, not streamed anywhere — VS Code's
+  `outputChannel` shows the same server's logs live; this plugin currently
+  cannot. Started at all only to avoid a blocked pipe stalling a
+  long-running process that was never being read.
+- `--last-stdout`/`--last-stderr` are truncated to 4000 characters
+  (`ActionDispatcher.truncate`) before being passed as CLI flags on the next
+  render, to keep argv size reasonable for a `setup --workspace` run's
+  combined output across many repos — a long run's full output is therefore
+  not fully visible in the dashboard's "Last command" card.
+- The secondary action set (Open Repo, Scan & Register Sub-repos, Analyze
+  Repo, Build Index, Build Symbol Graph) is rendered flat, in the same
+  action row as the primary four, rather than behind a "More actions…"
+  popup the way VS Code's quick pick hides it. This was a deliberate
+  simplification, not an oversight: the CLI already lays out every action
+  in one place (`buildDashboardActionsHtml`), and a second, IntelliJ-only
+  grouping mechanism on top of that would only duplicate a decision already
+  made rather than add anything.
+
+**Cost:** the Gradle-build gap from 4.17 is unchanged and still the one that
+matters most. New on top of it: two orchestration implementations that can
+silently diverge, and an MCP server whose logs this plugin cannot yet show.
 
 ---
 

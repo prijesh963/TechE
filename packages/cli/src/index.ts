@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -79,6 +79,7 @@ import {
 } from "@copilot-architect/web";
 import {
   createDashboardHtml,
+  escapeHtml,
   loadDashboardArtifacts,
   loadDashboardSession,
   type DashboardArtifacts,
@@ -95,6 +96,7 @@ import {
   PROJECT_NAME,
   getArtifactDirectoryPath,
   getArtifactFilePath,
+  looksLikeRepo,
   readJsonFile,
   type FeaturePlan,
   type HandoffPrompt
@@ -132,6 +134,8 @@ const commandDescriptions = {
   serve: "Start the optional local web UI shell.",
   dashboard:
     "Render the same dashboard every shell shows, as HTML on stdout — for a host that cannot import it directly.",
+  setup:
+    "One-shot repo onboarding: initialize, analyze, build graph and index, assess readiness, configure MCP.",
   diagnostics: "Report repo readiness and advanced local intelligence.",
   status: "Show local Copilot Architect status.",
   doctor: "Run environment and project checks.",
@@ -169,11 +173,13 @@ const commandUsage = {
   instructions:
     "npm run cli -- instructions <generate|preview|validate> [--path <repo>] [--output <file>] [--json]",
   workspace:
-    "npm run cli -- workspace <init|show|list|add|remove|index|search|impact|plan|validate-plan> [args] [--json]",
+    "npm run cli -- workspace <init|show|list|add|remove|scan|index|search|impact|plan|validate-plan> [args] [--json]",
   mcp: "npm run cli -- mcp [--path <repo>] | npm run cli -- mcp config [--path <repo>] [--force] [--json]",
   serve:
     "npm run cli -- serve [--path <repo>] [--host 127.0.0.1] [--port <n>] [--json]",
-  dashboard: "npm run cli -- dashboard [--path <repo>] [--json]",
+  dashboard:
+    "npm run cli -- dashboard [--path <repo>] [--mcp-status <stopped|starting|running>] [--last-command <text>] [--last-exit-code <n>] [--last-stdout <text>] [--last-stderr <text>] [--json]",
+  setup: "npm run cli -- setup [--path <repo>] [--workspace] [--json]",
   diagnostics: "npm run cli -- diagnostics [--path <repo>] [--json]",
   status: "npm run cli -- status [--path <repo>] [--json]",
   doctor: "npm run cli -- doctor [--json]",
@@ -890,6 +896,18 @@ export async function runCli(
       const result = await getStatus(options);
       stdout(options.json ? JSON.stringify(result, null, 2) : getStatusText(result));
       return { exitCode: 0 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
+  if (rawCommand === "setup") {
+    try {
+      const options = parseSetupArgs(commandArgs);
+      const result = await runSetupCommand(options);
+      stdout(options.json ? JSON.stringify(result, null, 2) : getSetupText(result));
+      return { exitCode: result.ok ? 0 : 1 };
     } catch (error) {
       stderr(error instanceof Error ? error.message : String(error));
       return { exitCode: 1 };
@@ -2198,6 +2216,7 @@ interface WorkspaceCliOptions {
     | "list"
     | "add"
     | "remove"
+    | "scan"
     | "index"
     | "search"
     | "impact"
@@ -2223,7 +2242,47 @@ interface StatusCliOptions {
 
 interface DashboardCliOptions {
   startPath?: string;
+  mcpStatus?: "stopped" | "starting" | "running";
+  lastCommand?: string;
+  lastExitCode?: number;
+  lastStdout?: string;
+  lastStderr?: string;
   json: boolean;
+}
+
+/**
+ * The dashboard's action row, rendered as a host-neutral `architect-action:`
+ * URI scheme rather than VS Code's `command:` scheme — a shell that isn't
+ * VS Code (IntelliJ's JBCefBrowser) intercepts clicks on this scheme itself
+ * and dispatches to its own command handling; the CLI only needs to name the
+ * action, never to run it. IDs mirror `COPILOT_ARCHITECT_COMMANDS`/
+ * `DASHBOARD_PRIMARY_ACTIONS`/`COPILOT_ARCHITECT_SECONDARY_ACTIONS` in
+ * `vscode-extension/src/index.ts` so both shells agree on what each action
+ * means, without either importing the other's command table.
+ */
+const DASHBOARD_ACTION_LINKS: { id: string; label: string }[] = [
+  { id: "setupRepo", label: "Setup Repo" },
+  { id: "startAndSetupMcp", label: "Start & Setup MCP" },
+  { id: "stopMcp", label: "Stop MCP" },
+  { id: "generateInstructions", label: "Generate Instructions" }
+];
+
+const DASHBOARD_SECONDARY_ACTION_LINKS: { id: string; label: string }[] = [
+  { id: "openRepoInNewWindow", label: "Open Repo" },
+  { id: "workspaceScan", label: "Scan & Register Sub-repos" },
+  { id: "analyzeRepo", label: "Analyze Repo" },
+  { id: "buildIndex", label: "Build Index" },
+  { id: "buildGraph", label: "Build Symbol Graph" }
+];
+
+function renderArchitectActionLink(action: { id: string; label: string }): string {
+  return `<a href="architect-action:${action.id}">${escapeHtml(action.label)}</a>`;
+}
+
+function buildDashboardActionsHtml(): string {
+  return [...DASHBOARD_ACTION_LINKS, ...DASHBOARD_SECONDARY_ACTION_LINKS]
+    .map(renderArchitectActionLink)
+    .join("");
 }
 
 export interface DashboardCliResult {
@@ -2231,6 +2290,26 @@ export interface DashboardCliResult {
   workspaceRoot: string;
   artifacts: DashboardArtifacts;
   session: DashboardSession | undefined;
+}
+
+interface SetupCliOptions {
+  startPath?: string;
+  /** Every currently-registered repo (minus the auto-registered workspace-root entry), not just one. */
+  workspace?: boolean;
+  json: boolean;
+}
+
+export interface SetupStepResult {
+  label: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface SetupCliResult {
+  mode: "single" | "workspace";
+  root: string;
+  steps: SetupStepResult[];
+  ok: boolean;
 }
 
 interface ServeCliOptions {
@@ -2471,7 +2550,7 @@ function parseWorkspaceArgs(args: string[]): WorkspaceCliOptions {
 
   if (!isWorkspaceSubcommand(subcommand)) {
     throw new Error(
-      "Expected workspace subcommand: init, show, list, add, remove, index, search, impact, plan, or validate-plan"
+      "Expected workspace subcommand: init, show, list, add, remove, scan, index, search, impact, plan, or validate-plan"
     );
   }
 
@@ -2548,6 +2627,10 @@ function parseWorkspaceArgs(args: string[]): WorkspaceCliOptions {
     }
   }
 
+  if (options.subcommand === "scan" && !options.repoPath) {
+    options.repoPath = textParts.shift();
+  }
+
   if (options.subcommand === "add" && options.repoPath && !options.repoName) {
     options.repoName = textParts.shift();
   }
@@ -2611,6 +2694,47 @@ function parseDashboardArgs(args: string[]): DashboardCliOptions {
       continue;
     }
 
+    if (arg === "--mcp-status") {
+      const value = requiredValue(args, index, "--mcp-status");
+      if (value !== "stopped" && value !== "starting" && value !== "running") {
+        throw new Error(
+          `Invalid --mcp-status value: ${value} (expected stopped, starting, or running)`
+        );
+      }
+      options.mcpStatus = value;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--last-command") {
+      options.lastCommand = requiredValue(args, index, "--last-command");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--last-exit-code") {
+      const value = requiredValue(args, index, "--last-exit-code");
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed)) {
+        throw new Error(`Invalid --last-exit-code value: ${value}`);
+      }
+      options.lastExitCode = parsed;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--last-stdout") {
+      options.lastStdout = requiredValue(args, index, "--last-stdout");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--last-stderr") {
+      options.lastStderr = requiredValue(args, index, "--last-stderr");
+      index += 1;
+      continue;
+    }
+
     throw new Error(`Unknown dashboard argument: ${arg}`);
   }
 
@@ -2625,11 +2749,20 @@ function parseDashboardArgs(args: string[]): DashboardCliOptions {
  * the same "shell spawns CLI, never reimplements the logic" pattern the
  * VS Code extension already follows for everything else.
  *
- * `mcpStatus` is always reported "stopped": a one-shot CLI invocation has no
- * running process to introspect, and guessing would be worse than saying so.
- * `actionsHtml` is left empty for the same reason `mcpStatus` is honest
- * rather than guessed — this command doesn't know its caller's command/URI
- * scheme, so it renders no action row rather than inventing VS Code's.
+ * `mcpStatus` defaults to "stopped" and `lastCommand`/`lastExitCode`/
+ * `lastStdout`/`lastStderr` are absent by default: a one-shot CLI invocation
+ * has no running process and no command history of its own to introspect,
+ * and guessing would be worse than saying so. A long-lived caller that does
+ * track its own state (the IntelliJ plugin, keeping its MCP process handle
+ * and the outcome of the last action a user clicked) passes it back in
+ * through `--mcp-status`/`--last-command`/`--last-exit-code`/`--last-stdout`/
+ * `--last-stderr` on each render, the same way it would hold that state for
+ * its own UI if it rendered the dashboard directly.
+ *
+ * The action row always renders every action, on the `architect-action:`
+ * scheme (see `buildDashboardActionsHtml`) — this command does know its own
+ * action set now, unlike the runtime state above, so unlike `mcpStatus` this
+ * is not something a caller must supply.
  */
 async function buildDashboardPayload(
   options: DashboardCliOptions
@@ -2640,15 +2773,195 @@ async function buildDashboardPayload(
     loadDashboardSession(workspaceRoot)
   ]);
 
-  const html = createDashboardHtml({
-    workspaceRoot,
-    mcpStatus: "stopped",
-    artifacts,
-    session,
-    buildVersion: COPILOT_ARCHITECT_VERSION
-  });
+  const html = createDashboardHtml(
+    {
+      workspaceRoot,
+      mcpStatus: options.mcpStatus ?? "stopped",
+      lastCommand: options.lastCommand,
+      lastExitCode: options.lastExitCode,
+      lastStdout: options.lastStdout,
+      lastStderr: options.lastStderr,
+      artifacts,
+      session,
+      buildVersion: COPILOT_ARCHITECT_VERSION
+    },
+    { actionsHtml: buildDashboardActionsHtml() }
+  );
 
   return { html, workspaceRoot, artifacts, session };
+}
+
+function parseSetupArgs(args: string[]): SetupCliOptions {
+  const options: SetupCliOptions = { json: false };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    if (arg === "--workspace") {
+      options.workspace = true;
+      continue;
+    }
+
+    if (arg === "--path") {
+      options.startPath = requiredValue(args, index, "--path");
+      index += 1;
+      continue;
+    }
+
+    throw new Error(`Unknown setup argument: ${arg}`);
+  }
+
+  return options;
+}
+
+/**
+ * One-shot repo onboarding: initialize artifacts, analyze, build the symbol
+ * graph and index, run the readiness assessment, and configure the MCP
+ * server. Mirrors `setupRepo` in `packages/vscode-extension/src/index.ts` —
+ * that copy stays there unchanged (this command exists so a shell that
+ * cannot import it, like the IntelliJ plugin, has an equivalent to call),
+ * so the two are accepted to drift rather than sharing an implementation;
+ * see docs/KNOWN_LIMITATIONS.md.
+ *
+ * Never starts the MCP server itself — that is a persistent process, and
+ * which process owns "the one I started, that I can later stop" has to be
+ * whichever shell called this, not a one-shot CLI invocation.
+ *
+ * Steps run to completion even when an earlier one fails, for the same
+ * reason the VS Code copy does: a developer can retry a single failed step
+ * from the dashboard rather than losing everything that already succeeded.
+ */
+async function runSetupCommand(options: SetupCliOptions): Promise<SetupCliResult> {
+  const root = path.resolve(options.startPath ?? process.cwd());
+  const steps: SetupStepResult[] = [];
+
+  const track = async (label: string, run: () => Promise<unknown>): Promise<void> => {
+    try {
+      await run();
+      steps.push({ label, ok: true });
+    } catch (error) {
+      steps.push({
+        label,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  };
+
+  const setupOneRepo = async (repoRoot: string, label: string): Promise<void> => {
+    await track(`Initialize artifacts (${label})`, async () => {
+      await new CommandConfigService().init({ startPath: repoRoot });
+      await new SafetyPolicyService().init(repoRoot, false);
+    });
+    await track(`Analyze repo (${label})`, () =>
+      new RepoDiscoveryService().analyze({ startPath: repoRoot })
+    );
+    await track(`Build symbol graph (${label})`, () =>
+      new SymbolGraphService().build({ startPath: repoRoot })
+    );
+    await track(`Repo assessment (${label})`, () =>
+      new AdvancedAnalysisService().diagnose({ startPath: repoRoot })
+    );
+  };
+
+  if (!options.workspace) {
+    await setupOneRepo(root, path.basename(root));
+    await track("Build index", () => new IndexingService().index({ startPath: root }));
+    await track("Configure MCP server", () =>
+      new CopilotChatMcpConfigService().write({ startPath: root })
+    );
+
+    return { mode: "single", root, steps, ok: steps.every((step) => step.ok) };
+  }
+
+  const workspaceService = new WorkspaceService();
+  const { workspace } = await workspaceService.show({ startPath: root });
+  const repos = workspaceService
+    .resolveRepos(workspace)
+    .filter((repo) => repo.role !== "workspace root");
+
+  for (const repo of repos) {
+    await setupOneRepo(repo.repoRoot, repo.name);
+  }
+
+  await track("Build workspace index", () =>
+    new IndexingService().indexWorkspace({ startPath: root })
+  );
+
+  if (
+    await shouldBuildWorkspaceGraph(
+      root,
+      repos.map((repo) => repo.name)
+    )
+  ) {
+    await track("Build workspace symbol graph", () =>
+      new SymbolGraphService().build({ startPath: root })
+    );
+  } else {
+    steps.push({
+      label:
+        "Build workspace symbol graph (skipped — last build found no code shared between these repos)",
+      ok: true
+    });
+  }
+
+  await track("Configure MCP server", () =>
+    new CopilotChatMcpConfigService().write({ startPath: root })
+  );
+
+  return { mode: "workspace", root, steps, ok: steps.every((step) => step.ok) };
+}
+
+/**
+ * Mirrors `shouldBuildWorkspaceGraph` in
+ * `packages/vscode-extension/src/index.ts` — same accepted duplication as
+ * the rest of this command; see its doc comment there for the reasoning
+ * behind the heuristic itself.
+ */
+async function shouldBuildWorkspaceGraph(
+  workspaceRoot: string,
+  repoNames: string[]
+): Promise<boolean> {
+  let state: { repos?: string[]; crossRepoEdgeCount?: number };
+
+  try {
+    state = await readJsonFile(
+      path.join(workspaceRoot, ".copilot-architect", "graph-workspace.json")
+    );
+  } catch {
+    return true;
+  }
+
+  if (state.crossRepoEdgeCount !== 0) return true;
+
+  const learned = [...(state.repos ?? [])].sort();
+  const current = [...repoNames].sort();
+  return learned.length !== current.length
+    ? true
+    : learned.some((name, position) => name !== current[position]);
+}
+
+function getSetupText(result: SetupCliResult): string {
+  const failed = result.steps.filter((step) => !step.ok);
+  return [
+    `${PROJECT_NAME}: setup (${result.mode})`,
+    "",
+    `Root: ${result.root}`,
+    "",
+    ...result.steps.map(
+      (step) =>
+        `${step.ok ? "✓" : "✗"} ${step.label}${step.error ? ` — ${step.error}` : ""}`
+    ),
+    "",
+    failed.length === 0
+      ? "Setup complete."
+      : `Setup finished with ${failed.length} failed step(s).`
+  ].join("\n");
 }
 
 async function runInstructionsCommand(
@@ -2744,6 +3057,23 @@ async function runWorkspaceCommand(
       exitCode: 0,
       payload: result.workspace,
       text: getWorkspaceText("remove", result)
+    };
+  }
+
+  if (options.subcommand === "scan") {
+    if (!options.repoPath) {
+      throw new Error("workspace scan requires a parent directory");
+    }
+
+    const scan = await scanAndRegisterSubRepos(
+      service,
+      options.startPath,
+      options.repoPath
+    );
+    return {
+      exitCode: scan.registered.length > 0 ? 0 : 1,
+      payload: scan,
+      text: getWorkspaceScanText(scan)
     };
   }
 
@@ -2905,6 +3235,108 @@ function getInstructionValidateText(result: InstructionValidationResult): string
       ...file.warnings.map((warning) => `  - warning: ${warning}`)
     ])
   ].join("\n");
+}
+
+export interface WorkspaceScanResult {
+  workspaceRoot: string;
+  scannedDir: string;
+  registered: string[];
+  skipped: string[];
+  failed: string[];
+}
+
+/**
+ * Registers every immediate sub-directory of `scanDir` that looks like a
+ * real repo as a workspace repo. Mirrors `registerSubRepos` in
+ * `packages/vscode-extension/src/index.ts` — that copy stays there
+ * unchanged (this command exists so a shell that cannot import it, like the
+ * IntelliJ plugin, has an equivalent to call), so the two are accepted to
+ * drift rather than sharing an implementation; see
+ * docs/KNOWN_LIMITATIONS.md.
+ */
+async function scanAndRegisterSubRepos(
+  service: WorkspaceService,
+  startPath: string | undefined,
+  scanDir: string
+): Promise<WorkspaceScanResult> {
+  const workspaceRoot = path.resolve(startPath ?? process.cwd());
+  const resolvedScanDir = path.resolve(scanDir);
+
+  let entries;
+  try {
+    entries = await readdir(resolvedScanDir, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(
+      `Could not read directory ${resolvedScanDir}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  const subDirs = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => path.join(resolvedScanDir, entry.name));
+
+  const skipped: string[] = [];
+  const candidates: string[] = [];
+
+  for (const subDir of subDirs) {
+    if (await looksLikeRepo(subDir)) {
+      candidates.push(subDir);
+    } else {
+      skipped.push(path.basename(subDir));
+    }
+  }
+
+  if (candidates.length === 0) {
+    return {
+      workspaceRoot,
+      scannedDir: resolvedScanDir,
+      registered: [],
+      skipped,
+      failed: []
+    };
+  }
+
+  // Skip workspace init when workspace.json already exists so a re-scan does
+  // not drop previously registered repos.
+  const existingWorkspace = await readJsonFile<unknown>(
+    getArtifactFilePath(workspaceRoot, "workspace")
+  ).catch(() => undefined);
+
+  if (!existingWorkspace) {
+    await service.init({ startPath: workspaceRoot });
+  }
+
+  const registered: string[] = [];
+  const failed: string[] = [];
+
+  for (const subDir of candidates) {
+    const repoName = path.basename(subDir);
+    try {
+      await service.add({ startPath: workspaceRoot, name: repoName, repoPath: subDir });
+      registered.push(repoName);
+    } catch {
+      failed.push(repoName);
+    }
+  }
+
+  return { workspaceRoot, scannedDir: resolvedScanDir, registered, skipped, failed };
+}
+
+function getWorkspaceScanText(result: WorkspaceScanResult): string {
+  return [
+    `${PROJECT_NAME}: workspace scan`,
+    "",
+    `Scanned: ${result.scannedDir}`,
+    `Workspace: ${result.workspaceRoot}`,
+    `Registered: ${result.registered.length}`,
+    ...result.registered.map((name) => `- ${name}`),
+    result.skipped.length > 0
+      ? `Skipped (no project file found): ${result.skipped.join(", ")}`
+      : "",
+    result.failed.length > 0 ? `Failed to register: ${result.failed.join(", ")}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function getWorkspaceText(subcommand: string, result: WorkspaceServiceResult): string {
@@ -3335,6 +3767,7 @@ function isWorkspaceSubcommand(
     value === "list" ||
     value === "add" ||
     value === "remove" ||
+    value === "scan" ||
     value === "index" ||
     value === "search" ||
     value === "impact" ||

@@ -1,21 +1,64 @@
-# Copilot Architect — IntelliJ edition (Phase 1)
+# Copilot Architect — IntelliJ edition (Phase 2)
 
 The IntelliJ shell for Copilot Architect. Kotlin/Gradle, not TypeScript —
 the only package in this monorepo that is, and deliberately kept out of the
 npm workspace's own build (`tsc -b`, `vitest`). It shares the VS Code
 extension's engine, never reimplements it: every dashboard render and every
-future command runs through the same bundled CLI the VS Code extension
-spawns (`CliBridge.kt`), the same Core Rule described in the repo root
-`AGENTS.md`.
+command runs through the same bundled CLI the VS Code extension spawns
+(`CliBridge.kt`), the same Core Rule described in the repo root `AGENTS.md`
+— with one explicit, documented exception for the Setup/Scan orchestration
+logic (see "What Phase 2 adds" below).
 
 ## What Phase 1 is
 
 A single Tool Window that renders the shared dashboard (`packages/dashboard`,
 via the CLI's `dashboard` command) inside a JBCef (embedded Chromium) view,
-themed to the current IntelliJ Look and Feel. Nothing else yet — no chat
-panel, no plan approval, no diff view. Those are later phases; see the
-project's `docs/KNOWN_LIMITATIONS.md` for the plan and for what Phase 1
-deliberately does not cover yet.
+themed to the current IntelliJ Look and Feel. No chat panel, no plan
+approval, no diff view — those are still later phases.
+
+## What Phase 2 adds
+
+Every dashboard action link VS Code exposes, not just the dashboard view:
+
+- **Action row.** The CLI's `dashboard` command now renders Setup Repo,
+  Start & Setup MCP, Stop MCP, Generate Instructions, Open Repo, Scan &
+  Register Sub-repos, Analyze Repo, Build Index, and Build Symbol Graph as
+  `architect-action:<id>` links — a host-neutral scheme this plugin defines
+  and intercepts itself (`ActionLinkInterceptor.kt`), since JCEF has no
+  built-in equivalent to VS Code's webview `command:` URIs. All of them are
+  shown together, flat, rather than the primary-four/"More actions…" split
+  VS Code's quick pick does — the CLI already lays every action out in one
+  place, so a second, IntelliJ-only grouping mechanism would only duplicate
+  that decision.
+- **`ActionDispatcher.kt`** routes each clicked id to `CliBridge` (Setup,
+  Analyze, Build Index, Build Symbol Graph, Generate Instructions, Scan),
+  to a new **`McpProcessManager.kt`** (a project-level service holding this
+  window's own long-lived MCP server `Process` — the same shell-local
+  handle VS Code's `activeMcpProcess` is; a running process can't be
+  reported by a one-shot CLI call, so this manager is the source of truth
+  `DashboardPanel` reads before every render), or to native IntelliJ APIs
+  (`FileChooser` for the folder pickers Scan and Open Repo need,
+  `ProjectUtil.openOrImport` for Open Repo itself) for the two actions that
+  are IDE-native rather than repo intelligence.
+- **`DashboardPanel`** now supplies the MCP status and the last action's
+  outcome back into every render via the CLI's new `--mcp-status`/
+  `--last-command`/`--last-exit-code`/`--last-stdout`/`--last-stderr` flags
+  — a one-shot CLI call has nothing of its own to report honestly here, so
+  this plugin, the long-lived caller, reports it instead.
+
+Two new CLI commands back this, and are general-purpose (any shell could
+use them, not just this one): `workspace scan <dir>` (registers every
+real-repo subdirectory of a folder) and `setup [--workspace]` (the full
+init→analyze→graph→diagnostics→index→mcp-config sequence, single-repo or
+across a whole workspace). They deliberately **reimplement** VS Code's own
+`registerSubRepos`/`setupRepo`/`shouldBuildWorkspaceGraph` rather than share
+them — `vscode-extension/src/index.ts` was left untouched by explicit
+instruction. The two copies can drift; see the repo root `AGENTS.md`'s Core
+Rule section and `docs/KNOWN_LIMITATIONS.md` 4.18 for the full account.
+
+Still open: no chat panel, no plan approval, no diff view — and the Gradle
+build is still unverified in this environment (see below), so none of
+Phase 2's new Kotlin is proven to compile any more than Phase 1's was.
 
 ## Building
 
@@ -58,17 +101,20 @@ Set `COPILOT_ARCHITECT_CLI` to an absolute path to a built
 `packages/cli/dist/index.js` (run `npm run build` at the repo root first).
 Without it, `CliBridge` falls back to a relative dev-checkout path that only
 works when the IDE's working directory happens to be the repo root — a
-known Phase 1 limitation. Packaging a bundled copy of the CLI inside this
-plugin's own distribution, the way the VS Code `.vsix` bundles `cli.mjs`
-(see `scripts/bundle-extension.mjs` and `scripts/package-vsix.mjs`), is
-Phase 2 work.
+known limitation, still open in Phase 2. Packaging a bundled copy of the
+CLI inside this plugin's own distribution, the way the VS Code `.vsix`
+bundles `cli.mjs` (see `scripts/bundle-extension.mjs` and
+`scripts/package-vsix.mjs`), remains later-phase work.
 
-## Known Phase 1 limitations
+## Known limitations
 
-Tracked in the repo root `docs/KNOWN_LIMITATIONS.md` rather than only here,
-so they are not rediscovered:
+Tracked in the repo root `docs/KNOWN_LIMITATIONS.md` (4.17, 4.18) rather
+than only here, so they are not rediscovered:
 
-- Not built/verified in this environment (network policy — see above).
+- Not built/verified in this environment (network policy — see above);
+  still true after Phase 2's new files (`ActionDispatcher.kt`,
+  `McpProcessManager.kt`, `ActionLinkInterceptor.kt`) — `./gradlew build`
+  fails at the identical dependency-resolution point.
 - The CLI entry point is an environment variable + dev-checkout fallback,
   not a bundled copy.
 - `--vscode-*` CSS custom property names are reused verbatim from the
@@ -79,7 +125,15 @@ so they are not rediscovered:
   current IntelliJ theme — IntelliJ has no directly equivalent standardized
   "chart palette" theme key the way VS Code does. They will not adapt to a
   Light theme the way the rest of the dashboard's colors do.
-- No action row (Setup Repo, Build Index, etc.) — the CLI's `dashboard`
-  command renders an empty one, since it does not know this plugin's
-  eventual command/URI scheme. Wiring that is Phase 2.
 - Dashboard only — no chat/plan/diff surface yet.
+- The Setup/Scan orchestration (`workspace scan`/`setup` in `packages/cli`)
+  is an independent reimplementation of VS Code's own
+  `registerSubRepos`/`setupRepo`/`shouldBuildWorkspaceGraph`, not a shared
+  one — see `docs/KNOWN_LIMITATIONS.md` 4.18. The two can drift.
+- `McpProcessManager` discards the MCP server's stdout/stderr rather than
+  streaming them anywhere — VS Code's `outputChannel` shows the same
+  server's logs live; this plugin currently cannot.
+- `--last-stdout`/`--last-stderr` are truncated to 4000 characters before
+  being passed back into the next dashboard render, so a long `setup
+--workspace` run's full output is not fully visible in the "Last command"
+  card.

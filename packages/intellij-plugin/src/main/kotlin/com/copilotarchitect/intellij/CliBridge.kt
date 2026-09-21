@@ -23,8 +23,7 @@ object CliBridge {
     private val timeoutSeconds: Long = 60
 
     fun run(workspaceRoot: String, vararg args: String): CliResult {
-        val (executable, baseArgs) = resolveCli()
-        val command = listOf(executable) + baseArgs + args.toList()
+        val command = buildCommand(args.toList())
 
         return try {
             val process = ProcessBuilder(command)
@@ -53,6 +52,31 @@ object CliBridge {
                 stderr = error.message ?: "Unknown error launching the Copilot Architect CLI"
             )
         }
+    }
+
+    /**
+     * Starts a long-lived CLI process (the MCP server) without waiting for it
+     * to exit and without buffering its output — a persistent server writes
+     * output indefinitely, and holding that pipe open unread would eventually
+     * block it. See `McpProcessManager`, which owns the resulting handle the
+     * same way VS Code's `activeMcpProcess` does.
+     *
+     * PHASE 2 LIMITATION: stdout/stderr are discarded rather than streamed to
+     * an IDE console the way VS Code's `outputChannel` shows them — tracked
+     * in docs/KNOWN_LIMITATIONS.md.
+     */
+    fun spawn(workspaceRoot: String, vararg args: String): Process {
+        val command = buildCommand(args.toList())
+        return ProcessBuilder(command)
+            .directory(File(workspaceRoot))
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+    }
+
+    private fun buildCommand(args: List<String>): List<String> {
+        val (executable, baseArgs) = resolveCli()
+        return listOf(executable) + baseArgs + args
     }
 
     private fun resolveCli(): Pair<String, List<String>> {

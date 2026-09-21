@@ -148,6 +148,13 @@ retrieval rather than calling the indexer, so `@architect` and the MCP tools
 answered the same question differently, and a fix applied to one never reached
 the other. If a shell needs repo intelligence, it imports the service.
 
+One standing, explicitly accepted exception: `vscode-extension`'s own
+Setup/Scan orchestration (`setupRepo`, `registerSubRepos`,
+`shouldBuildWorkspaceGraph`) was left in place rather than extracted when
+the IntelliJ edition needed the same behavior — see item 28 above and
+`docs/KNOWN_LIMITATIONS.md` 4.18 for why, and for the drift risk that
+decision carries.
+
 ## Do Not Build in MVP
 
 - Visual Studio (the IDE) extensions — VSIX here means the **VS Code** package
@@ -279,6 +286,39 @@ the other. If a shell needs repo intelligence, it imports the service.
     hosts are blocked by that environment's network policy, confirmed
     directly rather than assumed) and needs a first real build in CI or on
     a developer machine before anyone relies on it.
+28. IntelliJ edition, Phase 2: every dashboard action link VS Code exposes —
+    Setup Repo, Start & Setup MCP, Stop MCP, Generate Instructions, Open
+    Repo, Scan & Register Sub-repos, Analyze Repo, Build Index, Build
+    Symbol Graph — is now reachable from the IntelliJ dashboard too. The
+    CLI's `dashboard` command renders them as `architect-action:<id>`
+    links, a host-neutral scheme this plugin defines and intercepts itself
+    (`ActionLinkInterceptor.kt`), and gained `--mcp-status`/
+    `--last-command`/`--last-exit-code`/`--last-stdout`/`--last-stderr`
+    flags so a long-lived caller can report its own accurate runtime state
+    into an otherwise one-shot render. Two new general-purpose CLI commands
+    back the orchestrated actions: `workspace scan <dir>` and
+    `setup [--workspace]`, the full init→analyze→graph→diagnostics→
+    index→mcp-config sequence. On the Kotlin side, `ActionDispatcher.kt`
+    routes each id to the CLI, to a new `McpProcessManager.kt` (the
+    project-level handle on this window's own long-lived MCP server
+    process — a process cannot be reported by a one-shot CLI call, so this,
+    not the CLI, is the source of truth `DashboardPanel` reads before every
+    render), or to native IntelliJ APIs (`FileChooser`, `ProjectUtil
+.openOrImport`) for the two actions — Open Repo, Stop MCP — that are
+    IDE-native rather than repo intelligence, the same as their VS Code
+    equivalents.
+
+    **Explicit, accepted Core Rule exception:** VS Code's own
+    `registerSubRepos`/`setupRepo`/`shouldBuildWorkspaceGraph`
+    (`vscode-extension/src/index.ts`) were left completely untouched by
+    deliberate instruction rather than refactored into a shared call both
+    shells make — the CLI's `runSetupCommand`/`shouldBuildWorkspaceGraph`
+    are an independent reimplementation of that same step sequence and
+    skip heuristic, not a shared one, and the two copies can drift. See
+    `docs/KNOWN_LIMITATIONS.md` 4.18 for the full account, including why
+    this is the exact duplication-of-retrieval failure mode this file's own
+    Core Rule section warns about, accepted here explicitly. The Kotlin
+    side remains unverified for the same reason as Phase 1 — see 4.17/4.18.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
