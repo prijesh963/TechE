@@ -281,11 +281,14 @@ decision carries.
     and `tsc -b`/`vitest` have nothing to say to each other. Chat, plan
     approval and diff are later phases; see `docs/KNOWN_LIMITATIONS.md` 4.17
     and `packages/intellij-plugin/README.md` for exactly what Phase 1 does
-    and does not cover, including that the Gradle build itself could not be
-    verified in the sandbox it was written in (JetBrains' distribution
-    hosts are blocked by that environment's network policy, confirmed
-    directly rather than assumed) and needs a first real build in CI or on
-    a developer machine before anyone relies on it.
+    and does not cover. The Gradle build itself could not be verified in
+    the sandbox it was written in (JetBrains' distribution hosts are
+    blocked by that environment's network policy, confirmed directly
+    rather than assumed) — but has since built green in real CI on PR #3,
+    six root-caused fixes later; see `docs/KNOWN_LIMITATIONS.md` 4.19 for
+    the full account and for what a green build does and does not prove
+    (compiles and passes the Plugin Verifier's static checks; nobody has
+    run it inside a real IDE yet).
 28. IntelliJ edition, Phase 2: every dashboard action link VS Code exposes —
     Setup Repo, Start & Setup MCP, Stop MCP, Generate Instructions, Open
     Repo, Scan & Register Sub-repos, Analyze Repo, Build Index, Build
@@ -318,7 +321,8 @@ decision carries.
     `docs/KNOWN_LIMITATIONS.md` 4.18 for the full account, including why
     this is the exact duplication-of-retrieval failure mode this file's own
     Core Rule section warns about, accepted here explicitly. The Kotlin
-    side remains unverified for the same reason as Phase 1 — see 4.17/4.18.
+    side now builds and passes the IntelliJ Plugin Verifier in CI (PR #3) —
+    see 4.19 — but has still never been run inside a real IDE.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.

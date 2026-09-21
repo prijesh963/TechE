@@ -719,7 +719,7 @@ the card says so in place of a number rather than silently reading as zero.
 
 ---
 
-### 4.17 IntelliJ edition, Phase 1: dashboard only, unverified Gradle build
+### 4.17 IntelliJ edition, Phase 1: dashboard only (Gradle build now verified — see 4.19)
 
 **Phase 42.** A second shell, `packages/intellij-plugin` (Kotlin/Gradle),
 alongside the VS Code extension. Phase 1 scope is deliberately narrow — the
@@ -743,22 +743,15 @@ that cannot import TypeScript at all:
 **Known boundaries, by design or by environment, not by oversight:**
 
 - **The Gradle build could not be compiled or verified in the sandbox it
-  was written in.** That environment's egress policy allows Maven Central
-  and the Gradle Plugin Portal (so the Kotlin and IntelliJ Platform Gradle
-  plugins resolve) but returns 403 for every JetBrains-owned host
-  (`cache-redirector.jetbrains.com`, `www.jetbrains.com`,
-  `plugins.jetbrains.com`) — confirmed directly with `curl` before writing
-  a single line of Kotlin, not assumed after the fact. `./gradlew build`
-  there gets exactly as far as `Could not resolve all dependencies for
-configuration ':compileClasspath': No IntelliJ Platform dependency
-found.` — i.e. it never reaches compiling a single `.kt` file. The Kotlin
-  sources lean on plain `javax.swing.UIManager`/`java.awt.Color` rather
-  than less certain IntelliJ Platform SDK convenience methods specifically
-  to reduce the odds of an uncaught API mistake (see `ThemeColors.kt`), but
-  none of it is proven to compile yet — `.github/workflows/intellij-ci.yml`
-  (path-filtered, targets the `intellij-main` branch) is the first place
-  that will actually try, since GitHub-hosted runners are not behind this
-  restriction.
+  was written in** — that environment's egress policy returns 403 for
+  every JetBrains-owned host, confirmed directly with `curl` before
+  writing a single line of Kotlin, not assumed after the fact. This was
+  the state of things until PR #3's own CI actually built it, six fixes
+  later — see 4.19 for the full account. The Kotlin sources lean on plain
+  `javax.swing.UIManager`/`java.awt.Color` rather than less certain
+  IntelliJ Platform SDK convenience methods specifically to reduce the
+  odds of an uncaught API mistake (see `ThemeColors.kt`); that bet paid
+  off — none of the six real build failures CI found were in this file.
 - **No bundled CLI.** `CliBridge` resolves the CLI from a
   `COPILOT_ARCHITECT_CLI` environment variable or a relative dev-checkout
   path — there is no analogue yet to how the VS Code `.vsix` bundles
@@ -775,17 +768,16 @@ found.` — i.e. it never reaches compiling a single `.kt` file. The Kotlin
   theme the way the rest of the dashboard's colors, which are genuinely
   theme-derived, do.
 - **Dashboard only.** No chat, plan approval, or diff surface — those are
-  later phases; a real Tool Window UI for them needs the Gradle build
-  actually verified first.
+  later phases.
 
-**Cost:** the Gradle-build gap is the one that matters — everything else is
-a small, explicit, and reversible scope cut. Do not treat any of this
-Kotlin code as working until it has compiled somewhere with real network
-access.
+**Cost:** was the Gradle-build gap, now closed — see 4.19. Everything else
+above is a small, explicit, and reversible scope cut. A green CI build is
+not the same claim as a developer having clicked through the plugin in a
+real IDE, which still has not happened; treat that gap as open.
 
 ---
 
-### 4.18 IntelliJ edition, Phase 2: action row wired, orchestration duplicated by explicit decision, still unverified
+### 4.18 IntelliJ edition, Phase 2: action row wired, orchestration duplicated by explicit decision (Kotlin now CI-verified — see 4.19)
 
 **Phase 43.** Every dashboard action link VS Code exposes — Setup Repo,
 Start & Setup MCP, Stop MCP, Generate Instructions, Open Repo, Scan &
@@ -807,9 +799,10 @@ reachable from the IntelliJ dashboard, closing the "No action buttons" gap
   `--last-exit-code`/`--last-stdout`/`--last-stderr` flags, since a one-shot
   CLI render has no running process or command history of its own to
   report honestly — a long-lived caller (this plugin) supplies its own.
-- **Kotlin side (unverified — see 4.17; the network block is unchanged):**
-  `ActionLinkInterceptor.kt` intercepts `architect-action:` navigation on
-  the JBCefBrowser; `ActionDispatcher.kt` routes each id to `CliBridge` (for
+- **Kotlin side (compiles and passes the IntelliJ Plugin Verifier in CI as
+  of 4.19; still never run inside an actual IDE):** `ActionLinkInterceptor.kt`
+  intercepts `architect-action:` navigation on the JBCefBrowser;
+  `ActionDispatcher.kt` routes each id to `CliBridge` (for
   `setup`/`analyze`/`index`/`graph`/`instructions generate`/`workspace
 scan`), to a new `McpProcessManager.kt` (a project-level service holding
   the long-lived `mcp` server `Process` handle — the same shell-local state
@@ -819,12 +812,9 @@ scan`), to a new `McpProcessManager.kt` (a project-level service holding
   Open Repo itself, reusing the current window to match VS Code's own
   `forceNewWindow: false`). `DashboardPanel` now supplies `McpProcessManager`
   status and the last action's outcome back into every render via the new
-  CLI flags. `./gradlew build --offline` was re-run after writing all of
-  this and fails at the identical point as 4.17 (`No IntelliJ Platform
-dependency found`) — confirming the build script and file layout are
-  intact, but not that a single one of these new `.kt` files actually
-  compiles. Treat all of it as unproven until CI or a developer machine
-  builds it.
+  CLI flags. One real API mistake surfaced by CI and fixed in this chain:
+  `ProjectUtil.openOrImport`'s second parameter is an `OpenProjectTask`,
+  not a `Project` — the original line was never a valid overload; see 4.19.
 
 **Deliberate duplication, not a silent Core Rule violation.** VS Code's
 `registerSubRepos`/`setupRepo`/`shouldBuildWorkspaceGraph` (in
@@ -863,9 +853,91 @@ rather than repeated by accident.
   grouping mechanism on top of that would only duplicate a decision already
   made rather than add anything.
 
-**Cost:** the Gradle-build gap from 4.17 is unchanged and still the one that
-matters most. New on top of it: two orchestration implementations that can
-silently diverge, and an MCP server whose logs this plugin cannot yet show.
+**Cost:** the Gradle-build gap from 4.17 is now closed (4.19). What remains:
+two orchestration implementations that can silently diverge, and an MCP
+server whose logs this plugin cannot yet show.
+
+---
+
+### 4.19 IntelliJ edition: Gradle build verified green in CI, six real fixes deep
+
+**PR #3** (`intellij-main` → `main`, opened for review and CI verification,
+not yet merged). Every fix below was root-caused from an actual CI failure
+on this PR's own commits — none guessed ahead of time, none accepted
+without CI confirming the _next_ failure was a different one. This sandbox
+still cannot build the plugin itself (JetBrains' distribution hosts remain
+403 here, reconfirmed at each step); every fix that follows was verified
+only as far as "the Gradle Kotlin DSL resolves with no unresolved
+reference" locally, then proven for real by the next CI run.
+
+In order, each one blocking the next:
+
+1. **`bundledPlugin("com.intellij.modules.platform")`** — a core platform
+   _module_, already provided by `create("IC", ...)` and correctly declared
+   via `plugin.xml`'s own `<depends>`, requested again as if it were a
+   separately-packaged plugin with its own JAR. CI: `Could not find bundled
+plugin with ID: 'com.intellij.modules.platform'`. Removed the line.
+2. **`ProjectUtil.openOrImport`'s second parameter** — the code called it
+   with a `Project`; the real signature takes an `OpenProjectTask`. CI:
+   `compileKotlin` — `Argument type mismatch`. This is the one defect that
+   was actually wrong Kotlin, not Gradle configuration; every other fix in
+   this chain was a build-script gap.
+3. **JVM target mismatch** — `sourceCompatibility`/`jvmToolchain` were 17;
+   IntelliJ Platform 2024.2 (the `sinceBuild "242"` already declared) runs
+   on JBR 21. CI's own `verifyPluginProjectConfiguration` named the
+   mismatch directly. Bumped `build.gradle.kts` and the CI workflow's
+   `actions/setup-java` to 21 together — fixing one without the other would
+   have just traded a 17-vs-required mismatch for a 21-vs-installed one.
+4. **Missing `instrumentationTools()`/`intellijDependencies()`** —
+   `:instrumentCode` (NotNull assertions etc.) needs a Java Compiler
+   dependency neither the repository nor dependency block supplied. CI:
+   `No Java Compiler dependency found`, naming the exact two-line fix.
+5. **Missing `pluginVerifier()`** — `:verifyPlugin` (pulled into plain
+   `build` via its `check` dependency, not only the workflow's separate
+   `verifyPlugin` step) had no verifier CLI to run. CI named this fix too.
+6. **Missing `pluginVerification { ides { recommended() } }`** — the
+   verifier now existed but had no IDE version to check the plugin against.
+   `recommended()` derives the list from `sinceBuild`/`untilBuild` rather
+   than a hand-picked version to keep in sync separately.
+7. **Plugin ID contained "intellij"** — the first failure that was a real,
+   substantive Marketplace policy finding rather than a build-script gap:
+   the Plugin Verifier had, by this point, successfully downloaded and run
+   against a real IDE build (2024.2.6) and reported `The plugin ID
+'com.copilotarchitect.intellij' should not include the word 'intellij'`.
+   Renamed the `<id>` (only the id — not the Kotlin package, which is
+   unrestricted) to `com.copilotarchitect.architect`, matching the
+   `@architect` name used everywhere else in this product.
+
+After fix 7, all four PR checks passed: `build` (both the `push`- and
+`pull_request`-triggered runs of `intellij-ci.yml`), `test`, and
+`release-check`. `:compileKotlin`, `:compileJava`, `:classes`,
+`:instrumentCode`, `:buildPlugin`, and `:verifyPlugin` all completed
+without error on a GitHub-hosted runner with real network access.
+
+**What this does and does not prove:**
+
+- **Proven:** the Kotlin compiles; the plugin assembles into an installable
+  `.zip`; the assembled plugin passes the IntelliJ Plugin Verifier's static
+  checks against a real 2024.2.x IDE build. This is a materially stronger
+  claim than 4.17/4.18 could make before this PR — "the build script is
+  intact" versus "the plugin actually builds."
+- **Not proven:** nobody has installed this plugin into a running IDE and
+  clicked anything. `runIde` was never attempted (a full IDE sandbox launch
+  is a different, heavier CI job than a headless `build`/`verifyPlugin`).
+  Every claim in 4.18 about _runtime behavior_ — the action-link
+  interception actually firing, `McpProcessManager` actually holding a
+  live process, the folder pickers actually opening — is still unverified
+  the way it always was. A static verifier catches a wrong method
+  signature; it does not catch a wrong assumption about which thread a
+  JCEF callback runs on, or `OpenProjectTask`'s parameter names being
+  subtly different from what fix 2 assumed under time pressure (`compileKotlin`
+  succeeding confirms the _types_ line up, not that `projectToClose`/
+  `forceOpenInNewFrame` are the parameter names that actually produce the
+  intended "reuse this window" behavior at runtime).
+
+**Cost:** the gap that mattered most in 4.17/4.18 — "nobody knows if this
+compiles" — is closed. What is left is exactly the gap a green CI build
+can never close on its own: a human running the actual plugin.
 
 ---
 

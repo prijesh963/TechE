@@ -1,4 +1,4 @@
-# Copilot Architect — IntelliJ edition (Phase 2)
+# Copilot Architect — IntelliJ edition (Phase 2, build verified in CI)
 
 The IntelliJ shell for Copilot Architect. Kotlin/Gradle, not TypeScript —
 the only package in this monorepo that is, and deliberately kept out of the
@@ -56,9 +56,8 @@ them — `vscode-extension/src/index.ts` was left untouched by explicit
 instruction. The two copies can drift; see the repo root `AGENTS.md`'s Core
 Rule section and `docs/KNOWN_LIMITATIONS.md` 4.18 for the full account.
 
-Still open: no chat panel, no plan approval, no diff view — and the Gradle
-build is still unverified in this environment (see below), so none of
-Phase 2's new Kotlin is proven to compile any more than Phase 1's was.
+Still open: no chat panel, no plan approval, no diff view. The Gradle build
+itself is no longer unverified — see "Building" below.
 
 ## Building
 
@@ -71,29 +70,45 @@ Requires network access to Maven Central (for the Kotlin/Gradle plugin
 toolchain) **and** to JetBrains' own distribution hosts (`cache-redirector
 .jetbrains.com`, `www.jetbrains.com`/`data.services.jetbrains.com`, `plugins
 .jetbrains.com`) — the `intellijPlatform { create("IC", "2024.2.3") }`
-dependency resolves the actual IDE distribution from there. **This could not be built or verified in the sandbox this plugin was
-scaffolded in.** That environment's egress policy allows Maven Central and
-the Gradle Plugin Portal (so the Kotlin and IntelliJ Platform _Gradle_
-plugins themselves resolve fine) but returns 403 for every JetBrains-owned
-host (`cache-redirector.jetbrains.com`, `www.jetbrains.com`,
-`plugins.jetbrains.com`) — confirmed directly with `curl` before writing
-this plugin, not assumed. `./gradlew build` there gets as far as evaluating
-the build script, then fails at dependency resolution:
+dependency resolves the actual IDE distribution from there.
 
-```
-Could not determine the dependencies of task ':compileJava'.
-> Could not resolve all dependencies for configuration ':compileClasspath'.
-   > No IntelliJ Platform dependency found.
-```
+**This has never been built in the sandbox this plugin was scaffolded and
+developed in** — that environment's egress policy returns 403 for every
+JetBrains-owned host, confirmed directly with `curl`, both when this plugin
+was first scaffolded and again after every fix below. `./gradlew build`
+there gets only as far as evaluating the build script, then fails at
+dependency resolution (`No IntelliJ Platform dependency found` — it never
+reaches compiling a single Kotlin file).
 
-— i.e. it never reaches compiling a single Kotlin file, because the IDE
-distribution itself (`create("IC", "2024.2.3")`) has nowhere reachable to
-resolve from. The Kotlin sources are written against APIs believed correct
-(plain `javax.swing.UIManager` was deliberately preferred over less certain
-IntelliJ Platform SDK convenience methods for exactly this reason — see
-`ThemeColors.kt`), but treat all of it as an unverified first pass — not
-proven to compile — until it has actually built somewhere with real network
-access: CI, or a developer machine.
+**It has been built successfully, though — on GitHub Actions, via
+[PR #3](https://github.com/prijesh963/TechE/pull/3)'s own CI
+(`.github/workflows/intellij-ci.yml`), which runs on a GitHub-hosted runner
+without this sandbox's network restriction.** Getting there took six
+rounds of real, CI-diagnosed fixes — a wrong Gradle dependency, one actual
+Kotlin type error (`ProjectUtil.openOrImport`'s second argument), a JVM
+version mismatch, two missing IntelliJ Plugin Verifier dependencies, and a
+plugin ID that violated JetBrains Marketplace naming policy. The full,
+one-by-one account — what CI reported, what was changed, and how each fix
+was (and was not) verifiable in this sandbox — is
+`docs/KNOWN_LIMITATIONS.md` §4.19. As of PR #3's current head, `build`,
+`test`, and `release-check` are all green: the plugin compiles, assembles
+into an installable `.zip`, and passes the IntelliJ Plugin Verifier's
+static checks against a real 2024.2.x IDE build.
+
+**What is still not verified: nobody has run `./gradlew runIde` and
+actually clicked anything.** A green `build`/`verifyPlugin` is a static
+guarantee — the code compiles and the plugin descriptor is well-formed. It
+says nothing about whether `ActionLinkInterceptor` actually intercepts a
+click at runtime, whether `McpProcessManager` actually holds a working
+process handle, or whether `OpenProjectTask(projectToClose = ...,
+forceOpenInNewFrame = ...)`'s parameter names — chosen without being able
+to check the real API — happen to produce the intended behavior rather
+than merely type-checking. The Kotlin sources still lean on plain
+`javax.swing.UIManager` over less certain IntelliJ Platform SDK convenience
+methods for the same reason as before (see `ThemeColors.kt`): a compile-time
+guarantee is worth more than a runtime one this sandbox cannot check either
+way. Treat "it builds" and "it works" as two separate claims — only the
+first one is now backed by evidence.
 
 ## Pointing it at a built CLI
 
@@ -108,13 +123,16 @@ bundles `cli.mjs` (see `scripts/bundle-extension.mjs` and
 
 ## Known limitations
 
-Tracked in the repo root `docs/KNOWN_LIMITATIONS.md` (4.17, 4.18) rather
-than only here, so they are not rediscovered:
+Tracked in the repo root `docs/KNOWN_LIMITATIONS.md` (4.17, 4.18, 4.19)
+rather than only here, so they are not rediscovered:
 
-- Not built/verified in this environment (network policy — see above);
-  still true after Phase 2's new files (`ActionDispatcher.kt`,
-  `McpProcessManager.kt`, `ActionLinkInterceptor.kt`) — `./gradlew build`
-  fails at the identical dependency-resolution point.
+- Still not buildable in this development sandbox (network policy — see
+  above); this no longer means "unverified" — CI has built it — only that
+  this particular environment cannot reproduce that result locally.
+- Never run inside a real IDE (`runIde`) — a green `build`/`verifyPlugin`
+  proves the code compiles and the plugin descriptor is valid, not that any
+  of it behaves correctly at runtime. See §4.19's "What this does and does
+  not prove."
 - The CLI entry point is an environment variable + dev-checkout fallback,
   not a bundled copy.
 - `--vscode-*` CSS custom property names are reused verbatim from the
