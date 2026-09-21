@@ -82,6 +82,7 @@ import {
   CLI_COMMANDS,
   COPILOT_ARCHITECT_VERSION,
   CURRENT_SCHEMA_VERSION,
+  type CrossRepoInterlink,
   type DiagnosticReport,
   type CliCommandName,
   PROJECT_NAME,
@@ -3110,13 +3111,16 @@ function getDiagnosticsText(result: RepoReadinessReport): string {
     ),
     "",
     "Cross-repo interlinks:",
-    ...listOrNone(
-      analysis.interlinks.map(
-        (interlink) =>
-          `${interlink.fromRepo} calls ${interlink.method} ${interlink.path} (\`${interlink.fromFile}\`) -> ${interlink.toRepo} (\`${interlink.toFile}\`) [${interlink.confidence}]`
-      )
-    )
+    ...listOrNone(analysis.interlinks.map(describeInterlink))
   ].join("\n");
+}
+
+function describeInterlink(interlink: CrossRepoInterlink): string {
+  if (interlink.kind === "messaging") {
+    return `${interlink.fromRepo} produces to ${interlink.method} "${interlink.path}" (\`${interlink.fromFile}\`) -> ${interlink.toRepo} consumes it (\`${interlink.toFile}\`) [${interlink.confidence}]`;
+  }
+
+  return `${interlink.fromRepo} calls ${interlink.method} ${interlink.path} (\`${interlink.fromFile}\`) -> ${interlink.toRepo} (\`${interlink.toFile}\`) [${interlink.confidence}]`;
 }
 
 function listOrNone(values: string[]): string[] {

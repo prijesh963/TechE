@@ -1,3 +1,5 @@
+import type { CrossRepoInterlink } from "@copilot-architect/shared";
+
 import type { FeaturePlanArtifact, PlanRevisionEntry } from "./models.js";
 
 export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
@@ -67,12 +69,7 @@ export function renderFeaturePlanMarkdown(plan: FeaturePlanArtifact): string {
     ),
     "",
     "## Cross-Repo Interlinks",
-    renderBullets(
-      plan.advancedAnalysis.interlinks.map(
-        (interlink) =>
-          `${interlink.fromRepo} calls ${interlink.method} ${interlink.path} (\`${interlink.fromFile}\`) -> ${interlink.toRepo} (\`${interlink.toFile}\`) [${interlink.confidence}]`
-      )
-    ),
+    renderBullets(plan.advancedAnalysis.interlinks.map(describeInterlink)),
     "",
     "## Endpoints To Touch",
     renderBullets(
@@ -209,6 +206,14 @@ function renderBullets(values: string[]): string {
 // Absent for single-repo analysis, so a single-repo plan reads unchanged.
 function withRepoPrefix(repoName: string | undefined): string {
   return repoName ? `${repoName}: ` : "";
+}
+
+function describeInterlink(interlink: CrossRepoInterlink): string {
+  if (interlink.kind === "messaging") {
+    return `${interlink.fromRepo} produces to ${interlink.method} "${interlink.path}" (\`${interlink.fromFile}\`) -> ${interlink.toRepo} consumes it (\`${interlink.toFile}\`) [${interlink.confidence}]`;
+  }
+
+  return `${interlink.fromRepo} calls ${interlink.method} ${interlink.path} (\`${interlink.fromFile}\`) -> ${interlink.toRepo} (\`${interlink.toFile}\`) [${interlink.confidence}]`;
 }
 
 function renderNumbered(values: string[]): string {

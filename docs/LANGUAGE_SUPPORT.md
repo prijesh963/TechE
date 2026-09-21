@@ -195,6 +195,17 @@ Feature Planner, FeatureImplementer and CodeReviewer agents are instructed to
 treat message payloads, REST contracts, persisted schemas and micro-frontend
 exposed modules as published contracts when a change touches them.
 
+In a multi-repo workspace, a plan also gets `AdvancedAnalysis.interlinks`: an
+HTTP client call in one registered repo whose literal path matches a route
+in a different one, and a message producer in one repo whose literal
+topic/queue/destination name and broker match a consumer in a different one
+(Kafka, RabbitMQ, and JMS — the API IBM MQ and ActiveMQ are also normally
+driven through in Java). Both are evidence-based path/name matches, not
+runtime confirmation, and both read literal strings only — a topic name held
+in a constant rather than repeated as a string literal is invisible to it,
+the most common real-world miss. See `docs/KNOWN_LIMITATIONS.md` 4.14 for the
+full list of what each does and does not catch.
+
 ### Validated against
 
 Detection was checked against real public repositories rather than only

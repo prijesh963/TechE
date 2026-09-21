@@ -9,7 +9,7 @@ was left. Items resolved by a later phase are listed in
 [Closed](#closed-by-a-later-phase) rather than deleted, so the record stays
 honest about what was traded and when.
 
-**Status:** Phases 0–38 merged. The redesign is complete; what is below is
+**Status:** Phases 0–39 merged. The redesign is complete; what is below is
 the backlog it leaves behind.
 
 ---
@@ -553,11 +553,11 @@ built on a guess; the detection mechanism is ready and costs about fifteen
 lines once those markers exist, the same size as each of the nine signals
 already in `integration-detector.ts`.
 
-### 4.14 Cross-repo interlinks are code-level and HTTP-route only
+### 4.14 Cross-repo interlinks are code-level and evidence-based, not runtime
 
-**Pre-phase, surfaced assessing Phase 36, HTTP-route matching closed in
-Phase 37.** "Interlinks between repos" was checked directly rather than
-assumed. What works:
+**Pre-phase, surfaced assessing Phase 36. HTTP-route matching closed Phase
+37, messaging matching closed Phase 39.** "Interlinks between repos" was
+checked directly rather than assumed. What works:
 
 - A relative import that crosses from one registered repo's folder into
   another's resolves in the symbol graph exactly like an in-repo import, and
@@ -565,12 +565,21 @@ assumed. What works:
 - An HTTP client call in one repo — `axios.get(...)`, `fetch(...)`,
   `requests.get(...)`, an OpenFeign client method — whose literal path
   matches a route detected in a _different_ registered repo is reported as
-  an `AdvancedAnalysis.interlinks` entry, tagged with both repos, the calling
-  and exposing file, and a confidence based on whether the HTTP methods
-  agree. A `@FeignClient` interface's own `@GetMapping`-style annotations are
-  read as the call they are, not misreported as a route the calling repo
-  itself exposes — the pre-Phase-37 behavior, since `detectSpringRoutes` had
-  no reason yet to tell the two apart.
+  an `AdvancedAnalysis.interlinks` entry (`kind: "http-route"`), tagged with
+  both repos, the calling and exposing file, and a confidence based on
+  whether the HTTP methods agree. A `@FeignClient` interface's own
+  `@GetMapping`-style annotations are read as the call they are, not
+  misreported as a route the calling repo itself exposes — the
+  pre-Phase-37 behavior, since `detectSpringRoutes` had no reason yet to
+  tell the two apart.
+- A producer in one repo — a kafkajs/kafka-python `.send(...)`, a Spring
+  `kafkaTemplate.send(...)`, an amqplib/pika/Spring-AMQP publish, a Spring
+  `jmsTemplate.convertAndSend(...)` (the API IBM MQ and ActiveMQ are also
+  normally driven through in Java) — whose literal topic/queue/destination
+  name and broker match a consumer detected in a _different_ registered
+  repo is reported as an interlink (`kind: "messaging"`), confidence always
+  `"high"` since a broker+channel match has no second discriminator like
+  HTTP's verb to lower it against.
 
 What still does not work:
 
@@ -579,25 +588,29 @@ What still does not work:
   the same "external specifiers are left unresolved" rule that applies
   in-repo applies here too, since nothing distinguishes "external" from
   "another of our own repos published as a package."
-- Messaging interlinks — a Kafka producer in one repo reaching a consumer in
-  another, an IBM MQ/JMS/RabbitMQ pairing — are not matched at all. Topic and
-  queue names are not currently extracted anywhere (`IntegrationInfo.evidence`
-  is file paths, not the topic string itself), so there is no data yet for a
-  matcher to compare, unlike the route case.
-- Matching is by normalized path and HTTP method only, with no runtime
-  evidence: a path built from a variable base URL (`` `${apiBase}/invoices` ``)
-  is invisible to it, and two repos that happen to expose the same generic
-  path (`/health`) without actually calling each other would be reported as
-  linked. Confidence is lowered, not withheld, when the HTTP methods disagree
-  or are unknown — a developer still has to read the two call sites to be
-  sure.
+- Both matchers read literal string arguments only. A path built from a
+  variable base URL (`` `${apiBase}/invoices` ``) or a topic name held in a
+  constant (`kafkaTemplate.send(ORDER_TOPIC, ...)`) is invisible to either —
+  common in real Kafka code, where topic names are usually named constants
+  rather than repeated string literals. Two repos that happen to share a
+  generic path (`/health`) or channel name without actually talking to each
+  other would be reported as linked either way.
+- Messaging detection covers one client library per language per broker
+  (kafkajs, amqplib, pika, kafka-python/confluent-kafka, Spring
+  Kafka/AMQP/JMS) — a different client (Node's `amqp-connection-manager`,
+  Python's `confluent_kafka` admin API variants, a raw `javax.jms` producer
+  without Spring's `JmsTemplate`) is not matched, consistent with the same
+  "one representative pattern per framework" scope the route detectors
+  already have.
 
-**Cost:** a plan touching a message payload or queue contract still gets no
-cross-repo producer/consumer surfaced automatically. Extracting topic/queue
-names per broker (Kafka's `@KafkaListener(topics = ...)`/`kafkaTemplate.send`,
-similar shapes for the other four messaging integrations already detected) is
-the natural next step, and is the same kind of work Phase 37 did for routes —
-new extraction plus a comparison pass, no parser changes.
+**Cost:** a plan touching a contract shared across repos — a REST endpoint,
+a message payload — now gets its callers/consumers surfaced automatically
+for the common cases above; the constant-based topic name is the biggest
+remaining real-world gap, since it is closer to the norm than the exception
+in idiomatic Kafka code. Reading a constant's value would need resolving it
+back to its declaration, the same class of work as the call-graph's
+local-variable resolution (closed 4.15), applied to string constants
+instead of types.
 
 ### 4.15 Call-graph instance/local-variable resolution, closed with remaining edges
 
@@ -783,25 +796,26 @@ Fixing it means threading the actual invocation through `getHelpText` and
 
 Kept so the record shows what was traded and when.
 
-| Limitation                                                                                                                            | Raised    | Closed                                                                                                        |
-| ------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------- |
-| `resetIndexFreshnessCache` exported but unwired                                                                                       | pre-phase | Phase 0 — `.git/HEAD` checked before the cache                                                                |
-| Plan body opaque in the session                                                                                                       | Phase 1   | Phase 2 — `PlanContract`                                                                                      |
-| Nothing builds a plan contract end to end                                                                                             | Phase 2   | Phase 4a                                                                                                      |
-| `checkConstraints` never called against `plannedPaths`                                                                                | Phase 2   | Phase 4b                                                                                                      |
-| `runAgenticPlanLoop` — a third retrieval mechanism                                                                                    | Phase 3   | Phase 4a                                                                                                      |
-| No checkpoint captured                                                                                                                | Phase 4a  | Phase 4b                                                                                                      |
-| Two tokenizers that had to be fixed twice                                                                                             | pre-phase | Phase 3 — one exported tokenizer                                                                              |
-| Extension unusable without a monorepo clone                                                                                           | pre-phase | Phase 7 — CLI bundled into the VSIX                                                                           |
-| Generated artifacts named deleted agents                                                                                              | Phase 5   | Phase 8 — `CHAT_COMMANDS` as one source                                                                       |
-| `AGENTS.md` behind the built product                                                                                                  | Phase 2   | Phase 8 — rewritten against measured figures                                                                  |
-| No solution overview on main                                                                                                          | Phase 6   | Phase 8 — written with re-measured numbers                                                                    |
-| Phase 6 entries misfiled under documentation debt                                                                                     | Phase 6   | Phase 8 — refiled under correctness edges                                                                     |
-| Dashboard showed artifacts, never the session                                                                                         | Phase 4a  | Phase 9 — Current work card, read via `peek`                                                                  |
-| Nothing ever called `recordDecision`                                                                                                  | Phase 1   | Phase 9 — proposals confirmed from `/create-plan`                                                             |
-| A change of mind left two decisions active                                                                                            | Phase 9   | Phase 10 — proposals carry what they replace                                                                  |
-| `templates/agents/` left empty after Phase 5                                                                                          | Phase 5   | Phase 8 — directory removed                                                                                   |
-| Test suite leaked a temp directory per fixture                                                                                        | Phase 28  | Phase 31 — one temp root per run, removed at end                                                              |
-| `AdvancedAnalysisService.analyze()` only ever read `repoMap.repos[0]`, silently ignoring every other registered repo                  | pre-phase | Phase 36 — every repo is analyzed and tagged with `repoName`                                                  |
-| No cross-repo HTTP-route interlink matching; a `@FeignClient`'s own mappings misread as a route it exposes                            | pre-phase | Phase 37 — outbound calls matched to routes in other repos, Feign calls no longer misread as routes           |
-| Call-graph resolution never bound a receiver variable to its declared type, so a field/local/parameter call site was silently dropped | pre-phase | Phase 38 — field, constructor-param-property, parameter, and local-variable types resolved in both extractors |
+| Limitation                                                                                                                            | Raised    | Closed                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `resetIndexFreshnessCache` exported but unwired                                                                                       | pre-phase | Phase 0 — `.git/HEAD` checked before the cache                                                                                        |
+| Plan body opaque in the session                                                                                                       | Phase 1   | Phase 2 — `PlanContract`                                                                                                              |
+| Nothing builds a plan contract end to end                                                                                             | Phase 2   | Phase 4a                                                                                                                              |
+| `checkConstraints` never called against `plannedPaths`                                                                                | Phase 2   | Phase 4b                                                                                                                              |
+| `runAgenticPlanLoop` — a third retrieval mechanism                                                                                    | Phase 3   | Phase 4a                                                                                                                              |
+| No checkpoint captured                                                                                                                | Phase 4a  | Phase 4b                                                                                                                              |
+| Two tokenizers that had to be fixed twice                                                                                             | pre-phase | Phase 3 — one exported tokenizer                                                                                                      |
+| Extension unusable without a monorepo clone                                                                                           | pre-phase | Phase 7 — CLI bundled into the VSIX                                                                                                   |
+| Generated artifacts named deleted agents                                                                                              | Phase 5   | Phase 8 — `CHAT_COMMANDS` as one source                                                                                               |
+| `AGENTS.md` behind the built product                                                                                                  | Phase 2   | Phase 8 — rewritten against measured figures                                                                                          |
+| No solution overview on main                                                                                                          | Phase 6   | Phase 8 — written with re-measured numbers                                                                                            |
+| Phase 6 entries misfiled under documentation debt                                                                                     | Phase 6   | Phase 8 — refiled under correctness edges                                                                                             |
+| Dashboard showed artifacts, never the session                                                                                         | Phase 4a  | Phase 9 — Current work card, read via `peek`                                                                                          |
+| Nothing ever called `recordDecision`                                                                                                  | Phase 1   | Phase 9 — proposals confirmed from `/create-plan`                                                                                     |
+| A change of mind left two decisions active                                                                                            | Phase 9   | Phase 10 — proposals carry what they replace                                                                                          |
+| `templates/agents/` left empty after Phase 5                                                                                          | Phase 5   | Phase 8 — directory removed                                                                                                           |
+| Test suite leaked a temp directory per fixture                                                                                        | Phase 28  | Phase 31 — one temp root per run, removed at end                                                                                      |
+| `AdvancedAnalysisService.analyze()` only ever read `repoMap.repos[0]`, silently ignoring every other registered repo                  | pre-phase | Phase 36 — every repo is analyzed and tagged with `repoName`                                                                          |
+| No cross-repo HTTP-route interlink matching; a `@FeignClient`'s own mappings misread as a route it exposes                            | pre-phase | Phase 37 — outbound calls matched to routes in other repos, Feign calls no longer misread as routes                                   |
+| Call-graph resolution never bound a receiver variable to its declared type, so a field/local/parameter call site was silently dropped | pre-phase | Phase 38 — field, constructor-param-property, parameter, and local-variable types resolved in both extractors                         |
+| No cross-repo messaging interlink matching (Kafka/RabbitMQ/JMS producer-consumer pairing)                                             | pre-phase | Phase 39 — literal topic/queue names matched by broker across repos for kafkajs/kafka-python, amqplib/pika, and Spring Kafka/AMQP/JMS |

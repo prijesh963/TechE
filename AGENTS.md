@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 536 tests
+├── tests/               48 files, 541 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -217,15 +217,21 @@ the other. If a shell needs repo intelligence, it imports the service.
     silently invisible to some of them, which is exactly Cucumber's common
     shape. Also recognizes `.feature` files and the JUnit/TestNG
     `SomethingTests.java` suffix convention.
-24. Cross-repo HTTP-route interlink matching: an HTTP client call
-    (`axios`/`fetch`/`requests`, an OpenFeign client method) whose literal
-    path matches a route exposed by a *different* registered repo is reported
-    in `AdvancedAnalysis.interlinks`, tagged with both repos and a confidence
-    based on HTTP-method agreement. A `@FeignClient` interface's own
-    `@GetMapping`-style annotations are read as the call they are, not
-    misreported as a route the calling repo itself exposes. Messaging
-    interlinks (Kafka producer/consumer, etc.) are not yet matched — see
-    `docs/KNOWN_LIMITATIONS.md` 4.14.
+24. Cross-repo interlink matching, both reported in
+    `AdvancedAnalysis.interlinks`, tagged with both repos:
+    - HTTP-route: an HTTP client call (`axios`/`fetch`/`requests`, an
+      OpenFeign client method) whose literal path matches a route exposed by
+      a *different* registered repo, confidence based on HTTP-method
+      agreement. A `@FeignClient` interface's own `@GetMapping`-style
+      annotations are read as the call they are, not misreported as a route
+      the calling repo itself exposes.
+    - Messaging: a producer (kafkajs/kafka-python, amqplib/pika, Spring
+      Kafka/AMQP/JMS) whose literal topic/queue/destination name and broker
+      match a consumer in a *different* registered repo — Kafka, RabbitMQ,
+      and JMS (the API IBM MQ and ActiveMQ are also normally driven through
+      in Java). A topic name held in a constant rather than a repeated
+      string literal is not followed — see `docs/KNOWN_LIMITATIONS.md` 4.14
+      for the full list of what each matcher does and does not catch.
 25. Symbol-graph call resolution through a field, a constructor parameter
     property, a plain parameter, or a local variable — not only a bare
     identifier or a single-level property access. `this.repo.save(...)` and
@@ -368,7 +374,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 536 tests must pass before merging.
+Use Vitest. All 541 tests must pass before merging.
 
 Cover:
 
@@ -408,6 +414,10 @@ Cover:
 - cross-repo HTTP-route interlinks (an outbound call matched to a route in a
   different repo; a same-repo match not reported as an interlink; a
   `@FeignClient`'s own mappings excluded from the routes it exposes)
+- cross-repo messaging interlinks (Kafka producer matched to a consumer in
+  another repo across kafkajs and Spring Kafka; RabbitMQ across Java and
+  Python; JMS covering IBM MQ/ActiveMQ's own API; a different channel name
+  not matched; a same-repo producer/consumer pair not reported)
 - feature planning (JSON + Markdown output)
 - integration detection (datastore/messaging/micro-frontend/microservice/
   orchestration/monorepo-tooling/test-automation, by content and by

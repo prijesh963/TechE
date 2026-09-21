@@ -228,23 +228,33 @@ export interface AdvancedAnalysis extends GeneratedArtifact {
   /** Recency/frequency signal from git history. Empty when the repo has no
    *  `.git` directory, git is unavailable, or the history is empty. */
   gitActivity: FileChangeActivity[];
-  /** A call site in one registered repo whose literal URL path matches a
-   *  route detected in a different one — only meaningful in a multi-repo
-   *  workspace, always empty for a single repo. */
+  /** A call site or message producer in one registered repo that matches a
+   *  route or consumer detected in a different one — only meaningful in a
+   *  multi-repo workspace, always empty for a single repo. */
   interlinks: CrossRepoInterlink[];
 }
 
 /**
- * A caller in one repo (an HTTP client call, an OpenFeign client method) whose
- * path matches a route exposed by another registered repo. Matching is by
- * normalized path and HTTP method only — no runtime evidence, so it can miss
- * a real call built from a dynamic base URL, and it can also surface a
- * coincidental path collision between two repos that do not actually call
- * each other. Confidence reflects HTTP-method agreement, not certainty about
- * the relationship itself.
+ * A connection between two registered repos inferred from matching evidence
+ * on each side, with no runtime confirmation — a path/method collision for
+ * `"http-route"`, a broker/channel-name collision for `"messaging"`. Both can
+ * miss a real connection built dynamically (a variable base URL, a topic
+ * name from a constant) and can both surface a coincidental match between
+ * two repos that do not actually talk to each other.
+ *
+ * Field meaning depends on `kind`:
+ * - `"http-route"`: a caller in one repo (an HTTP client call, an OpenFeign
+ *   client method) whose literal path matches a route exposed by another —
+ *   `method` is the HTTP method, `path` is the route path. Confidence
+ *   reflects HTTP-method agreement.
+ * - `"messaging"`: a producer in one repo publishing to a topic/queue a
+ *   consumer in another listens on — `method` is the broker
+ *   (`"kafka"`/`"rabbitmq"`/`"jms"`), `path` is the channel name. Confidence
+ *   is always `"high"`: unlike HTTP there is no second discriminator like a
+ *   verb to lower it against.
  */
 export interface CrossRepoInterlink {
-  kind: "http-route";
+  kind: "http-route" | "messaging";
   method: string;
   path: string;
   fromRepo: string;

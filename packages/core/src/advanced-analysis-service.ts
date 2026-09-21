@@ -79,11 +79,16 @@ export class AdvancedAnalysisService {
     const gitActivity = perRepo.flatMap((result) => result.gitActivity);
     const riskScores = perRepo.flatMap((result) => result.riskScores);
     const repoDiagnostics = perRepo.flatMap((result) => result.diagnostics);
-    // Matched across the merged, repo-tagged route list rather than inside
-    // analyzeSingleRepo — a call site only becomes an interlink once every
-    // other repo's routes are known, which single-repo analysis cannot see.
+    // Matched across the merged, repo-tagged route/endpoint lists rather than
+    // inside analyzeSingleRepo — a call site or a producer only becomes an
+    // interlink once every other repo's routes/consumers are known, which
+    // single-repo analysis cannot see.
     const outboundCalls = perRepo.flatMap((result) => result.outboundCalls);
-    const interlinks = detectCrossRepoInterlinks(outboundCalls, routes);
+    const messagingEndpoints = perRepo.flatMap((result) => result.messagingEndpoints);
+    const interlinks = [
+      ...detectHttpInterlinks(outboundCalls, routes),
+      ...detectMessagingInterlinks(messagingEndpoints)
+    ];
     const newestSourceMtime = Math.max(
       0,
       ...perRepo.flatMap((result) => result.files.map((file) => file.mtimeMs))
@@ -231,6 +236,7 @@ interface SingleRepoAnalysis {
   gitActivity: FileChangeActivity[];
   riskScores: AdvancedRiskScore[];
   outboundCalls: TaggedOutboundCall[];
+  messagingEndpoints: TaggedMessagingEndpoint[];
 }
 
 async function analyzeSingleRepo(
@@ -247,6 +253,7 @@ async function analyzeSingleRepo(
   const diagnostics = await createRepoReadinessDiagnostics(repo, files);
   const gitActivity = await collectGitActivity(repo.repoRoot);
   const outboundCalls = detectOutboundCalls(files);
+  const messagingEndpoints = detectMessagingEndpoints(files);
   const riskScores = scoreRisks({
     repoMap,
     repo,
@@ -267,7 +274,8 @@ async function analyzeSingleRepo(
     diagnostics: diagnostics.map((item) => ({ ...item, repoName })),
     gitActivity: gitActivity.map((item) => ({ ...item, repoName })),
     riskScores: riskScores.map((item) => ({ ...item, repoName })),
-    outboundCalls: outboundCalls.map((item) => ({ ...item, repoName }))
+    outboundCalls: outboundCalls.map((item) => ({ ...item, repoName })),
+    messagingEndpoints: messagingEndpoints.map((item) => ({ ...item, repoName }))
   };
 }
 
@@ -737,7 +745,7 @@ function detectFeignClientCalls(file: ScannedFile, text: string): OutboundCallSi
  * the call actually reaches that route, and a dynamic base URL or a path
  * built outside a literal string is invisible to it either way.
  */
-function detectCrossRepoInterlinks(
+function detectHttpInterlinks(
   outboundCalls: TaggedOutboundCall[],
   routes: RouteApiEndpoint[]
 ): CrossRepoInterlink[] {
@@ -805,6 +813,274 @@ function dedupeInterlinks(interlinks: CrossRepoInterlink[]): CrossRepoInterlink[
   }
 
   return output;
+}
+
+interface MessagingEndpoint {
+  broker: "kafka" | "rabbitmq" | "jms";
+  role: "producer" | "consumer";
+  channel: string;
+  filePath: string;
+  line?: number;
+}
+
+type TaggedMessagingEndpoint = MessagingEndpoint & { repoName?: string };
+
+/**
+ * A producer publishing to, or a consumer listening on, a topic/queue/
+ * destination — as opposed to detectOutboundCalls/detectRoutes, which cover
+ * synchronous HTTP. Literal channel names only: a topic built from a
+ * constant or a variable is invisible to this, the same trade the HTTP
+ * detectors already make for a dynamic base URL.
+ */
+function detectMessagingEndpoints(files: ScannedFile[]): MessagingEndpoint[] {
+  return files.flatMap((file) => {
+    const text = file.text;
+
+    if (!text || isTestFile(file.relativePath)) {
+      return [];
+    }
+
+    return [
+      ...detectKafkaMessaging(file, text),
+      ...detectRabbitMqMessaging(file, text),
+      ...detectJmsMessaging(file, text)
+    ];
+  });
+}
+
+function matchChannels(
+  text: string,
+  pattern: RegExp
+): Array<{ channel: string; index: number }> {
+  const results: Array<{ channel: string; index: number }> = [];
+
+  for (const match of text.matchAll(pattern)) {
+    if (match[1]) {
+      results.push({ channel: match[1], index: match.index ?? 0 });
+    }
+  }
+
+  return results;
+}
+
+function detectKafkaMessaging(file: ScannedFile, text: string): MessagingEndpoint[] {
+  const endpoints: MessagingEndpoint[] = [];
+
+  if (/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file.relativePath)) {
+    // kafkajs: producer.send({ topic: "..." }), consumer.subscribe({ topic: "..." })
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bproducer\.send\(\s*\{[^}]*\btopic\s*:\s*["'`]([^"'`]+)["'`]/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "producer", channel, file, text, index)
+      );
+    }
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bconsumer\.subscribe\(\s*\{[^}]*\btopics?\s*:\s*(?:\[\s*)?["'`]([^"'`]+)["'`]/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "consumer", channel, file, text, index)
+      );
+    }
+  }
+
+  if (file.relativePath.endsWith(".py")) {
+    // kafka-python / confluent-kafka: producer.send("..."), consumer.subscribe(["..."])
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bproducer\.send\(\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "producer", channel, file, text, index)
+      );
+    }
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bconsumer\.subscribe\(\s*(?:topics\s*=\s*)?\[\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "consumer", channel, file, text, index)
+      );
+    }
+  }
+
+  if (file.relativePath.endsWith(".java")) {
+    // Spring Kafka: kafkaTemplate.send("...", ...), @KafkaListener(topics = "...")
+    for (const { channel, index } of matchChannels(
+      text,
+      /\b\w*[Kk]afkaTemplate\.send\(\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "producer", channel, file, text, index)
+      );
+    }
+    for (const { channel, index } of matchChannels(
+      text,
+      /@KafkaListener\([^)]*\btopics\s*=\s*\{?\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("kafka", "consumer", channel, file, text, index)
+      );
+    }
+  }
+
+  return endpoints;
+}
+
+function detectRabbitMqMessaging(file: ScannedFile, text: string): MessagingEndpoint[] {
+  const endpoints: MessagingEndpoint[] = [];
+
+  if (/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(file.relativePath)) {
+    // amqplib: channel.sendToQueue("...", ...), channel.consume("...", ...)
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bchannel\.sendToQueue\(\s*["'`]([^"'`]+)["'`]/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("rabbitmq", "producer", channel, file, text, index)
+      );
+    }
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bchannel\.consume\(\s*["'`]([^"'`]+)["'`]/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("rabbitmq", "consumer", channel, file, text, index)
+      );
+    }
+  }
+
+  if (file.relativePath.endsWith(".py")) {
+    // pika: channel.basic_publish(..., routing_key="..."), channel.basic_consume(queue="...", ...)
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bchannel\.basic_publish\([^)]*routing_key\s*=\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("rabbitmq", "producer", channel, file, text, index)
+      );
+    }
+    for (const { channel, index } of matchChannels(
+      text,
+      /\bchannel\.basic_consume\([^)]*queue\s*=\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("rabbitmq", "consumer", channel, file, text, index)
+      );
+    }
+  }
+
+  if (file.relativePath.endsWith(".java")) {
+    // Spring AMQP: rabbitTemplate.convertAndSend("...", ...), @RabbitListener(queues = "...")
+    for (const { channel, index } of matchChannels(
+      text,
+      /\b\w*[Rr]abbitTemplate\.convertAndSend\(\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("rabbitmq", "producer", channel, file, text, index)
+      );
+    }
+    for (const { channel, index } of matchChannels(
+      text,
+      /@RabbitListener\([^)]*\bqueues\s*=\s*\{?\s*["']([^"']+)["']/g
+    )) {
+      endpoints.push(
+        messagingEndpoint("rabbitmq", "consumer", channel, file, text, index)
+      );
+    }
+  }
+
+  return endpoints;
+}
+
+// JMS covers IBM MQ and ActiveMQ too — both are commonly driven through the
+// same javax.jms/jakarta.jms API in Java, so one pattern pair covers all
+// three integrations already detected on this axis.
+function detectJmsMessaging(file: ScannedFile, text: string): MessagingEndpoint[] {
+  if (!file.relativePath.endsWith(".java")) {
+    return [];
+  }
+
+  const endpoints: MessagingEndpoint[] = [];
+
+  for (const { channel, index } of matchChannels(
+    text,
+    /\b\w*[Jj]msTemplate\.convertAndSend\(\s*["']([^"']+)["']/g
+  )) {
+    endpoints.push(messagingEndpoint("jms", "producer", channel, file, text, index));
+  }
+  for (const { channel, index } of matchChannels(
+    text,
+    /@JmsListener\([^)]*\bdestination\s*=\s*["']([^"']+)["']/g
+  )) {
+    endpoints.push(messagingEndpoint("jms", "consumer", channel, file, text, index));
+  }
+
+  return endpoints;
+}
+
+function messagingEndpoint(
+  broker: MessagingEndpoint["broker"],
+  role: MessagingEndpoint["role"],
+  channel: string,
+  file: ScannedFile,
+  text: string,
+  index: number
+): MessagingEndpoint {
+  return {
+    broker,
+    role,
+    channel,
+    filePath: file.relativePath,
+    line: lineNumberAt(text, index)
+  };
+}
+
+/**
+ * Matches every producer against every OTHER repo's consumer on the same
+ * broker and literal channel name. Unlike the HTTP match, there is no
+ * second discriminator like an HTTP verb to lower confidence against, so a
+ * channel-name match is reported at "high" confidence outright — offset by
+ * the same risk noted for HTTP: a generic topic/queue name could coincide
+ * between two repos that do not actually talk to each other.
+ */
+function detectMessagingInterlinks(
+  endpoints: TaggedMessagingEndpoint[]
+): CrossRepoInterlink[] {
+  const interlinks: CrossRepoInterlink[] = [];
+  const producers = endpoints.filter((endpoint) => endpoint.role === "producer");
+  const consumers = endpoints.filter((endpoint) => endpoint.role === "consumer");
+
+  for (const producer of producers) {
+    for (const consumer of consumers) {
+      if (
+        producer.broker !== consumer.broker ||
+        producer.channel !== consumer.channel ||
+        !producer.repoName ||
+        !consumer.repoName ||
+        producer.repoName === consumer.repoName
+      ) {
+        continue;
+      }
+
+      interlinks.push({
+        kind: "messaging",
+        method: producer.broker,
+        path: producer.channel,
+        fromRepo: producer.repoName,
+        fromFile: producer.filePath,
+        fromLine: producer.line,
+        toRepo: consumer.repoName,
+        toFile: consumer.filePath,
+        toLine: consumer.line,
+        confidence: "high"
+      });
+    }
+  }
+
+  return dedupeInterlinks(interlinks).slice(0, 200);
 }
 
 function detectTestRelationships(

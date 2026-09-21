@@ -519,6 +519,233 @@ describe("multi-repo advanced analysis", () => {
   });
 });
 
+describe("messaging interlinks", () => {
+  it("matches a Kafka producer in one repo to a consumer in another", async () => {
+    const fixture = await createTwoRepoWorkspace("order-service", "invoice-service", {
+      "order-service": {
+        "package.json": JSON.stringify({ dependencies: { kafkajs: "^2.0.0" } }),
+        "src/orderProducer.ts": [
+          "import { Kafka } from 'kafkajs';",
+          "const producer = new Kafka({}).producer();",
+          "export async function publish() {",
+          "  await producer.send({ topic: 'order.created', messages: [] });",
+          "}"
+        ].join("\n")
+      },
+      "invoice-service": {
+        "pom.xml": "<project><artifactId>spring-kafka</artifactId></project>",
+        "src/main/java/com/acme/OrderListener.java": [
+          "package com.acme;",
+          "import org.springframework.kafka.annotation.KafkaListener;",
+          "public class OrderListener {",
+          '  @KafkaListener(topics = "order.created")',
+          "  public void onOrderCreated(String payload) { }",
+          "}"
+        ].join("\n")
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "messaging",
+        method: "kafka",
+        path: "order.created",
+        fromRepo: "order-service",
+        fromFile: "src/orderProducer.ts",
+        toRepo: "invoice-service",
+        toFile: "src/main/java/com/acme/OrderListener.java",
+        confidence: "high"
+      })
+    );
+  });
+
+  it("matches a RabbitMQ producer in Java to a consumer in Python", async () => {
+    const fixture = await createTwoRepoWorkspace("payment-service", "ledger-service", {
+      "payment-service": {
+        "pom.xml":
+          "<project><artifactId>spring-boot-starter-amqp</artifactId></project>",
+        "src/main/java/com/acme/PaymentPublisher.java": [
+          "package com.acme;",
+          "public class PaymentPublisher {",
+          "  private RabbitTemplate rabbitTemplate;",
+          "  public void publish(String order) {",
+          '    rabbitTemplate.convertAndSend("payment.completed", order);',
+          "  }",
+          "}"
+        ].join("\n")
+      },
+      "ledger-service": {
+        "requirements.txt": "pika\n",
+        "src/consumer.py": [
+          "import pika",
+          "channel = pika.channel()",
+          "def start():",
+          "    channel.basic_consume(queue='payment.completed', on_message_callback=handle)"
+        ].join("\n")
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "messaging",
+        method: "rabbitmq",
+        path: "payment.completed",
+        fromRepo: "payment-service",
+        toRepo: "ledger-service",
+        confidence: "high"
+      })
+    );
+  });
+
+  it("matches a JMS producer to a consumer, covering IBM MQ/ActiveMQ's own API", async () => {
+    const fixture = await createTwoRepoWorkspace("shipping-service", "notify-service", {
+      "shipping-service": {
+        "pom.xml":
+          "<project><artifactId>spring-boot-starter-artemis</artifactId></project>",
+        "src/main/java/com/acme/ShippingPublisher.java": [
+          "package com.acme;",
+          "public class ShippingPublisher {",
+          "  private JmsTemplate jmsTemplate;",
+          "  public void publish(String id) {",
+          '    jmsTemplate.convertAndSend("shipment.dispatched", id);',
+          "  }",
+          "}"
+        ].join("\n")
+      },
+      "notify-service": {
+        "pom.xml":
+          "<project><artifactId>spring-boot-starter-artemis</artifactId></project>",
+        "src/main/java/com/acme/DispatchListener.java": [
+          "package com.acme;",
+          "import org.springframework.jms.annotation.JmsListener;",
+          "public class DispatchListener {",
+          '  @JmsListener(destination = "shipment.dispatched")',
+          "  public void onDispatched(String id) { }",
+          "}"
+        ].join("\n")
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(analysis.interlinks).toContainEqual(
+      expect.objectContaining({
+        kind: "messaging",
+        method: "jms",
+        path: "shipment.dispatched",
+        fromRepo: "shipping-service",
+        toRepo: "notify-service",
+        confidence: "high"
+      })
+    );
+  });
+
+  it("does not match a producer and consumer on different channel names", async () => {
+    const fixture = await createTwoRepoWorkspace("order-service", "invoice-service", {
+      "order-service": {
+        "package.json": JSON.stringify({ dependencies: { kafkajs: "^2.0.0" } }),
+        "src/producer.ts": "producer.send({ topic: 'order.created', messages: [] });"
+      },
+      "invoice-service": {
+        "pom.xml": "<project><artifactId>spring-kafka</artifactId></project>",
+        "src/main/java/com/acme/Listener.java": [
+          "package com.acme;",
+          "import org.springframework.kafka.annotation.KafkaListener;",
+          "public class Listener {",
+          '  @KafkaListener(topics = "invoice.created")',
+          "  public void onMessage(String payload) { }",
+          "}"
+        ].join("\n")
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(
+      analysis.interlinks.filter((interlink) => interlink.kind === "messaging")
+    ).toEqual([]);
+  });
+
+  it("does not report a messaging interlink within the same repo", async () => {
+    const fixture = await createTwoRepoWorkspace("order-service", "unrelated-service", {
+      "order-service": {
+        "package.json": JSON.stringify({ dependencies: { kafkajs: "^2.0.0" } }),
+        "src/producer.ts": "producer.send({ topic: 'order.created', messages: [] });",
+        "src/consumer.ts": "consumer.subscribe({ topic: 'order.created' });"
+      },
+      "unrelated-service": {
+        "package.json": JSON.stringify({ name: "unrelated" }),
+        "src/index.ts": "export const noop = () => {};"
+      }
+    });
+
+    const analysis = await new AdvancedAnalysisService().analyze({
+      startPath: fixture.workspaceRoot
+    });
+
+    expect(
+      analysis.interlinks.some(
+        (interlink) =>
+          interlink.kind === "messaging" && interlink.fromRepo === "order-service"
+      )
+    ).toBe(false);
+  });
+});
+
+async function createTwoRepoWorkspace(
+  firstName: string,
+  secondName: string,
+  repos: Record<string, Record<string, string>>
+): Promise<{ workspaceRoot: string }> {
+  const parent = await mkdtemp(path.join(tmpdir(), "copilot-advanced-messaging-"));
+  const workspaceRoot = path.join(parent, "workspace");
+  const repoRoots: Record<string, string> = {};
+
+  await mkdir(workspaceRoot, { recursive: true });
+  for (const [name, files] of Object.entries(repos)) {
+    const repoRoot = path.join(parent, name);
+    repoRoots[name] = repoRoot;
+    await createRepoAt(repoRoot, files);
+  }
+
+  await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+  await writeFile(
+    path.join(workspaceRoot, ".copilot-architect", "workspace.json"),
+    JSON.stringify(
+      {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        workspaceName: "Messaging Workspace",
+        workspaceRoot,
+        artifactRoot: path.join(workspaceRoot, ".copilot-architect"),
+        repos: [
+          { name: firstName, path: repoRoots[firstName], role: "backend" },
+          { name: secondName, path: repoRoots[secondName], role: "backend" }
+        ],
+        repoRoots: []
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  await new WorkspaceService().createWorkspaceMap({ startPath: workspaceRoot });
+
+  return { workspaceRoot };
+}
+
 async function createFeignWorkspaceFixture(): Promise<{
   workspaceRoot: string;
   invoiceService: string;
