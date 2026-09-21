@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 527 tests
+├── tests/               48 files, 536 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -226,6 +226,14 @@ the other. If a shell needs repo intelligence, it imports the service.
     misreported as a route the calling repo itself exposes. Messaging
     interlinks (Kafka producer/consumer, etc.) are not yet matched — see
     `docs/KNOWN_LIMITATIONS.md` 4.14.
+25. Symbol-graph call resolution through a field, a constructor parameter
+    property, a plain parameter, or a local variable — not only a bare
+    identifier or a single-level property access. `this.repo.save(...)` and
+    a method-local `OrderRepository repo = new OrderRepositoryImpl();
+    repo.save(...)` both resolve now, in both the TypeScript and Java
+    extractors, with a local variable correctly shadowing a same-named field.
+    Remaining gaps (array/generic/union-typed fields, enhanced-for locals,
+    method chaining) are in `docs/KNOWN_LIMITATIONS.md` 4.15.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -360,7 +368,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 527 tests must pass before merging.
+Use Vitest. All 536 tests must pass before merging.
 
 Cover:
 
@@ -386,6 +394,10 @@ Cover:
 - file edits (unique-match requirement, all-or-nothing, literal replacement)
 - grounding (claim extraction including prose calls, verification, honest "not checked")
 - Java symbol extraction (methods indexed, control flow excluded)
+- call-graph resolution through a field, a constructor parameter property, a
+  plain parameter, and a local variable (explicit type or inferred from
+  `new`), in both the TypeScript and Java extractors, including a local
+  correctly shadowing a same-named field
 - parsed symbols (Go receivers, Rust items, start lines, kinds, and
   declining a language so the pattern list still runs)
 - multi-repo path resolution (unique suffix, ambiguity, segment boundaries)

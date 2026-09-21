@@ -219,6 +219,234 @@ describe("SymbolGraphService", () => {
     ).toBe(false);
   });
 
+  it("resolves a call through a field reached via this.", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "export class PaymentService {",
+        "  process() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/controller.ts": [
+        "import { PaymentService } from './payment-service.js';",
+        "",
+        "export class Controller {",
+        "  private service: PaymentService = new PaymentService();",
+        "  handle() {",
+        "    return this.service.process();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "calls",
+          from: "src/controller.ts#Controller.handle",
+          to: "src/payment-service.ts#PaymentService.process"
+        }
+      ])
+    );
+  });
+
+  it("resolves a call through a constructor parameter property", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "export class PaymentService {",
+        "  process() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/controller.ts": [
+        "import { PaymentService } from './payment-service.js';",
+        "",
+        "export class Controller {",
+        "  constructor(private service: PaymentService) {}",
+        "  handle() {",
+        "    return this.service.process();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "calls",
+          from: "src/controller.ts#Controller.handle",
+          to: "src/payment-service.ts#PaymentService.process"
+        }
+      ])
+    );
+  });
+
+  it("resolves a call through a local variable's explicit type annotation", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "export class PaymentService {",
+        "  process() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/controller.ts": [
+        "import { PaymentService } from './payment-service.js';",
+        "declare function getService(): PaymentService;",
+        "",
+        "export function handle() {",
+        "  const service: PaymentService = getService();",
+        "  return service.process();",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "calls",
+          from: "src/controller.ts#handle",
+          to: "src/payment-service.ts#PaymentService.process"
+        }
+      ])
+    );
+  });
+
+  it("resolves a call through a local variable's inferred `new` type", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "export class PaymentService {",
+        "  process() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/controller.ts": [
+        "import { PaymentService } from './payment-service.js';",
+        "",
+        "export function handle() {",
+        "  const service = new PaymentService();",
+        "  return service.process();",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "calls",
+          from: "src/controller.ts#handle",
+          to: "src/payment-service.ts#PaymentService.process"
+        }
+      ])
+    );
+  });
+
+  it("resolves a call through a plain method parameter's type", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "export class PaymentService {",
+        "  process() {",
+        "    return true;",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/controller.ts": [
+        "import { PaymentService } from './payment-service.js';",
+        "",
+        "export class Controller {",
+        "  handle(service: PaymentService) {",
+        "    return service.process();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "calls",
+          from: "src/controller.ts#Controller.handle",
+          to: "src/payment-service.ts#PaymentService.process"
+        }
+      ])
+    );
+  });
+
+  it("prefers a local variable's type over a same-named field's", async () => {
+    const repoRoot = await createRepo({
+      "src/payment-service.ts": [
+        "export class PaymentService {",
+        "  process() {",
+        "    return 'field-type';",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/other-service.ts": [
+        "export class OtherService {",
+        "  process() {",
+        "    return 'local-type';",
+        "  }",
+        "}"
+      ].join("\n"),
+      "src/controller.ts": [
+        "import { PaymentService } from './payment-service.js';",
+        "import { OtherService } from './other-service.js';",
+        "",
+        "export class Controller {",
+        "  private service: PaymentService = new PaymentService();",
+        "  handle() {",
+        "    const service = new OtherService();",
+        "    return service.process();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const result = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+
+    expect(result.graph.edges).toContainEqual({
+      kind: "calls",
+      from: "src/controller.ts#Controller.handle",
+      to: "src/other-service.ts#OtherService.process"
+    });
+    expect(result.graph.edges).not.toContainEqual({
+      kind: "calls",
+      from: "src/controller.ts#Controller.handle",
+      to: "src/payment-service.ts#PaymentService.process"
+    });
+  });
+
   it("emits a file-level node for non-TS/JS files without failing the build", async () => {
     const repoRoot = await createRepo({
       "src/service.py": "def approve():\n    return True\n",

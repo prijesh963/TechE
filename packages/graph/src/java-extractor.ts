@@ -107,11 +107,20 @@ export function extractJavaFileSymbols(
         exported: method.isPublic
       });
 
+      // Parameters and locals declared inside this method's own body —
+      // `void approve(OrderRepository repo) { repo.save(x); }` or
+      // `OrderRepository repo = new OrderRepositoryImpl(); repo.save(x);` —
+      // take precedence over a same-named field, matching real Java scoping.
+      const localTypes = findLocalVariableTypes(code, method);
+
       for (const call of findCalls(code, method.bodyStart, method.bodyEnd)) {
         if (call.receiver) {
-          // Map a field receiver to its declared type; a receiver that is
-          // already a type name (a static call) passes through unchanged.
-          const receiverType = fieldTypes.get(call.receiver) ?? call.receiver;
+          // Map a local/field receiver to its declared type; a receiver that
+          // is already a type name (a static call) passes through unchanged.
+          const receiverType =
+            localTypes.get(call.receiver) ??
+            fieldTypes.get(call.receiver) ??
+            call.receiver;
           pendingReferences.push({
             kind: "calls",
             fromId: methodId,
@@ -389,6 +398,45 @@ function findFieldTypes(code: string, type: JavaTypeDeclaration): Map<string, st
   }
 
   return fields;
+}
+
+/**
+ * Local variable name -> declared type, for one method: its own parameters
+ * plus any `TypeName varName = ...;` declared inside its body. A local
+ * shadows a same-named field, matching real Java scoping, so the caller
+ * checks this map before `findFieldTypes`'s.
+ *
+ * Scans the body as flat text rather than respecting nested block boundaries
+ * (an `if`/`for` inside the method), the same over-attribution trade the
+ * rest of this file already makes for calls and field types.
+ */
+function findLocalVariableTypes(
+  code: string,
+  method: JavaMethodDeclaration
+): Map<string, string> {
+  const locals = new Map<string, string>();
+  const parenStart = code.indexOf("(", method.nameIndex);
+  const parenEnd = parenStart === -1 ? -1 : matchParen(code, parenStart);
+
+  if (parenStart !== -1 && parenEnd !== -1) {
+    for (const segment of code.slice(parenStart + 1, parenEnd).split(",")) {
+      const match =
+        /\b([A-Z]\w*)(?:<[^<>]*>)?(?:\[\])?\s+(\w+)\s*$/.exec(segment.trim()) ??
+        undefined;
+      if (match) {
+        locals.set(match[2], match[1]);
+      }
+    }
+  }
+
+  const body = code.slice(method.bodyStart, method.bodyEnd);
+  for (const match of body.matchAll(/\b([A-Z]\w*)(?:<[^<>]*>)?\s+(\w+)\s*[;=]/g)) {
+    if (!locals.has(match[2])) {
+      locals.set(match[2], match[1]);
+    }
+  }
+
+  return locals;
 }
 
 function isPublicAt(code: string, index: number): boolean {

@@ -254,11 +254,23 @@ blanking comments and string literals (so a `{` in a comment or a `}` in a
 string cannot throw off brace matching).
 
 Java resolution is package-aware rather than path-based: imports resolve
-through a repo-wide qualified-name index, a call receiver is mapped from the
-field's declared type (`repo.save(…)` → `OrderRepository.save`), and an
-inherited call is found by walking resolved supertypes. A call that resolves to
-no known method — a JDK or third-party call — is dropped rather than pointed at
-the enclosing class.
+through a repo-wide qualified-name index, a call receiver is mapped from its
+declared type — a field, a method parameter, or a local variable declared in
+the method body, checked in that order so a local correctly shadows a
+same-named field — and an inherited call is found by walking resolved
+supertypes. `repo.save(…)` reaches `OrderRepository.save` whether `repo` is a
+field, a parameter, or `OrderRepository repo = new OrderRepositoryImpl();`
+declared inside the method itself. A call that resolves to no known method —
+a JDK or third-party call — is dropped rather than pointed at the enclosing
+class.
+
+The TypeScript/JavaScript path resolves a call receiver the same way: a class
+field's own type annotation or constructor parameter property
+(`constructor(private repo: OrderRepository)`), a plain parameter's
+annotation, or a local variable's explicit annotation or its type inferred
+from a `new ClassName(...)` initializer — checked in that order, local
+shadowing a field included. `this.repo.save(...)` and a bare `repo.save(...)`
+both resolve once `repo`'s declared type is known.
 
 Known limits, consistent with the TS path's "best effort, degrade gracefully"
 contract: annotations are not modelled, anonymous and local classes get no node
@@ -267,6 +279,9 @@ sense of yields fewer nodes, never wrong ones.
 
 No benchmark of the Java scanner is committed, so no counts are claimed here.
 What is covered is in `tests/java-graph.test.ts`: class, interface and method
-nodes, `extends` chains across files, and controller → repository call edges.
+nodes, `extends` chains across files, and controller → repository call edges
+resolved through a field, a parameter, and a method-local variable, with a
+local's type taking precedence over a same-named field's. `tests/graph.test.ts`
+covers the same set for TypeScript, including a call reached through `this.`.
 A figure quoted without an artifact that reproduces it is the kind of claim
 this tool exists to flag, so it is not quoted.

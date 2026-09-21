@@ -129,8 +129,23 @@ export function extractFileSymbols(
   // `bodyNode` — including inside a nested function expression — to
   // `fromId`. Precise nested-scope attribution would need a symbol table;
   // over-attributing is an acceptable trade for a first pass over
-  // under-reporting relevant calls entirely.
-  const visitCallsWithin = (bodyNode: ts.Node | undefined, fromId: string): void => {
+  // under-reporting relevant calls entirely. The same trade applies to
+  // `localTypes`: a name bound in a nested closure is folded into the same
+  // flat map as the enclosing function's own locals.
+  //
+  // A call receiver is usually a local variable or a field, not a type —
+  // `repo.save(...)` only reaches OrderRepository.save once `repo` is known
+  // to be an OrderRepository. `localTypes` (parameters plus declared/
+  // constructed local variables) and `fieldTypes` (the enclosing class's own
+  // fields, reached through `this.`) resolve the receiver to its declared
+  // type before the reference is queued, so the existing identifier
+  // resolution below treats it exactly like a direct reference to that type.
+  const visitCallsWithin = (
+    bodyNode: ts.Node | undefined,
+    fromId: string,
+    localTypes: Map<string, string>,
+    fieldTypes: Map<string, string> | undefined
+  ): void => {
     if (!bodyNode) {
       return;
     }
@@ -143,12 +158,24 @@ export function extractFileSymbols(
 
         if (ts.isIdentifier(callee)) {
           identifierName = callee.text;
-        } else if (
-          ts.isPropertyAccessExpression(callee) &&
-          ts.isIdentifier(callee.expression)
-        ) {
-          identifierName = callee.expression.text;
+        } else if (ts.isPropertyAccessExpression(callee)) {
           propertyName = ts.isIdentifier(callee.name) ? callee.name.text : undefined;
+          const receiver = callee.expression;
+
+          if (ts.isIdentifier(receiver)) {
+            const receiverName = receiver.text;
+            identifierName =
+              localTypes.get(receiverName) ??
+              fieldTypes?.get(receiverName) ??
+              receiverName;
+          } else if (
+            ts.isPropertyAccessExpression(receiver) &&
+            receiver.expression.kind === ts.SyntaxKind.ThisKeyword &&
+            ts.isIdentifier(receiver.name)
+          ) {
+            const fieldName = receiver.name.text;
+            identifierName = fieldTypes?.get(fieldName) ?? fieldName;
+          }
         }
 
         if (identifierName) {
@@ -168,6 +195,8 @@ export function extractFileSymbols(
 
   const visitClassMembers = (classNode: ts.ClassDeclaration, classId: string): void => {
     const classExported = isExported(classNode);
+    const fieldTypes = collectFieldTypes(classNode);
+
     for (const member of classNode.members) {
       if (
         ts.isMethodDeclaration(member) &&
@@ -181,7 +210,12 @@ export function extractFileSymbols(
           classExported,
           classId
         );
-        visitCallsWithin(member.body, methodId);
+        visitCallsWithin(
+          member.body,
+          methodId,
+          localTypesFor(member.parameters, member.body),
+          fieldTypes
+        );
       } else if (ts.isConstructorDeclaration(member)) {
         const methodId = addNode(
           "method",
@@ -190,7 +224,12 @@ export function extractFileSymbols(
           classExported,
           classId
         );
-        visitCallsWithin(member.body, methodId);
+        visitCallsWithin(
+          member.body,
+          methodId,
+          localTypesFor(member.parameters, member.body),
+          fieldTypes
+        );
       }
     }
   };
@@ -236,7 +275,15 @@ export function extractFileSymbols(
           declaration,
           exported
         );
-        visitCallsWithin(declaration.initializer.body, functionId);
+        visitCallsWithin(
+          declaration.initializer.body,
+          functionId,
+          localTypesFor(
+            declaration.initializer.parameters,
+            declaration.initializer.body
+          ),
+          undefined
+        );
       }
     }
   };
@@ -262,7 +309,12 @@ export function extractFileSymbols(
 
     if (ts.isFunctionDeclaration(node) && node.name) {
       const functionId = addNode("function", node.name.text, node, isExported(node));
-      visitCallsWithin(node.body, functionId);
+      visitCallsWithin(
+        node.body,
+        functionId,
+        localTypesFor(node.parameters, node.body),
+        undefined
+      );
       return;
     }
 
@@ -272,7 +324,7 @@ export function extractFileSymbols(
     }
 
     if (ts.isExpressionStatement(node)) {
-      visitCallsWithin(node, fileNodeId);
+      visitCallsWithin(node, fileNodeId, new Map(), undefined);
     }
   };
 
@@ -292,6 +344,142 @@ export function extractFileSymbols(
     importedSpecifiers: [...importedSpecifiers],
     pendingReferences
   };
+}
+
+/** The root identifier of a type reference (`Repository` from `Repository<Order>`,
+ *  the rightmost segment of a qualified name). Array, union, and other
+ *  non-reference type shapes are intentionally left unhandled — the same
+ *  best-effort scope as the rest of this extractor. */
+function typeReferenceName(typeNode: ts.TypeNode): string | undefined {
+  if (!ts.isTypeReferenceNode(typeNode)) {
+    return undefined;
+  }
+  const typeName = typeNode.typeName;
+  if (ts.isIdentifier(typeName)) {
+    return typeName.text;
+  }
+  if (ts.isQualifiedName(typeName) && ts.isIdentifier(typeName.right)) {
+    return typeName.right.text;
+  }
+  return undefined;
+}
+
+function collectParamTypes(
+  parameters: ts.NodeArray<ts.ParameterDeclaration>
+): Map<string, string> {
+  const types = new Map<string, string>();
+  for (const param of parameters) {
+    if (!ts.isIdentifier(param.name) || !param.type) {
+      continue;
+    }
+    const type = typeReferenceName(param.type);
+    if (type) {
+      types.set(param.name.text, type);
+    }
+  }
+  return types;
+}
+
+/**
+ * Local variable declarations anywhere inside a function/method body — an
+ * explicit type annotation (`const repo: OrderRepository = ...`) or, failing
+ * that, a `new` expression's constructor name (`const repo = new
+ * OrderRepositoryImpl()`). Walks the whole body rather than respecting nested
+ * block/closure boundaries, the same over-attribution trade `visitCallsWithin`
+ * already makes.
+ */
+function collectLocalVariableTypes(bodyNode: ts.Node | undefined): Map<string, string> {
+  const types = new Map<string, string>();
+  if (!bodyNode) {
+    return types;
+  }
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const explicit = node.type ? typeReferenceName(node.type) : undefined;
+      const inferred =
+        !explicit &&
+        node.initializer &&
+        ts.isNewExpression(node.initializer) &&
+        ts.isIdentifier(node.initializer.expression)
+          ? node.initializer.expression.text
+          : undefined;
+      const type = explicit ?? inferred;
+      if (type) {
+        types.set(node.name.text, type);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  ts.forEachChild(bodyNode, visit);
+  return types;
+}
+
+function localTypesFor(
+  parameters: ts.NodeArray<ts.ParameterDeclaration>,
+  bodyNode: ts.Node | undefined
+): Map<string, string> {
+  return new Map([
+    ...collectParamTypes(parameters),
+    ...collectLocalVariableTypes(bodyNode)
+  ]);
+}
+
+const PROPERTY_MODIFIER_KINDS = new Set([
+  ts.SyntaxKind.PrivateKeyword,
+  ts.SyntaxKind.PublicKeyword,
+  ts.SyntaxKind.ProtectedKeyword,
+  ts.SyntaxKind.ReadonlyKeyword
+]);
+
+/**
+ * Field name -> declared type, for a class's own property declarations and
+ * constructor parameter properties (`constructor(private repo:
+ * OrderRepository)`), the TS shorthand for declaring and assigning a field in
+ * one place. Mirrors the Java extractor's `findFieldTypes`: a call receiver
+ * reached through `this.` is usually a field, not a type.
+ */
+function collectFieldTypes(classNode: ts.ClassDeclaration): Map<string, string> {
+  const types = new Map<string, string>();
+
+  for (const member of classNode.members) {
+    if (
+      ts.isPropertyDeclaration(member) &&
+      ts.isIdentifier(member.name) &&
+      member.type
+    ) {
+      const type = typeReferenceName(member.type);
+      if (type) {
+        types.set(member.name.text, type);
+      }
+      continue;
+    }
+
+    if (!ts.isConstructorDeclaration(member)) {
+      continue;
+    }
+
+    for (const param of member.parameters) {
+      if (!ts.isIdentifier(param.name) || !param.type) {
+        continue;
+      }
+      const isParameterProperty =
+        ts.canHaveModifiers(param) &&
+        ts
+          .getModifiers(param)
+          ?.some((modifier) => PROPERTY_MODIFIER_KINDS.has(modifier.kind));
+      if (!isParameterProperty) {
+        continue;
+      }
+      const type = typeReferenceName(param.type);
+      if (type) {
+        types.set(param.name.text, type);
+      }
+    }
+  }
+
+  return types;
 }
 
 function scriptKindFor(filePath: string): ts.ScriptKind {

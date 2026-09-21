@@ -167,6 +167,134 @@ describe("SymbolGraphService (Java)", () => {
     expect(graph.diagnostics).toEqual([]);
   });
 
+  it("resolves calls through a local variable, not only a field", async () => {
+    const repoRoot = await createJavaRepo({
+      "src/main/java/com/acme/orders/OrderRepository.java": [
+        "package com.acme.orders;",
+        "public class OrderRepository {",
+        "  public void save(String order) { }",
+        "}"
+      ].join("\n"),
+      "src/main/java/com/acme/orders/OrderRepositoryImpl.java": [
+        "package com.acme.orders;",
+        "public class OrderRepositoryImpl extends OrderRepository { }"
+      ].join("\n"),
+      "src/main/java/com/acme/orders/OrderService.java": [
+        "package com.acme.orders;",
+        "public class OrderService {",
+        "  public void placeOrder(String order) {",
+        "    OrderRepositoryImpl repo = new OrderRepositoryImpl();",
+        "    repo.save(order);",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+    const has = (kind: SymbolEdge["kind"], from: string, to: string): boolean =>
+      graph.edges.some(
+        (edge) => edge.kind === kind && edge.from.endsWith(from) && edge.to.endsWith(to)
+      );
+
+    // `repo` is declared inside the method body, not a class field — the
+    // pre-fix resolver had no way to know its type and silently dropped
+    // this reference.
+    expect(
+      has(
+        "calls",
+        "OrderService.placeOrder",
+        "OrderRepositoryImpl.java#OrderRepositoryImpl.save"
+      )
+    ).toBe(false);
+    // The method is inherited from OrderRepository, so the edge resolves
+    // there via the supertype walk once the receiver's own type is known.
+    expect(
+      has(
+        "calls",
+        "OrderService.placeOrder",
+        "OrderRepository.java#OrderRepository.save"
+      )
+    ).toBe(true);
+  });
+
+  it("resolves calls through a method parameter", async () => {
+    const repoRoot = await createJavaRepo({
+      "src/main/java/com/acme/orders/OrderRepository.java": [
+        "package com.acme.orders;",
+        "public class OrderRepository {",
+        "  public void save(String order) { }",
+        "}"
+      ].join("\n"),
+      "src/main/java/com/acme/orders/OrderService.java": [
+        "package com.acme.orders;",
+        "public class OrderService {",
+        "  public void placeOrder(String order, OrderRepository repo) {",
+        "    repo.save(order);",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+    const has = (kind: SymbolEdge["kind"], from: string, to: string): boolean =>
+      graph.edges.some(
+        (edge) => edge.kind === kind && edge.from.endsWith(from) && edge.to.endsWith(to)
+      );
+
+    expect(
+      has(
+        "calls",
+        "OrderService.placeOrder",
+        "OrderRepository.java#OrderRepository.save"
+      )
+    ).toBe(true);
+  });
+
+  it("prefers a local variable's type over a same-named field's", async () => {
+    const repoRoot = await createJavaRepo({
+      "src/main/java/com/acme/FieldType.java": [
+        "package com.acme;",
+        "public class FieldType {",
+        "  public void run() { }",
+        "}"
+      ].join("\n"),
+      "src/main/java/com/acme/LocalType.java": [
+        "package com.acme;",
+        "public class LocalType {",
+        "  public void run() { }",
+        "}"
+      ].join("\n"),
+      "src/main/java/com/acme/Holder.java": [
+        "package com.acme;",
+        "public class Holder {",
+        "  private FieldType target;",
+        "  public void use() {",
+        "    LocalType target = new LocalType();",
+        "    target.run();",
+        "  }",
+        "}"
+      ].join("\n")
+    });
+
+    const { graph } = await new SymbolGraphService().build({
+      startPath: repoRoot,
+      strictRoot: true
+    });
+    const has = (kind: SymbolEdge["kind"], from: string, to: string): boolean =>
+      graph.edges.some(
+        (edge) => edge.kind === kind && edge.from.endsWith(from) && edge.to.endsWith(to)
+      );
+
+    expect(has("calls", "Holder.use", "LocalType.java#LocalType.run")).toBe(true);
+    expect(has("calls", "Holder.use", "FieldType.java#FieldType.run")).toBe(false);
+  });
+
   it("drops a call it cannot resolve rather than pointing it at the class", async () => {
     const repoRoot = await createJavaRepo({
       "src/main/java/com/acme/Widget.java": [
