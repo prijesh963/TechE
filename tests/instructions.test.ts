@@ -33,6 +33,19 @@ describe("InstructionService", () => {
     expect(preview.markdown).toContain("TypeScript");
     expect(preview.markdown).toContain("React");
     expect(preview.markdown).toContain("npm run build");
+    expect(preview.markdown).toContain("## Retrieval Workflow");
+    expect(preview.markdown).toContain("search_repo");
+    expect(preview.markdown).toContain("analyze_query_intent");
+    expect(preview.markdown).toContain("list_repo_files");
+    expect(preview.markdown).toContain("measure_context_reduction");
+    // Retrieval Workflow tells the model command facts are "already listed
+    // above" — must actually appear after the command sections, not before.
+    expect(preview.markdown.indexOf("## Lint And Format Commands")).toBeLessThan(
+      preview.markdown.indexOf("## Retrieval Workflow")
+    );
+    expect(preview.markdown.indexOf("## Retrieval Workflow")).toBeLessThan(
+      preview.markdown.indexOf("## Planning Workflow")
+    );
     expect(preview.skills.map((skill) => skill.id)).toEqual([
       "feature-planning",
       "repo-analysis",

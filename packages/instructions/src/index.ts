@@ -105,6 +105,7 @@ const requiredInstructionHeadings = [
   "## Coding Conventions",
   "## Safety Rules",
   "## Trust Metadata",
+  "## Retrieval Workflow",
   "## Planning Workflow",
   "## Approval Workflow",
   "## Validation Workflow",
@@ -482,6 +483,36 @@ function renderInstructions(repoMap: UniversalRepoMap): string {
       `- Policy: ${trust.policyId}`,
       `- Local only: ${trust.localOnly ? "yes" : "no"}`,
       `- Telemetry enabled: ${trust.telemetryEnabled ? "yes" : "no"}`
+    ].join("\n"),
+    "",
+    "## Retrieval Workflow",
+    "",
+    "Every Copilot Architect MCP tool result here is deliberately ranked and " +
+      "capped — this repo's index is built once so each question costs one " +
+      "small, targeted call instead of reading files to find out.",
+    "",
+    [
+      "- Before opening or reading any file, call `search_repo` or " +
+        "`analyze_query_intent` first. Read a specific file directly only " +
+        "once one of these has named it, or the user has named it explicitly.",
+      '- Use `list_repo_files` FIRST for "what\'s in this repo" / "explain ' +
+        'this repo" questions — not a raw directory walk. It returns paths, ' +
+        "languages, and symbols in one ranked call.",
+      "- Do not re-run a broad search you have already made in this " +
+        "conversation. If a result was truncated (`omittedSymbols` present, " +
+        "or a preview cut short), only fetch more when those specific " +
+        "omitted symbols are actually needed — not by re-reading the whole " +
+        "file.",
+      "- For a feature request, call `analyze_query_intent` or " +
+        "`generate_plan_context` once to scope the relevant files before " +
+        "making claims or proposing changes. Avoid a chain of exploratory " +
+        "searches when one targeted call answers the question.",
+      "- Language, framework, package manager, and build/test/lint/format " +
+        "command facts are already listed above in this file — do not call " +
+        "a tool to re-discover them.",
+      "- When asked to justify how much smaller this repo's context is " +
+        "versus reading it naively, call `measure_context_reduction` rather " +
+        "than estimating."
     ].join("\n"),
     "",
     "## Planning Workflow",
