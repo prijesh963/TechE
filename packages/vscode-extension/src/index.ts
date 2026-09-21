@@ -1809,7 +1809,8 @@ async function loadSessionActivity(
     ),
     decisionsByKind,
     planRevisionCount: session.plans.length,
-    planApprovedCount: session.plans.filter((plan) => plan.status === "approved").length,
+    planApprovedCount: session.plans.filter((plan) => plan.status === "approved")
+      .length,
     planImplementedVersions: session.plans
       .filter((plan) => plan.implementedAt)
       .map((plan) => plan.version),
@@ -2077,7 +2078,9 @@ export function formatAgentInsights(
       `Files referred from index this session: ${stat(activity.filesReferredFromIndex, COLOR_PURPLE)} across ${activity.searchCount} search${activity.searchCount === 1 ? "" : "es"}.`
     );
     lines.push(formatChangeStatsLine(activity.changeStats));
-    lines.push(`Session duration: ${stat(formatDuration(activity.durationMinutes), COLOR_BLUE)}.`);
+    lines.push(
+      `Session duration: ${stat(formatDuration(activity.durationMinutes), COLOR_BLUE)}.`
+    );
     lines.push(formatDecisionsByKindLine(activity.decisionsByKind));
     lines.push(formatPlanRollupLine(activity));
     lines.push(formatConstraintsLine(activity));
@@ -2087,7 +2090,9 @@ export function formatAgentInsights(
   if (validation && typeof validation.total === "number" && validation.total > 0) {
     const passed = validation.passed ?? 0;
     const color = passed === validation.total ? COLOR_GREEN : COLOR_ORANGE;
-    lines.push(`Latest validation pass rate: ${stat(`${passed}/${validation.total}`, color)}.`);
+    lines.push(
+      `Latest validation pass rate: ${stat(`${passed}/${validation.total}`, color)}.`
+    );
   }
 
   const review = artifacts?.latestReview;

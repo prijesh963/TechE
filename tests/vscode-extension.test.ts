@@ -882,12 +882,21 @@ describe("VS Code extension shell", () => {
 
   it("colors MCP status by state rather than a fixed accent", () => {
     const running = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "running" });
-    const starting = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "starting" });
+    const starting = createDashboardHtml({
+      workspaceRoot: "/w",
+      mcpStatus: "starting"
+    });
     const stopped = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "stopped" });
 
-    expect(running).toContain('<section style="--accent:var(--vscode-charts-green)"><h2>MCP status</h2>');
-    expect(starting).toContain('<section style="--accent:var(--vscode-charts-yellow)"><h2>MCP status</h2>');
-    expect(stopped).toContain('<section style="--accent:var(--vscode-charts-red)"><h2>MCP status</h2>');
+    expect(running).toContain(
+      '<section style="--accent:var(--vscode-charts-green)"><h2>MCP status</h2>'
+    );
+    expect(starting).toContain(
+      '<section style="--accent:var(--vscode-charts-yellow)"><h2>MCP status</h2>'
+    );
+    expect(stopped).toContain(
+      '<section style="--accent:var(--vscode-charts-red)"><h2>MCP status</h2>'
+    );
   });
 
   it("renders exactly the five primary actions plus More actions", () => {
