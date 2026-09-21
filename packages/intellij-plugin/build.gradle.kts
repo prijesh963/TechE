@@ -24,7 +24,14 @@ repositories {
 dependencies {
     intellijPlatform {
         create("IC", "2024.2.3")
-        bundledPlugin("com.intellij.modules.platform")
+        // `com.intellij.modules.platform` is a core platform module, not a
+        // separately-packaged bundled plugin — it's already provided by the
+        // `create("IC", ...)` platform artifact above and is declared the
+        // normal way in plugin.xml's own <depends>. Requesting it here via
+        // `bundledPlugin(...)` asks Gradle to resolve it as if it had its
+        // own plugin JAR, which it does not: CI failed with "Could not find
+        // bundled plugin with ID: 'com.intellij.modules.platform'" for
+        // exactly this reason.
     }
 }
 
