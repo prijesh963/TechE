@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { SymbolGraphService } from "../packages/graph/src/index.js";
 import {
   IndexingService,
+  readSearchActivitySince,
   resetIndexFreshnessCache,
   shapeInventoryForModel,
   shapeSearchForModel,
@@ -88,6 +89,48 @@ describe("IndexingService", () => {
     // Symbol anchor gives file:line precision into the matched declaration.
     expect(response.results[0]?.anchor?.symbol).toBe("approveInvoice");
     expect(response.results[0]?.anchor?.line).toBeGreaterThan(0);
+  });
+
+  it("logs which files a search returned, for later 'referred from index' reporting", async () => {
+    const repoRoot = await createRepo({
+      "src/invoiceApproval.ts":
+        "export function approveInvoice() { return 'invoice approval'; }",
+      "src/customer.ts": "export function customer() { return 'invoice'; }"
+    });
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+
+    const sinceBeforeSearch = new Date().toISOString();
+    await service.search({ startPath: repoRoot, query: "invoice approval" });
+    await service.search({ startPath: repoRoot, query: "customer" });
+
+    const activity = await readSearchActivitySince(repoRoot, sinceBeforeSearch);
+    expect(activity.searchCount).toBe(2);
+    expect(activity.filesReferred).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not count search activity from before the given timestamp", async () => {
+    const repoRoot = await createRepo({
+      "src/invoiceApproval.ts":
+        "export function approveInvoice() { return 'invoice approval'; }"
+    });
+    const service = new IndexingService();
+    await service.index({ startPath: repoRoot });
+    await service.search({ startPath: repoRoot, query: "invoice" });
+
+    const sinceAfterSearch = new Date(Date.now() + 60_000).toISOString();
+    const activity = await readSearchActivitySince(repoRoot, sinceAfterSearch);
+
+    expect(activity.searchCount).toBe(0);
+    expect(activity.filesReferred).toBe(0);
+  });
+
+  it("reports zero search activity when no search has ever run", async () => {
+    const repoRoot = await createRepo({ "src/app.ts": "export const app = 1;" });
+
+    const activity = await readSearchActivitySince(repoRoot, new Date().toISOString());
+
+    expect(activity).toEqual({ filesReferred: 0, searchCount: 0 });
   });
 
   it("skips ignored folders", async () => {

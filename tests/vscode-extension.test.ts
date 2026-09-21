@@ -671,10 +671,11 @@ describe("VS Code extension shell", () => {
       reductionPercent: 80,
       request: "Add invoice approval workflow"
     });
-    const rendered = formatAgentInsights({ contextInsights });
+    const rendered = formatAgentInsights({ contextInsights }, undefined);
     expect(rendered).toContain("Without Copilot Architect: 3 files");
     expect(rendered).toContain("With Copilot Architect: 1 file ");
-    expect(rendered).toContain("Sends 80% less");
+    expect(rendered).toContain("Sends ");
+    expect(rendered).toContain(">80%</span> less");
     expect(rendered).toContain("Add invoice approval workflow");
     // The baseline stays spelled out so "without" is never read as a measured
     // Copilot figure.
@@ -705,15 +706,88 @@ describe("VS Code extension shell", () => {
     const artifacts = await loadDashboardArtifacts(repoRoot);
 
     expect(artifacts.contextInsights?.selectedFileCount).toBe(0);
-    expect(formatAgentInsights(artifacts)).toContain("No plan yet");
-    expect(formatAgentInsights(artifacts)).toContain(
+    expect(formatAgentInsights(artifacts, undefined)).toContain("No plan yet");
+    expect(formatAgentInsights(artifacts, undefined)).toContain(
       "Without Copilot Architect: 1 file"
     );
   });
 
   it("asks for setup when there is no index to measure against", () => {
-    expect(formatAgentInsights(undefined)).toContain("run Setup Repo");
-    expect(formatAgentInsights({})).toContain("run Setup Repo");
+    expect(formatAgentInsights(undefined, undefined)).toContain("run Setup Repo");
+    expect(formatAgentInsights({}, undefined)).toContain("run Setup Repo");
+  });
+
+  it("renders management rollups for the running session", () => {
+    const html = formatAgentInsights(
+      {},
+      {
+        title: "Add invoice approval",
+        phase: "implement",
+        decisions: [],
+        plans: [],
+        staleBranch: false,
+        activity: {
+          durationMinutes: 125,
+          decisionsByKind: { design: 2, scope: 1, constraint: 1, fact: 0 },
+          planRevisionCount: 3,
+          planApprovedCount: 1,
+          planImplementedVersions: [3],
+          constraintsEnforced: 1,
+          constraintsUnenforceable: 0,
+          changeStats: { filesChanged: 4, linesAdded: 60, linesRemoved: 12 },
+          filesReferredFromIndex: 9,
+          searchCount: 5
+        }
+      }
+    );
+
+    expect(html).toContain("Files referred from index this session");
+    expect(html).toContain("9");
+    expect(html).toContain("5 searches");
+    expect(html).toContain("+60");
+    expect(html).toContain("-12");
+    expect(html).toContain("4 tracked file(s)");
+    expect(html).toContain("2h 5m");
+    expect(html).toContain("2 design, 1 scope, 1 constraint");
+    expect(html).toContain("3");
+    expect(html).toContain("1 approved");
+    expect(html).toContain("implemented v3");
+    expect(html).toContain(">1</span> enforced");
+    // Colored as management stats, not plain text — the whole point of "make
+    // it colorful" was these figures reading as stats rather than prose.
+    expect(html).toContain("var(--vscode-charts-green)");
+    expect(html).toContain("var(--vscode-charts-red)");
+    expect(html).toContain("var(--vscode-charts-purple)");
+  });
+
+  it("reports no git baseline and no activity honestly rather than guessing", () => {
+    const html = formatAgentInsights(
+      {},
+      {
+        title: "Add invoice approval",
+        phase: "analyze",
+        decisions: [],
+        plans: [],
+        staleBranch: false,
+        activity: {
+          durationMinutes: 2,
+          decisionsByKind: { design: 0, scope: 0, constraint: 0, fact: 0 },
+          planRevisionCount: 0,
+          planApprovedCount: 0,
+          planImplementedVersions: [],
+          constraintsEnforced: 0,
+          constraintsUnenforceable: 0,
+          changeStats: undefined,
+          filesReferredFromIndex: 0,
+          searchCount: 0
+        }
+      }
+    );
+
+    expect(html).toContain("no git history to compare against");
+    expect(html).toContain("none yet");
+    expect(html).toContain("none drafted yet");
+    expect(html).toContain("Constraints recorded this session: none.");
   });
 
   it("renders live artifact values into the dashboard cards", () => {
@@ -742,10 +816,28 @@ describe("VS Code extension shell", () => {
 
     expect(html).toContain("TypeScript, Python");
     expect(html).toContain("React");
-    expect(html).toContain("Add invoice approval");
     expect(html).toContain("3/4 passed");
     expect(html).toContain("7 agent(s) installed");
     expect(html).toContain("2 registered repo(s)");
+  });
+
+  it("no longer renders a standalone Plans card", () => {
+    // The dashboard used to show plan title/status as its own card, duplicating
+    // the plan-revision rollup Agent Insights now carries. Removed on request.
+    const html = createDashboardHtml({
+      workspaceRoot: "/workspace/repo",
+      mcpStatus: "running",
+      artifacts: {
+        latestPlan: {
+          title: "Add invoice approval",
+          status: "draft",
+          generatedAt: "2026-06-21T10:00:00.000Z"
+        }
+      }
+    });
+
+    expect(html).not.toContain("Add invoice approval");
+    expect(html).not.toContain("<h2>Plans</h2>");
   });
 
   it("renders the required dashboard sections without reading business artifacts", () => {
@@ -761,12 +853,41 @@ describe("VS Code extension shell", () => {
     expect(html).toContain("Current work");
     expect(html).toContain("Repo summary");
     expect(html).toContain("Languages/frameworks");
-    expect(html).toContain("Plans");
     expect(html).toContain("Validation runs");
     expect(html).toContain("Review reports");
     expect(html).toContain("Agent status");
     expect(html).toContain("MCP status");
     expect(html).toContain("Agent insights");
+    // Removed on request: the itemized version list duplicated the
+    // plan-revision rollup Agent Insights now carries.
+    expect(html).not.toContain("<h2>Plans</h2>");
+  });
+
+  it("colors each card's accent border with a theme-aware charts token, not plain black/white", () => {
+    const html = createDashboardHtml({
+      workspaceRoot: "/workspace/repo",
+      mcpStatus: "running"
+    });
+
+    expect(html).toContain("--vscode-charts-blue");
+    expect(html).toContain("--vscode-charts-green");
+    expect(html).toContain("--vscode-charts-purple");
+    expect(html).toContain("--vscode-charts-orange");
+    expect(html).toContain("--vscode-charts-yellow");
+    expect(html).toContain("--vscode-charts-red");
+    // No hardcoded hex palette — every accent must resolve through a VS Code
+    // theme token so it still looks right in a light or high-contrast theme.
+    expect(html).not.toMatch(/--accent:#[0-9a-fA-F]{3,6}/);
+  });
+
+  it("colors MCP status by state rather than a fixed accent", () => {
+    const running = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "running" });
+    const starting = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "starting" });
+    const stopped = createDashboardHtml({ workspaceRoot: "/w", mcpStatus: "stopped" });
+
+    expect(running).toContain('<section style="--accent:var(--vscode-charts-green)"><h2>MCP status</h2>');
+    expect(starting).toContain('<section style="--accent:var(--vscode-charts-yellow)"><h2>MCP status</h2>');
+    expect(stopped).toContain('<section style="--accent:var(--vscode-charts-red)"><h2>MCP status</h2>');
   });
 
   it("renders exactly the five primary actions plus More actions", () => {
@@ -1846,7 +1967,9 @@ describe("dashboard session card", () => {
     expect(html).toContain("/create-plan");
   });
 
-  it("shows the feature, phase, plan version and decisions", () => {
+  it("shows the feature, phase, and decisions", () => {
+    // Plan-version detail moved to the Agent Insights rollup, so the session
+    // card itself no longer renders a "Plans:" line.
     const html = formatSession({
       title: "Add invoice approval",
       phase: "implement",
@@ -1863,12 +1986,9 @@ describe("dashboard session card", () => {
 
     expect(html).toContain("Add invoice approval");
     expect(html).toContain("implement");
-    expect(html).toContain("v2 draft");
-    expect(html).toContain("1 of 2 approved");
-    // Which version is running is what /review compares against.
-    expect(html).toContain("implemented v1");
     expect(html).toContain("Decisions (2)");
     expect(html).toContain("Approvals are per invoice");
+    expect(html).not.toContain("Plans:");
   });
 
   it("says a moved branch will park the session, without parking it", () => {
@@ -1881,7 +2001,6 @@ describe("dashboard session card", () => {
     });
 
     expect(html).toContain("branch has moved");
-    expect(html).toContain("none drafted yet");
     expect(html).toContain("none recorded");
   });
 
@@ -1928,6 +2047,46 @@ describe("loadDashboardSession", () => {
   it("returns nothing when no session is open", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-dash-none-"));
     expect(await loadDashboardSession(workspaceRoot)).toBeUndefined();
+  });
+
+  it("computes real session-activity rollups rather than leaving them blank", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-dash-activity-"));
+    const sessions = new SessionService();
+    await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+    await sessions.recordDecision(
+      { workspaceRoot },
+      { kind: "scope", statement: "Billing service only" }
+    );
+    await sessions.recordDecision(
+      { workspaceRoot },
+      {
+        kind: "constraint",
+        statement: "Never touch svc-payments",
+        enforcement: { forbidPaths: ["svc-payments"] }
+      }
+    );
+    await sessions.addPlanVersion({ workspaceRoot }, { title: "v1" });
+
+    const card = await loadDashboardSession(workspaceRoot, sessions);
+
+    expect(card?.activity).toBeDefined();
+    expect(card?.activity?.durationMinutes).toBeGreaterThanOrEqual(0);
+    expect(card?.activity?.decisionsByKind).toEqual({
+      design: 0,
+      scope: 1,
+      constraint: 1,
+      fact: 0
+    });
+    expect(card?.activity?.planRevisionCount).toBe(1);
+    expect(card?.activity?.planApprovedCount).toBe(0);
+    expect(card?.activity?.planImplementedVersions).toEqual([]);
+    expect(card?.activity?.constraintsEnforced).toBe(1);
+    expect(card?.activity?.constraintsUnenforceable).toBe(0);
+    // workspaceRoot here is a plain temp directory, not a git repository, and
+    // no search has run against it — both degrade honestly rather than guess.
+    expect(card?.activity?.changeStats).toBeUndefined();
+    expect(card?.activity?.filesReferredFromIndex).toBe(0);
+    expect(card?.activity?.searchCount).toBe(0);
   });
 });
 

@@ -124,7 +124,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               48 files, 554 tests
+├── tests/               49 files, 567 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -382,7 +382,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 554 tests must pass before merging.
+Use Vitest. All 567 tests must pass before merging.
 
 Cover:
 
@@ -394,6 +394,15 @@ Cover:
 - session lifecycle (phase, decisions, plan versions, park, end, read-only peek)
 - decision proposal parsing, confirmation wiring and supersession
 - dashboard session rendering, including the idle and moved-branch states
+- dashboard session-activity rollups (decisions by kind, plan revision/approval
+  cycle, constraint enforcement coverage, session duration) computed from the
+  session record rather than estimated
+- search-activity log (files a search call actually returned, read back
+  since a given timestamp) backing the "files referred from the index" figure
+- session git-diff stats (lines/files changed since a session opened, based
+  on the commit that was `HEAD` at that time rather than `Session.gitHead`,
+  which does not move for a same-branch commit) and its honest fallback when
+  no git history reaches that far back
 - plan contract (freshness, approval gating, path constraints)
 - change selection (invented paths, add-of-existing, traversal, caps)
 - rationale evidence (verified, unverified, and honestly unchecked)

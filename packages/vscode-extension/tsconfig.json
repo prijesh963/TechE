@@ -14,6 +14,9 @@
       "path": "../agents"
     },
     {
+      "path": "../core"
+    },
+    {
       "path": "../grounding"
     },
     {

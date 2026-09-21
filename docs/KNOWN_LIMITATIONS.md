@@ -684,6 +684,41 @@ this.orders)` loop over a TypeScript field all resolve end to end.
 
 ---
 
+### 4.16 Dashboard session-activity metrics: known boundaries
+
+**Phase 41.** The Agent Insights card's session rollups (files referred from
+the index, lines/files changed, decisions, plan/approval cycle, constraint
+coverage) are all read from real data — the session record, the
+search-activity log, and git — never estimated, but each has an honest edge:
+
+- **Lines/files changed** (`collectSessionChangeStats`) diffs the working
+  tree against the commit that was `HEAD` when the session opened, found via
+  `git rev-list --before <session.createdAt>`. Git commit dates have
+  one-second resolution: a commit landed in the same wall-clock second as
+  the session's own `createdAt` instant can be included or excluded by that
+  boundary check either way, rather than by which side of the session
+  opening it actually happened on. In real usage this is far below the gap
+  between a session opening and a developer's first commit; it showed up
+  only in a fast automated test committing twice in immediate succession.
+- **Untracked new files are not counted.** `git diff` does not see a file
+  until it is added, so a session that adds whole new files without staging
+  them undercounts rather than guesses at their size.
+- **"Files referred from the index"** counts only `IndexingService.search()`
+  calls — the retrieval path an agent actually reasons from. A workflow that
+  only enumerates the repo via `listFiles`/`list_files` (used for "what's
+  here", not "what's relevant") is not reflected, since enumeration is not
+  the index "referring" a file into an answer.
+- **No git repository, or no commit before the session opened**, returns
+  `undefined` for the change stats rather than falling back to an
+  empty-tree diff — the fallback was deliberately rejected because a shallow
+  clone whose history does not reach back that far would otherwise report
+  its entire checkout as newly added.
+
+**Cost:** low — every fallback is a missing figure, never a wrong one, and
+the card says so in place of a number rather than silently reading as zero.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
