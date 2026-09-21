@@ -6,12 +6,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { renderRolePrompt } from "@copilot-architect/agents";
+import { collectSessionChangeStats } from "@copilot-architect/core";
 import { GroundingService, summarizeGrounding } from "@copilot-architect/grounding";
 import { ReviewService } from "@copilot-architect/reviewer";
 import { looksLikeRepo } from "@copilot-architect/shared";
 import { ValidationService } from "@copilot-architect/validator";
 import {
   IndexingService,
+  readSearchActivitySince,
   tokenize,
   type SearchResult
 } from "@copilot-architect/indexer";
@@ -51,6 +53,7 @@ import {
   diffCheckpoint,
   type Decision,
   type DecisionKind,
+  type Session,
   type SessionPhase,
   type UnenforceableConstraint
 } from "@copilot-architect/session";
@@ -416,6 +419,38 @@ export interface DashboardSession {
    * the next phase will park it, and a repaint must not.
    */
   staleBranch: boolean;
+  /** Management-facing rollups for the running session. Undefined only when the session itself could not be read. */
+  activity?: SessionActivityInsights;
+}
+
+/**
+ * Session-scoped numbers for the Agent Insights card — the "what actually
+ * happened" counterpart to {@link ContextInsights}' "what this saves".
+ *
+ * Every field is derived from data the tool already tracks for its own
+ * purposes (the session record, the search-activity log, git itself) rather
+ * than estimated or invented for display. `changeStats` and the index counts
+ * degrade to `undefined`/`0` rather than a guess when the underlying source
+ * has nothing to report — see {@link collectSessionChangeStats} and
+ * {@link readSearchActivitySince}.
+ */
+export interface SessionActivityInsights {
+  /** Minutes since the session opened, rounded. */
+  durationMinutes: number;
+  /** Confirmed, active (non-superseded) decisions this session, by kind. */
+  decisionsByKind: Record<DecisionKind, number>;
+  planRevisionCount: number;
+  planApprovedCount: number;
+  /** Versions actually implemented — what `/review` compares against. */
+  planImplementedVersions: number[];
+  /** Confirmed `constraint` decisions that carry enforcement the tool can check, vs. ones it cannot. */
+  constraintsEnforced: number;
+  constraintsUnenforceable: number;
+  /** Tracked-file diff since the session opened. Undefined when no git history reaches back that far. */
+  changeStats?: { filesChanged: number; linesAdded: number; linesRemoved: number };
+  /** Distinct files the index actually returned to a search this session, and how many searches ran. */
+  filesReferredFromIndex: number;
+  searchCount: number;
 }
 
 /** Live values read from `.copilot-architect/` artifacts to populate the dashboard. */
@@ -1543,35 +1578,9 @@ export function formatSession(session: DashboardSession | undefined): string {
     );
   }
 
-  lines.push(formatSessionPlans(session.plans));
   lines.push(formatSessionDecisions(session.decisions));
 
   return lines.join("<br>");
-}
-
-function formatSessionPlans(plans: DashboardSession["plans"]): string {
-  if (plans.length === 0) {
-    return "Plans: none drafted yet";
-  }
-
-  const latest = plans[plans.length - 1];
-  const implemented = plans.filter((plan) => plan.implemented).map((p) => p.version);
-  const approved = plans.filter((plan) => plan.status === "approved").length;
-
-  const parts = [
-    `Plans: v${latest.version} ${latest.status}`,
-    `${approved} of ${plans.length} approved`
-  ];
-
-  // Which version is running matters more than how many exist: it is what
-  // /review compares against.
-  parts.push(
-    implemented.length > 0
-      ? `implemented v${implemented.join(", v")}`
-      : "none implemented"
-  );
-
-  return escapeHtml(parts.join(" · "));
 }
 
 function formatSessionDecisions(decisions: DashboardSession["decisions"]): string {
@@ -1591,6 +1600,49 @@ function formatSessionDecisions(decisions: DashboardSession["decisions"]): strin
   return `Decisions (${decisions.length}):<br>${rows}`;
 }
 
+function formatMcpStatusAccent(status: ExtensionState["mcpStatus"]): string {
+  switch (status) {
+    case "running":
+      return "var(--vscode-charts-green)";
+    case "starting":
+      return "var(--vscode-charts-yellow)";
+    default:
+      return "var(--vscode-charts-red)";
+  }
+}
+
+/**
+ * One small hand-drawn glyph per card, inlined as raw SVG markup — never a
+ * fetched icon font or image, so the dashboard renders identically offline
+ * and needs no webview resource root. Each is a 16x16 viewBox, white on the
+ * card's own accent color, sized for the ~12px circle it sits in.
+ */
+const DASHBOARD_ICONS = {
+  currentWork: '<polygon points="4,3 4,13 13,8" fill="white"/>',
+  repoSummary:
+    '<path d="M2 4a1 1 0 0 1 1-1h3l1.5 2H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4z" fill="white"/>',
+  languages:
+    '<path d="M5 3L1.5 8 5 13M11 3l3.5 5L11 13" stroke="white" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  validation:
+    '<path d="M3 8.5l3 3 7-7.5" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  review:
+    '<circle cx="6.5" cy="6.5" r="4" stroke="white" stroke-width="1.6" fill="none"/><line x1="9.8" y1="9.8" x2="14" y2="14" stroke="white" stroke-width="1.8" stroke-linecap="round"/>',
+  agentStatus:
+    '<rect x="3" y="5" width="10" height="8" rx="2" stroke="white" stroke-width="1.4" fill="none"/><circle cx="6" cy="9" r="1" fill="white"/><circle cx="10" cy="9" r="1" fill="white"/><line x1="8" y1="5" x2="8" y2="2.5" stroke="white" stroke-width="1.4"/><circle cx="8" cy="2" r="1" fill="white"/>',
+  mcpStatus:
+    '<path d="M5 2v4M11 2v4M4 6h8v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6zM8 12v3" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
+  build:
+    '<path d="M8 2v7m0 0L5 6m3 3l3-3M3 12h10" stroke="white" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  agentInsights:
+    '<rect x="2" y="9" width="3" height="5" fill="white"/><rect x="6.5" y="5" width="3" height="9" fill="white"/><rect x="11" y="2" width="3" height="12" fill="white"/>',
+  lastCommand:
+    '<rect x="2" y="3" width="12" height="10" rx="1.5" stroke="white" stroke-width="1.4" fill="none"/><path d="M4.5 6.5l2 2-2 2M8.5 10.5h3" stroke="white" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+} as const;
+
+function renderIconCircle(accent: string, iconInner: string): string {
+  return `<span class="icon-circle" style="background:${accent}"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">${iconInner}</svg></span>`;
+}
+
 export function createDashboardHtml(state: ExtensionState): string {
   const artifacts = state.artifacts;
   const sections = [
@@ -1598,7 +1650,9 @@ export function createDashboardHtml(state: ExtensionState): string {
       // First, because it is the answer to "where am I?" — the question the
       // dashboard exists to answer and previously could not.
       title: "Current work",
-      body: formatSession(state.session)
+      body: formatSession(state.session),
+      accent: "var(--vscode-charts-blue)",
+      icon: DASHBOARD_ICONS.currentWork
     },
     {
       title: "Repo summary",
@@ -1606,41 +1660,53 @@ export function createDashboardHtml(state: ExtensionState): string {
         artifacts?.repoCount
           ? `${state.workspaceRoot} · ${artifacts.repoCount} registered repo(s)`
           : state.workspaceRoot
-      )
+      ),
+      accent: "var(--vscode-charts-purple)",
+      icon: DASHBOARD_ICONS.repoSummary
     },
     {
       title: "Languages/frameworks",
-      body: escapeHtml(formatLanguagesFrameworks(artifacts))
-    },
-    {
-      title: "Plans",
-      body: escapeHtml(formatPlan(artifacts))
+      body: escapeHtml(formatLanguagesFrameworks(artifacts)),
+      accent: "var(--vscode-charts-orange)",
+      icon: DASHBOARD_ICONS.languages
     },
     {
       title: "Validation runs",
-      body: escapeHtml(formatValidation(artifacts))
+      body: escapeHtml(formatValidation(artifacts)),
+      accent: "var(--vscode-charts-yellow)",
+      icon: DASHBOARD_ICONS.validation
     },
     {
       title: "Review reports",
-      body: escapeHtml(formatReview(artifacts))
+      body: escapeHtml(formatReview(artifacts)),
+      accent: "var(--vscode-charts-red)",
+      icon: DASHBOARD_ICONS.review
     },
     {
       title: "Agent status",
-      body: escapeHtml(formatAgents(artifacts))
+      body: escapeHtml(formatAgents(artifacts)),
+      accent: "var(--vscode-charts-purple)",
+      icon: DASHBOARD_ICONS.agentStatus
     },
     {
       title: "MCP status",
-      body: state.mcpStatus
+      body: state.mcpStatus,
+      accent: formatMcpStatusAccent(state.mcpStatus),
+      icon: DASHBOARD_ICONS.mcpStatus
     },
     {
       // So a developer re-testing a fix can see which build is running
       // without having to deduce it from behaviour.
       title: "Build",
-      body: escapeHtml(EXTENSION_VERSION)
+      body: escapeHtml(EXTENSION_VERSION),
+      accent: "var(--vscode-charts-blue)",
+      icon: DASHBOARD_ICONS.build
     },
     {
       title: "Agent insights",
-      body: escapeHtml(formatAgentInsights(artifacts))
+      body: formatAgentInsights(artifacts, state.session),
+      accent: "var(--vscode-charts-green)",
+      icon: DASHBOARD_ICONS.agentInsights
     }
   ];
 
@@ -1654,9 +1720,10 @@ export function createDashboardHtml(state: ExtensionState): string {
     "<style>",
     "body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background);margin:0;padding:16px;}",
     "h1{font-size:20px;font-weight:600;margin:0 0 12px;}",
-    ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;}",
-    "section{border:1px solid var(--vscode-panel-border);border-radius:6px;padding:10px;background:var(--vscode-sideBar-background);min-height:74px;}",
-    "h2{font-size:13px;font-weight:600;margin:0 0 8px;}",
+    ".grid{display:flex;flex-direction:column;gap:10px;}",
+    "section{border:1px solid var(--vscode-panel-border);border-left:4px solid var(--accent, var(--vscode-panel-border));border-radius:6px;padding:10px;background:var(--vscode-sideBar-background);}",
+    "h2{display:flex;align-items:center;font-size:13px;font-weight:600;margin:0 0 8px;color:var(--accent, var(--vscode-foreground));}",
+    ".icon-circle{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;margin-right:6px;}",
     "p{font-size:12px;line-height:1.4;margin:0;color:var(--vscode-descriptionForeground);overflow-wrap:anywhere;}",
     ".actions{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px;}",
     "a{font-size:12px;color:var(--vscode-textLink-foreground);text-decoration:none;}",
@@ -1668,11 +1735,12 @@ export function createDashboardHtml(state: ExtensionState): string {
     `<div class="actions">${DASHBOARD_PRIMARY_ACTIONS.map(renderActionLink).join("")}<a href="command:copilotArchitect.moreActions">More actions…</a></div>`,
     '<div class="grid">',
     ...sections.map(
-      (section) => `<section><h2>${section.title}</h2><p>${section.body}</p></section>`
+      (section) =>
+        `<section style="--accent:${section.accent}"><h2>${renderIconCircle(section.accent, section.icon)}${section.title}</h2><p>${section.body}</p></section>`
     ),
     "</div>",
-    '<section style="margin-top:10px">',
-    "<h2>Last command</h2>",
+    '<section style="margin-top:10px;--accent:var(--vscode-charts-blue)">',
+    `<h2>${renderIconCircle("var(--vscode-charts-blue)", DASHBOARD_ICONS.lastCommand)}Last command</h2>`,
     `<p>${escapeHtml(state.lastCommand ?? "None")}</p>`,
     `<p>Exit code: ${state.lastExitCode ?? "n/a"}</p>`,
     state.lastStdout ? `<pre>${escapeHtml(state.lastStdout)}</pre>` : "",
@@ -1717,11 +1785,12 @@ export async function loadDashboardSession(
   }
 
   const { session, staleBranch } = peeked;
+  const activeDecisions = sessions.activeDecisions(session);
 
   return {
     title: session.title,
     phase: session.phase,
-    decisions: sessions.activeDecisions(session).map((decision) => ({
+    decisions: activeDecisions.map((decision) => ({
       kind: decision.kind,
       statement: decision.statement
     })),
@@ -1730,7 +1799,68 @@ export async function loadDashboardSession(
       status: plan.status,
       implemented: Boolean(plan.implementedAt)
     })),
-    staleBranch
+    staleBranch,
+    activity: await loadSessionActivity(workspaceRoot, session, activeDecisions)
+  };
+}
+
+/**
+ * Assembles {@link SessionActivityInsights} from data the tool already
+ * tracks: the session record itself for decisions and plan revisions, git
+ * for the tracked-file diff since the session opened, and the search-activity
+ * log for what the index actually handed back. Never throws — a source that
+ * fails degrades to zero/undefined rather than losing the whole card.
+ */
+async function loadSessionActivity(
+  workspaceRoot: string,
+  session: Session,
+  activeDecisions: Decision[]
+): Promise<SessionActivityInsights> {
+  const decisionsByKind: Record<DecisionKind, number> = {
+    design: 0,
+    scope: 0,
+    constraint: 0,
+    fact: 0
+  };
+  let constraintsEnforced = 0;
+  let constraintsUnenforceable = 0;
+
+  for (const decision of activeDecisions) {
+    decisionsByKind[decision.kind] += 1;
+    if (decision.kind === "constraint") {
+      if (decision.enforcement) {
+        constraintsEnforced += 1;
+      } else {
+        constraintsUnenforceable += 1;
+      }
+    }
+  }
+
+  const [changeStats, searchActivity] = await Promise.all([
+    collectSessionChangeStats(workspaceRoot, session.createdAt).catch(() => undefined),
+    readSearchActivitySince(workspaceRoot, session.createdAt).catch(() => ({
+      filesReferred: 0,
+      searchCount: 0
+    }))
+  ]);
+
+  return {
+    durationMinutes: Math.max(
+      0,
+      Math.round((Date.now() - new Date(session.createdAt).getTime()) / 60_000)
+    ),
+    decisionsByKind,
+    planRevisionCount: session.plans.length,
+    planApprovedCount: session.plans.filter((plan) => plan.status === "approved")
+      .length,
+    planImplementedVersions: session.plans
+      .filter((plan) => plan.implementedAt)
+      .map((plan) => plan.version),
+    constraintsEnforced,
+    constraintsUnenforceable,
+    changeStats,
+    filesReferredFromIndex: searchActivity.filesReferred,
+    searchCount: searchActivity.searchCount
   };
 }
 
@@ -1892,15 +2022,6 @@ function formatLanguagesFrameworks(artifacts: DashboardArtifacts | undefined): s
   return parts.join(" · ");
 }
 
-function formatPlan(artifacts: DashboardArtifacts | undefined): string {
-  const plan = artifacts?.latestPlan;
-  if (!plan) {
-    return "No plan yet — run Generate Plan.";
-  }
-  const meta = [plan.status, formatDate(plan.generatedAt)].filter(Boolean).join(", ");
-  return meta ? `${plan.title} (${meta})` : plan.title;
-}
-
 function formatValidation(artifacts: DashboardArtifacts | undefined): string {
   const validation = artifacts?.latestValidation;
   if (!validation) {
@@ -1934,34 +2055,148 @@ function formatAgents(artifacts: DashboardArtifacts | undefined): string {
     : "Roles are built in — nothing to install.";
 }
 
-export function formatAgentInsights(artifacts: DashboardArtifacts | undefined): string {
+const COLOR_BLUE = "var(--vscode-charts-blue)";
+const COLOR_GREEN = "var(--vscode-charts-green)";
+const COLOR_RED = "var(--vscode-charts-red)";
+const COLOR_ORANGE = "var(--vscode-charts-orange)";
+const COLOR_PURPLE = "var(--vscode-charts-purple)";
+const COLOR_YELLOW = "var(--vscode-charts-yellow)";
+
+/** A single colored, bold figure — the "stat" look management rollups use throughout this card. */
+function stat(value: string | number, colorVar: string): string {
+  return `<span style="color:${colorVar};font-weight:600">${escapeHtml(String(value))}</span>`;
+}
+
+/**
+ * Management-facing rollup: context savings (existing), plus what actually
+ * happened this session — files the index handed back, lines changed,
+ * decisions, plan/approval cycle, constraint coverage, and the latest
+ * validation/review standing. Every figure traces to real data (see
+ * {@link SessionActivityInsights}, {@link ContextInsights}); nothing here is
+ * estimated except where the source line says so.
+ *
+ * Returns safe HTML directly — callers must not re-escape it, matching
+ * {@link formatSession}.
+ */
+export function formatAgentInsights(
+  artifacts: DashboardArtifacts | undefined,
+  session: DashboardSession | undefined
+): string {
+  const lines: string[] = [];
   const insights = artifacts?.contextInsights;
 
   if (!insights) {
-    return "No index yet — run Setup Repo to measure context usage.";
+    lines.push("No index yet — run Setup Repo to measure context usage.");
+  } else {
+    const without = `Without Copilot Architect: ${formatFileCount(insights.repoFileCount)} · ~${stat(formatTokens(insights.repoEstimatedTokens), COLOR_BLUE)} tokens`;
+
+    if (insights.selectedFileCount === 0) {
+      lines.push(`${without}. No plan yet — run Generate Plan to compare.`);
+    } else {
+      const withArchitect = `With Copilot Architect: ${formatFileCount(insights.selectedFileCount)} · ~${stat(formatTokens(insights.selectedEstimatedTokens), COLOR_BLUE)} tokens`;
+      const saved = insights.repoEstimatedTokens - insights.selectedEstimatedTokens;
+      const request = insights.request
+        ? ` for "${escapeHtml(truncate(insights.request, 48))}"`
+        : "";
+
+      lines.push(without);
+      lines.push(withArchitect);
+      lines.push(
+        `Sends ${stat(`${insights.reductionPercent}%`, COLOR_GREEN)} less (~${formatTokens(saved)} tokens) per request${request}.`
+      );
+      // "Without" means the whole repo — the fallback when an agent has no plan
+      // to go on. It is not a measurement of what Copilot itself sends (Copilot
+      // does its own retrieval), and chars÷4 is not a real tokenizer, so the
+      // caveat spells out the baseline. See docs/benchmarks/AFTER.md.
+      lines.push(
+        "Estimate only (chars÷4), measured against whole-repo context — not a Copilot bill."
+      );
+    }
   }
 
-  const without = `Without Copilot Architect: ${formatFileCount(insights.repoFileCount)} · ~${formatTokens(insights.repoEstimatedTokens)} tokens`;
-
-  if (insights.selectedFileCount === 0) {
-    return `${without}. No plan yet — run Generate Plan to compare.`;
+  const activity = session?.activity;
+  if (activity) {
+    lines.push(
+      `Files referred from index this session: ${stat(activity.filesReferredFromIndex, COLOR_PURPLE)} across ${activity.searchCount} search${activity.searchCount === 1 ? "" : "es"}.`
+    );
+    lines.push(formatChangeStatsLine(activity.changeStats));
+    lines.push(
+      `Session duration: ${stat(formatDuration(activity.durationMinutes), COLOR_BLUE)}.`
+    );
+    lines.push(formatDecisionsByKindLine(activity.decisionsByKind));
+    lines.push(formatPlanRollupLine(activity));
+    lines.push(formatConstraintsLine(activity));
   }
 
-  const withArchitect = `With Copilot Architect: ${formatFileCount(insights.selectedFileCount)} · ~${formatTokens(insights.selectedEstimatedTokens)} tokens`;
-  const saved = insights.repoEstimatedTokens - insights.selectedEstimatedTokens;
-  const savings = `Sends ${insights.reductionPercent}% less (~${formatTokens(saved)} tokens) per request`;
-  const request = insights.request ? ` for "${truncate(insights.request, 48)}"` : "";
+  const validation = artifacts?.latestValidation;
+  if (validation && typeof validation.total === "number" && validation.total > 0) {
+    const passed = validation.passed ?? 0;
+    const color = passed === validation.total ? COLOR_GREEN : COLOR_ORANGE;
+    lines.push(
+      `Latest validation pass rate: ${stat(`${passed}/${validation.total}`, color)}.`
+    );
+  }
 
-  return [
-    without,
-    withArchitect,
-    `${savings}${request}.`,
-    // "Without" means the whole repo — the fallback when an agent has no plan
-    // to go on. It is not a measurement of what Copilot itself sends (Copilot
-    // does its own retrieval), and chars÷4 is not a real tokenizer, so the
-    // caveat spells out the baseline. See docs/benchmarks/AFTER.md.
-    "Estimate only (chars÷4), measured against whole-repo context — not a Copilot bill."
-  ].join(" · ");
+  const review = artifacts?.latestReview;
+  if (review && typeof review.findingCount === "number") {
+    const color = review.findingCount === 0 ? COLOR_GREEN : COLOR_RED;
+    lines.push(`Latest review findings open: ${stat(review.findingCount, color)}.`);
+  }
+
+  return lines.join("<br>");
+}
+
+function formatChangeStatsLine(
+  changeStats: SessionActivityInsights["changeStats"]
+): string {
+  if (!changeStats) {
+    return "Lines changed this session: no git history to compare against.";
+  }
+  const { filesChanged, linesAdded, linesRemoved } = changeStats;
+  if (filesChanged === 0 && linesAdded === 0 && linesRemoved === 0) {
+    return "Lines changed this session: none yet.";
+  }
+  return `Lines changed this session: ${stat(`+${linesAdded}`, COLOR_GREEN)} / ${stat(`-${linesRemoved}`, COLOR_RED)} across ${filesChanged} tracked file(s).`;
+}
+
+function formatDuration(minutes: number): string {
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder > 0 ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+function formatDecisionsByKindLine(byKind: Record<DecisionKind, number>): string {
+  const total = Object.values(byKind).reduce((sum, count) => sum + count, 0);
+  if (total === 0) {
+    return "Decisions recorded this session: none yet.";
+  }
+  const breakdown = (Object.keys(byKind) as DecisionKind[])
+    .filter((kind) => byKind[kind] > 0)
+    .map((kind) => `${byKind[kind]} ${kind}`)
+    .join(", ");
+  return `Decisions recorded this session: ${stat(total, COLOR_PURPLE)} (${escapeHtml(breakdown)}).`;
+}
+
+function formatPlanRollupLine(activity: SessionActivityInsights): string {
+  if (activity.planRevisionCount === 0) {
+    return "Plan revisions this session: none drafted yet.";
+  }
+  const implemented =
+    activity.planImplementedVersions.length > 0
+      ? `implemented v${activity.planImplementedVersions.join(", v")}`
+      : "none implemented";
+  return `Plan revisions this session: ${stat(activity.planRevisionCount, COLOR_YELLOW)} (${activity.planApprovedCount} approved, ${escapeHtml(implemented)}).`;
+}
+
+function formatConstraintsLine(activity: SessionActivityInsights): string {
+  const total = activity.constraintsEnforced + activity.constraintsUnenforceable;
+  if (total === 0) {
+    return "Constraints recorded this session: none.";
+  }
+  return `Constraints recorded this session: ${stat(activity.constraintsEnforced, COLOR_GREEN)} enforced, ${stat(activity.constraintsUnenforceable, COLOR_ORANGE)} unenforceable.`;
 }
 
 function formatFileCount(count: number): string {

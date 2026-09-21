@@ -23,6 +23,7 @@ import {
   writeJsonFile
 } from "@copilot-architect/shared";
 
+import { recordSearchActivity } from "./search-activity-log.js";
 import { extractParsedSymbols } from "./tree-sitter-symbols.js";
 
 import type {
@@ -126,11 +127,14 @@ export class IndexingService {
     // A workspace root holds no code of its own — its index covers little more
     // than workspace.json. Searching it directly is what made every agent
     // report an empty repo. Answer for the registered repos instead.
-    if (fanOut.length > 0) {
-      return this.searchAcrossFanOut(repoRoot, fanOut, options);
-    }
+    const response =
+      fanOut.length > 0
+        ? await this.searchAcrossFanOut(repoRoot, fanOut, options)
+        : await this.searchSingleRepo(repoRoot, options);
 
-    return this.searchSingleRepo(repoRoot, options);
+    await recordSearchActivity(repoRoot, options.query, response.results);
+
+    return response;
   }
 
   private async searchSingleRepo(
