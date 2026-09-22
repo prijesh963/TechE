@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "com.copilotarchitect"
-version = "0.1.0"
+version = "0.1.1"
 
 repositories {
     mavenCentral()
@@ -68,6 +68,16 @@ intellijPlatform {
         version = project.version.toString()
         ideaVersion {
             sinceBuild = "242"
+            // Leaving this unset does NOT mean "no upper bound" the way it
+            // reads — the Gradle IntelliJ Platform plugin silently derives
+            // untilBuild as "<sinceBuild's branch>.*" (here, "242.*") when
+            // it's omitted, capping real-world compatibility to the exact
+            // 2024.2.x branch this was built against. A real install on
+            // 2026.2 (build 262.x) was rejected with "requires build 242.*
+            // or older" as a direct result — confirmed against an actual
+            // IDE, not assumed from reading this file. Explicitly clearing
+            // it removes the upper bound for real.
+            untilBuild = provider { null }
         }
     }
 

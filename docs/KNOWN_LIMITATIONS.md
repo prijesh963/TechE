@@ -1125,6 +1125,56 @@ about the approve *button*, not the plan *model*.
 
 ---
 
+### 4.23 The plugin was actually incompatible with every IDE newer than 2024.2.x, until a real install caught it
+
+**Not item 31 or any earlier item — this is a correction to a claim made
+about all of them.** 4.17/4.19/this file's own earlier text repeatedly
+described `sinceBuild = "242"` with no `untilBuild` set in `build.gradle
+.kts` as declaring compatibility with 2024.2 **and every version after
+it**, on the reasoning that an absent `untilBuild` reads as "no upper
+bound." That reasoning was wrong, and reading the build script again
+harder would not have caught it — the actual bug lives in the Gradle
+IntelliJ Platform plugin's own defaulting behavior, not in anything visibly
+present in this repo's build script: when `untilBuild` is left unset, it
+silently derives `"<sinceBuild's branch>.*"` (here, `"242.*"`) rather than
+leaving the field genuinely open. The built `plugin.xml` therefore actually
+shipped `until-build="242.*"` the whole time — every CI build, every green
+`verifyPlugin` run, PR #3's entire six-fix account — all correct about what
+they tested, all silently narrower in what they proved than the surrounding
+prose claimed.
+
+**How this surfaced:** a real developer installed the CI-built `.zip` into
+a real IntelliJ 2026.2 (build `IU-262.8665.258`) and got rejected outright:
+`"Plugin 'Copilot Architect' (version 0.1.0) is not compatible with
+current version of IDE, because it requires build 242.* or older but
+current build is IU262.8665.258."` This is exactly the class of gap 4.19
+named as still open after a green CI build — "compiles and passes static
+checks" is not "installs and runs" — except this particular gap wasn't
+even a runtime-behavior question; it was a version string, and no amount
+of `verifyPlugin` running green was ever going to catch it, because
+`verifyPlugin` checks the plugin against IDEs *within* its own declared
+range, and the declared range was exactly the bug.
+
+**The fix:** `ideaVersion { untilBuild = provider { null } }`, added
+explicitly in `build.gradle.kts` — the documented way to actually clear the
+Gradle IntelliJ Platform plugin's auto-derived default rather than merely
+omitting the field and hoping. Not yet re-verified by a real install on
+2026.2 as of this writing — that confirmation is the next real test, the
+same way 2024.2 compatibility was only real once someone actually clicked
+Install, not when CI first went green.
+
+**Cost, stated plainly:** every "no upper bound" claim made about this
+plugin's compatibility before this fix — in AGENTS.md, in this file's
+earlier 4.17/4.19 entries, in this session's own chat answers to the
+developer setting it up — was wrong, for the entire time this plugin
+existed, and wrong in a way a close reading of the build script alone
+would not have surfaced (the defaulting behavior lives in the Gradle
+plugin's own source, not this repo's). The broader lesson this repo keeps
+relearning the hard way: a claim about IDE-facing behavior is not
+confirmed by the build script agreeing with itself — only by the IDE.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
