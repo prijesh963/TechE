@@ -1,46 +1,57 @@
 package com.copilotarchitect.intellij
 
+import com.intellij.openapi.util.Disposer
 import com.intellij.ui.jcef.JBCefBrowser
-import org.cef.browser.CefBrowser
-import org.cef.browser.CefFrame
-import org.cef.handler.CefRequestHandlerAdapter
-import org.cef.network.CefRequest
+import com.intellij.ui.jcef.JBCefJSQuery
 
 private const val ACTION_SCHEME_PREFIX = "architect-action:"
 
 /**
- * Intercepts clicks on the dashboard's `architect-action:` links — the
+ * Routes clicks on the dashboard's `architect-action:` links — the
  * host-neutral scheme `packages/cli`'s `dashboard` command renders its action
  * row on (see `buildDashboardActionsHtml` in `packages/cli/src/index.ts`) —
- * before JCEF tries to navigate to them as a real URL, and routes the action
- * id to [onAction] instead. VS Code's equivalent is its own `command:` URI
- * scheme, handled natively by the webview; JCEF has no such built-in
- * convention, so this plugin defines and intercepts its own.
+ * to [onAction]. VS Code's equivalent is its own `command:` URI scheme,
+ * handled natively by the webview; JCEF has no such built-in convention.
  *
- * UNVERIFIED (Phase 2): written against the JCEF request-handler API bundled
- * with the IntelliJ Platform, but — like the rest of this package — never
- * built in this environment; see CliBridge.kt's Phase 1 note and the plugin
- * README for why (JetBrains' distribution hosts are network-blocked here).
- * Treat this interception as unproven until it has run in a real IDE.
+ * The first version intercepted these in `CefRequestHandler.onBeforeBrowse`.
+ * In a real IDE that never fired: Chromium treats an unregistered scheme as
+ * an external protocol and drops the navigation before any browse callback
+ * runs, so every action link rendered but did nothing when clicked. Instead,
+ * [clickScript] is injected into each rendered page: a capture-phase click
+ * listener that cancels the navigation itself and hands the action id to
+ * Kotlin through a [JBCefJSQuery] — the IntelliJ Platform's supported
+ * JS-to-host bridge.
+ *
+ * Must be constructed before the browser loads its first page: a
+ * [JBCefJSQuery] created after the native browser exists is not guaranteed
+ * to be reachable from the page.
  */
-fun JBCefBrowser.interceptActionLinks(onAction: (String) -> Unit) {
-    jbCefClient.addRequestHandler(
-        object : CefRequestHandlerAdapter() {
-            override fun onBeforeBrowse(
-                browser: CefBrowser?,
-                frame: CefFrame?,
-                request: CefRequest?,
-                userGesture: Boolean,
-                isRedirect: Boolean
-            ): Boolean {
-                val url = request?.url ?: return false
-                if (url.startsWith(ACTION_SCHEME_PREFIX)) {
-                    onAction(url.removePrefix(ACTION_SCHEME_PREFIX))
-                    return true
-                }
-                return false
-            }
-        },
-        cefBrowser
-    )
+class ActionLinkBridge(browser: JBCefBrowser, onAction: (String) -> Unit) {
+    private val query: JBCefJSQuery = JBCefJSQuery.create(browser)
+
+    init {
+        Disposer.register(browser, query)
+        query.addHandler { actionId ->
+            onAction(actionId)
+            null
+        }
+    }
+
+    /** A `<script>` block to put in the page's `<head>`. */
+    fun clickScript(): String = """
+        <script>
+        document.addEventListener('click', function (event) {
+          var target = event.target;
+          var link = target && target.closest ? target.closest('a[href]') : null;
+          if (!link) return;
+          var href = link.getAttribute('href') || '';
+          if (href.indexOf('$ACTION_SCHEME_PREFIX') !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          var id = href.substring(${ACTION_SCHEME_PREFIX.length});
+          document.body.style.cursor = 'progress';
+          ${query.inject("id")}
+        }, true);
+        </script>
+    """.trimIndent()
 }

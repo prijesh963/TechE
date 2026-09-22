@@ -28,13 +28,13 @@ import javax.swing.SwingConstants
 class DashboardPanel(private val project: Project) {
     val component: JPanel = JPanel(BorderLayout())
     private val browser: JBCefBrowser? = if (JBCefApp.isSupported()) JBCefBrowser() else null
+    private val actionLinks: ActionLinkBridge? = browser?.let { ActionLinkBridge(it) { actionId -> handleAction(actionId) } }
     private var lastOutcome: ActionDispatcher.Outcome? = null
 
     init {
         val hostedBrowser = browser
         if (hostedBrowser != null) {
             component.add(hostedBrowser.component, BorderLayout.CENTER)
-            hostedBrowser.interceptActionLinks { actionId -> handleAction(actionId) }
             refresh()
         } else {
             component.add(
@@ -48,7 +48,7 @@ class DashboardPanel(private val project: Project) {
     }
 
     /**
-     * `onBeforeBrowse` fires off the EDT, and `ActionDispatcher.dispatch` can
+     * The JS query handler fires off the EDT, and `ActionDispatcher.dispatch` can
      * block for as long as `CliBridge`'s 60s CLI timeout — run it on a pooled
      * thread rather than whatever thread JCEF calls back on, then hop back to
      * the EDT (`invokeLater`, required for `refresh()`'s Swing/JCEF calls).
@@ -97,7 +97,7 @@ class DashboardPanel(private val project: Project) {
     }
 
     private fun injectTheme(html: String): String {
-        val themeStyle = ThemeColors.styleBlock()
+        val themeStyle = ThemeColors.styleBlock() + (actionLinks?.clickScript() ?: "")
         return if (html.contains("<head>")) {
             html.replaceFirst("<head>", "<head>$themeStyle")
         } else {
