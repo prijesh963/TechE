@@ -56,8 +56,38 @@ them — `vscode-extension/src/index.ts` was left untouched by explicit
 instruction. The two copies can drift; see the repo root `AGENTS.md`'s Core
 Rule section and `docs/KNOWN_LIMITATIONS.md` 4.18 for the full account.
 
-Still open: no chat panel, no plan approval, no diff view. The Gradle build
-itself is no longer unverified — see "Building" below.
+Still open after Phase 2: no chat panel, no plan approval, no diff view —
+see "Phase 3" below for the latter two. The Gradle build itself is no
+longer unverified — see "Building" below.
+
+## Phase 3: plan review and approve
+
+Closes the approval gap Phase 2 left open: `approve_plan` is deliberately
+excluded from the `intellij` MCP toolset (a safety decision, not a token
+one — see the repo root `AGENTS.md` item 29), so a Copilot Chat turn can
+never turn "approve it" into a real approval. Until this phase, the only
+way to actually approve an MCP-generated plan revision was a terminal
+(`plan approve --revision <n> --by <name>`).
+
+Two more conditional dashboard actions, rendered only when relevant —
+`showPlanDiff:<n>` once a plan has more than one revision, `approvePlan:<n>`
+while the latest revision is still a draft — both carrying the exact
+revision the render showed rather than a fixed id, so approval can never
+drift onto a newer revision that arrived between render and click:
+
+- **`showPlanDiff:<n>`** runs the CLI's new `plan diff --to <n>` and shows
+  the result in a new read-only `PlanDiffDialog.kt` (plain
+  `JTextArea`/`JBScrollPane`).
+- **`approvePlan:<n>`** shows a native `Messages.showYesNoDialog` confirm —
+  an actual button, not a phrase typed into chat, the same gate the Safety
+  Rules apply to `@architect`'s own chat button in VS Code — before running
+  `plan approve`, with `approvedBy` taken from the OS account
+  (`System.getProperty("user.name")`) rather than prompted for.
+
+No reject/request-changes action exists yet — declining a revision still
+has to go back through a chat turn calling `revise_feature_plan`. See
+`docs/KNOWN_LIMITATIONS.md` 4.22 for the full account, including why the
+diff is field-level (not a line diff) and truncates long values.
 
 ## Building
 
@@ -143,7 +173,11 @@ rather than only here, so they are not rediscovered:
   current IntelliJ theme — IntelliJ has no directly equivalent standardized
   "chart palette" theme key the way VS Code does. They will not adapt to a
   Light theme the way the rest of the dashboard's colors do.
-- Dashboard only — no chat/plan/diff surface yet.
+- Still no chat panel — no chat-participant API exists in GitHub Copilot
+  for JetBrains today, so there is no equivalent to VS Code's `@architect`.
+  Plan review/approve exist now (Phase 3, above); see `docs/
+KNOWN_LIMITATIONS.md` 4.22 for what that surface does and does not cover
+  (field-level diff, truncated values, no reject action).
 - The Setup/Scan orchestration (`workspace scan`/`setup` in `packages/cli`)
   is an independent reimplementation of VS Code's own
   `registerSubRepos`/`setupRepo`/`shouldBuildWorkspaceGraph`, not a shared
