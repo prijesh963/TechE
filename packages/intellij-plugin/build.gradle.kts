@@ -83,11 +83,18 @@ intellijPlatform {
 
     // :verifyPlugin needs to know which IDE(s) to verify against — without
     // this, CI failed with "No IDE resolved for verification", naming this
-    // exact fix. `recommended()` derives them from `sinceBuild`/`untilBuild`
-    // above rather than a separately hand-picked list to keep in sync.
+    // exact fix. Originally `recommended()`, which derives a version list
+    // from `sinceBuild`/`untilBuild` above — that broke the moment
+    // `untilBuild` became open-ended (see the untilBuild comment above):
+    // with no upper bound to reason from, it picked "IC 2025.3", which
+    // isn't actually a resolvable artifact anywhere (Maven Central or any
+    // JetBrains mirror all 404 on it — confirmed by CI, not assumed). Pinned
+    // explicitly instead, to the same version already used to compile
+    // against below — guaranteed resolvable since the build already depends
+    // on it — rather than trust an auto-derived guess a second time.
     pluginVerification {
         ides {
-            recommended()
+            ide("IC", "2024.2.3")
         }
     }
 }

@@ -1158,10 +1158,33 @@ range, and the declared range was exactly the bug.
 **The fix:** `ideaVersion { untilBuild = provider { null } }`, added
 explicitly in `build.gradle.kts` — the documented way to actually clear the
 Gradle IntelliJ Platform plugin's auto-derived default rather than merely
-omitting the field and hoping. Not yet re-verified by a real install on
-2026.2 as of this writing — that confirmation is the next real test, the
-same way 2024.2 compatibility was only real once someone actually clicked
-Install, not when CI first went green.
+omitting the field and hoping.
+
+**That fix broke CI on its very first run, for an unrelated, equally
+real reason — not a hypothetical, an actual `verifyPlugin` failure.**
+`pluginVerification { ides { recommended() } }` derives which IDE
+version(s) to check the plugin against from `sinceBuild`/`untilBuild`; with
+`untilBuild` now open-ended, `recommended()`'s heuristic picked `IC
+2025.3` to verify against — a version that turned out not to be a
+resolvable artifact anywhere: Maven Central and every JetBrains mirror
+(`cache-redirector.jetbrains.com`'s several backing repos, `download
+.jetbrains.com`) all genuinely 404 on it, confirmed directly in the CI log,
+not assumed. `recommended()` was replaced with an explicit
+`ide("IC", "2024.2.3")` — the same version already pinned for compiling
+against, so it is guaranteed resolvable rather than trusted a second time
+to guess correctly. This means CI's `verifyPlugin` step now checks the
+plugin against exactly one concrete IDE version again, same as before this
+whole fix — the `untilBuild` fix widens what the plugin *declares* itself
+compatible with; it does not and cannot make CI verify against every
+version that declaration now covers, since there is no way to statically
+enumerate "every future IDE version" for a verifier to check against.
+
+**Neither fix has yet been confirmed by re-installing into a real
+IntelliJ 2026.2** as of this writing — CI going green after the second fix
+proves the plugin now builds and the *2024.2.3* verification target still
+passes; it does not by itself prove the rejection on 2026.2 is actually
+gone, the same distinction 4.19 already drew between a green build and a
+real install. That confirmation is the next real test.
 
 **Cost, stated plainly:** every "no upper bound" claim made about this
 plugin's compatibility before this fix — in AGENTS.md, in this file's
