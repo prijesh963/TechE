@@ -16,6 +16,12 @@ on:
     paths:
       - "packages/intellij-plugin/**"
       - ".github/workflows/intellij-ci.yml"
+  # Lets anyone with write access trigger a build on demand from the Actions
+  # tab (Run workflow button) to get a fresh installable .zip, without
+  # needing a qualifying code change to push first — the practical escape
+  # hatch for a network that can reach JetBrains' web servers but not their
+  # dependency-resolution hosts (see docs/KNOWN_LIMITATIONS.md 4.19/4.17).
+  workflow_dispatch: {}
 
 jobs:
   build:
@@ -38,3 +44,15 @@ jobs:
         run: ./gradlew build --no-daemon
       - name: Verify plugin
         run: ./gradlew verifyPlugin --no-daemon
+      # Only uploaded once the two steps above already succeeded (a step
+      # that fails stops the job by default), so a broken build never
+      # produces a downloadable .zip that looks like a good one. This is
+      # the one place to grab an installable plugin without local Gradle
+      # access to JetBrains' distribution hosts — see the README's
+      # "Building" section for why that's sometimes not possible at all.
+      - name: Upload built plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-architect-intellij-plugin
+          path: packages/intellij-plugin/build/distributions/*.zip
+          if-no-files-found: error

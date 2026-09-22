@@ -110,6 +110,22 @@ there gets only as far as evaluating the build script, then fails at
 dependency resolution (`No IntelliJ Platform dependency found` — it never
 reaches compiling a single Kotlin file).
 
+**Can't build locally at all — even from inside IntelliJ's own bundled
+Gradle?** This exact `No IntelliJ Platform dependency found` failure isn't
+only a from-scratch-sandbox thing — it shows up on a real developer machine
+too, when the network can reach JetBrains' web/download servers (so
+`cache-redirector.jetbrains.com` resolves and loads fine in a browser or
+`curl`) but not the separate dependency-resolution path Gradle's
+`intellijPlatform` block uses to fetch the actual SDK artifact — a common
+shape for a corporate proxy/allowlist scoped to browsing rather than to
+build-tool traffic. In that case, skip local building entirely: go to this
+repo's **Actions** tab → **IntelliJ plugin CI** → **Run workflow** (on
+`intellij-main`), wait for it to finish, then download the
+`copilot-architect-intellij-plugin` artifact from that run's summary page —
+it's the same `.zip` `./gradlew buildPlugin` would have produced locally,
+built on a runner with no such network restriction. Install it the normal
+way (**Settings → Plugins → Install Plugin from Disk**).
+
 **It has been built successfully, though — on GitHub Actions, via
 [PR #3](https://github.com/prijesh963/TechE/pull/3)'s own CI
 (`.github/workflows/intellij-ci.yml`), which runs on a GitHub-hosted runner
