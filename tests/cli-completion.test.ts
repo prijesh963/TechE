@@ -353,6 +353,38 @@ describe("Phase 12 CLI completion", () => {
     ]);
   });
 
+  it("bakes --toolset into the mcp config command's generated config", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "mcp-toolset-cli" })
+    });
+    const capture = createCapture();
+
+    const result = await runCli(
+      ["mcp", "config", "--path", repoRoot, "--toolset", "intellij", "--json"],
+      capture.io
+    );
+    const json = JSON.parse(capture.stdout.join("\n"));
+
+    expect(result.exitCode).toBe(0);
+    expect(json.config.servers.copilotArchitect.args).toContain("--toolset");
+    expect(json.config.servers.copilotArchitect.args).toContain("intellij");
+  });
+
+  it("rejects an unrecognized --toolset value on the mcp command", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "mcp-toolset-cli-bad" })
+    });
+    const capture = createCapture();
+
+    const result = await runCli(
+      ["mcp", "config", "--path", repoRoot, "--toolset", "bogus"],
+      capture.io
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(capture.stderr.join("\n")).toContain('Unknown MCP toolset "bogus"');
+  });
+
   it("runs the instructions command family", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ name: "agents-instructions" })

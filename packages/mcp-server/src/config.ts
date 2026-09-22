@@ -4,9 +4,16 @@ import { fileURLToPath } from "node:url";
 
 import { CURRENT_SCHEMA_VERSION } from "@copilot-architect/shared";
 
+import { MCP_TOOLSET_NAMES, isMcpToolsetName } from "./tools.js";
+
 export interface CopilotChatMcpConfigOptions {
   startPath?: string;
   force?: boolean;
+  /**
+   * Baked into the generated server's args as `--toolset <name>` when set.
+   * See MCP_TOOLSETS in tools.ts for what each name includes and why.
+   */
+  toolset?: string;
 }
 
 export interface CopilotChatMcpConfigResult {
@@ -35,13 +42,19 @@ export class CopilotChatMcpConfigService {
   async write(
     options: CopilotChatMcpConfigOptions = {}
   ): Promise<CopilotChatMcpConfigResult> {
+    if (options.toolset && !isMcpToolsetName(options.toolset)) {
+      throw new Error(
+        `Unknown MCP toolset "${options.toolset}". Known toolsets: ${MCP_TOOLSET_NAMES.join(", ")}.`
+      );
+    }
+
     const repoRoot = path.resolve(options.startPath ?? process.cwd());
     const configPath = path.join(repoRoot, ".vscode", "mcp.json");
     const existing = await readExistingConfig(configPath);
     const backupPath = existing
       ? await writeBackup(configPath, existing.raw)
       : undefined;
-    const config = mergeCopilotArchitectServer(existing?.config);
+    const config = mergeCopilotArchitectServer(existing?.config, options.toolset);
 
     await mkdir(path.dirname(configPath), { recursive: true });
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -57,15 +70,23 @@ export class CopilotChatMcpConfigService {
       messages: [
         "Configured Copilot Architect as a local stdio MCP server for Copilot Chat.",
         "Open VS Code Command Palette > MCP: List Servers to start or inspect the server.",
-        "Copilot Architect does not modify Copilot internals; it provides local repo tools through MCP."
+        "Copilot Architect does not modify Copilot internals; it provides local repo tools through MCP.",
+        ...(options.toolset ? [`Registered the "${options.toolset}" MCP toolset.`] : [])
       ]
     };
   }
 }
 
 function mergeCopilotArchitectServer(
-  existing?: Partial<CopilotChatMcpConfig>
+  existing?: Partial<CopilotChatMcpConfig>,
+  toolset?: string
 ): CopilotChatMcpConfig {
+  const args = [resolveCliEntryPoint(), "mcp", "--path", "${workspaceFolder}"];
+
+  if (toolset) {
+    args.push("--toolset", toolset);
+  }
+
   return {
     ...existing,
     servers: {
@@ -73,7 +94,7 @@ function mergeCopilotArchitectServer(
       copilotArchitect: {
         type: "stdio",
         command: "node",
-        args: [resolveCliEntryPoint(), "mcp", "--path", "${workspaceFolder}"],
+        args,
         cwd: "${workspaceFolder}"
       }
     }

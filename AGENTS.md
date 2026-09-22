@@ -323,6 +323,32 @@ decision carries.
     Core Rule section warns about, accepted here explicitly. The Kotlin
     side now builds and passes the IntelliJ Plugin Verifier in CI (PR #3) —
     see 4.19 — but has still never been run inside a real IDE.
+29. A curated `intellij` MCP toolset, for an org where GitHub Copilot via
+    MCP is the only sanctioned LLM route in IntelliJ (no chat participant
+    API there, no BYO API key allowed) — so every tool schema Copilot
+    Architect registers is a fixed cost paid on every single Copilot Chat
+    turn, whether or not that turn uses it. `packages/mcp-server`'s
+    `MCP_TOOLSETS` (in `tools.ts`, the one place the actual tool identity
+    lives, so the curated list can't drift from what's really registered)
+    names two: `full` (all 30 tools, unchanged default behavior) and
+    `intellij` (13 tools — retrieval, planning, and read-only session/plan/
+    grounding state). `--toolset <name>` on `mcp`/`mcp config` selects one;
+    `mcp config` bakes it into the generated server's `args`. The other 17
+    tools are excluded for two different reasons, not one: most (`detect_*`,
+    `get_validation_commands`, `get_safety_policy`, `repo_map`,
+    `workspace_map`, `get_symbol_graph`, `find_impacted_files`) are
+    redundant — either already printed in generated Copilot instructions
+    (item 26) or a one-time Setup Repo step rather than a per-turn
+    conversational call — but `approve_plan` is excluded for safety, not
+    tokens: if the model can call it, "approve it" typed in chat becomes a
+    real approval, which is exactly what "approval is a button, not a
+    phrase" (Safety Rules, below) exists to prevent. Approval stays a Tool
+    Window click or `plan approve --approve`. Generated Copilot instructions
+    also gained a "Retrieval Workflow" section telling Copilot to search
+    before reading a file directly and to stop re-discovering facts the
+    instructions file already states — the two are complementary: the
+    toolset limits what's callable, the instructions steer how what remains
+    gets used.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.

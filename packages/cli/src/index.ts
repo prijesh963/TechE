@@ -174,7 +174,7 @@ const commandUsage = {
     "npm run cli -- instructions <generate|preview|validate> [--path <repo>] [--output <file>] [--json]",
   workspace:
     "npm run cli -- workspace <init|show|list|add|remove|scan|index|search|impact|plan|validate-plan> [args] [--json]",
-  mcp: "npm run cli -- mcp [--path <repo>] | npm run cli -- mcp config [--path <repo>] [--force] [--json]",
+  mcp: "npm run cli -- mcp [--path <repo>] [--toolset <full|intellij>] | npm run cli -- mcp config [--path <repo>] [--force] [--toolset <full|intellij>] [--json]",
   serve:
     "npm run cli -- serve [--path <repo>] [--host 127.0.0.1] [--port <n>] [--json]",
   dashboard:
@@ -493,7 +493,8 @@ export async function runCli(
       if (options.subcommand === "config") {
         const result = await new CopilotChatMcpConfigService().write({
           startPath: options.startPath,
-          force: options.force
+          force: options.force,
+          toolset: options.toolset
         });
         stdout(
           options.json ? JSON.stringify(result, null, 2) : getMcpConfigText(result)
@@ -501,7 +502,7 @@ export async function runCli(
         return { exitCode: 0 };
       }
 
-      await startMcpServer({ startPath: options.startPath });
+      await startMcpServer({ startPath: options.startPath, toolset: options.toolset });
       return { exitCode: 0 };
     } catch (error) {
       stderr(error instanceof Error ? error.message : String(error));
@@ -998,6 +999,7 @@ interface McpCliOptions {
   subcommand: "start" | "config";
   startPath?: string;
   force?: boolean;
+  toolset?: string;
   json: boolean;
 }
 
@@ -1046,6 +1048,18 @@ function parseMcpArgs(args: string[]): McpCliOptions {
 
     if (arg === "--force") {
       options.force = true;
+      continue;
+    }
+
+    if (arg === "--toolset") {
+      const toolset = values[index + 1];
+
+      if (!toolset) {
+        throw new Error("Missing value for --toolset");
+      }
+
+      options.toolset = toolset;
+      index += 1;
       continue;
     }
 

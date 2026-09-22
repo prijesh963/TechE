@@ -941,6 +941,42 @@ can never close on its own: a human running the actual plugin.
 
 ---
 
+### 4.20 The `intellij` MCP toolset is a fixed, hand-picked list
+
+**Item 29, AGENTS.md.** `MCP_TOOLSETS.intellij` (`packages/mcp-server/src/
+tools.ts`) is 13 tool names written down once, not derived from any
+property on the tool definitions themselves (no `tier: "core"` field, no
+per-tool token-cost estimate). A new MCP tool added to the server in the
+future defaults to appearing only in `full` — nothing forces a decision
+about whether it belongs in `intellij` too, the same way a new field can be
+added to a type without anyone updating every switch statement that
+matches on it.
+
+**Cost:** the list can go stale exactly the way the six-months-later
+docs/behavior mismatches elsewhere in this file usually happen — not from
+a bad decision, but from a decision nobody revisited. The test in
+`tests/mcp-server.test.ts` that pins `intellij`'s exact tool set will catch
+a tool being silently renamed or removed out from under it, but it cannot
+catch a new tool that should have been added and wasn't; that's a review
+question, not a test one.
+
+**Also worth stating plainly:** only one curated toolset exists.
+Earlier scoping work sketched a three-tier design (core / conditional for
+multi-repo workspaces / optional for review-and-validation Q&A); what
+shipped is the single 13-tool core tier only. `search_across_repos`,
+`analyze_cross_repo_impact`, `get_latest_validation`, `get_latest_review`,
+and `resolve_review_finding` are reachable only via `full` today — a team
+that wants them live in IntelliJ's Copilot Chat without the rest of `full`
+has no named toolset for that yet.
+
+**Enforcement is opt-in, not structural.** Nothing stops a developer from
+running plain `mcp` (defaulting to `full`) in IntelliJ instead of `mcp
+--toolset intellij`, or from manually re-checking an excluded tool in
+JetBrains' own "Add MCP Tools" picker. The flag makes the curated set easy
+to select; it does not make the full set unreachable.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

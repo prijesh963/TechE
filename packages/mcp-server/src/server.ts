@@ -5,6 +5,12 @@ import { registerCopilotArchitectTools } from "./tools.js";
 
 export interface CopilotArchitectMcpServerOptions {
   startPath?: string;
+  /**
+   * Which MCP tools to register — "full" (every tool, the default) or a
+   * named curated subset. See MCP_TOOLSETS in tools.ts for what each name
+   * includes and why.
+   */
+  toolset?: string;
 }
 
 export function createCopilotArchitectMcpServer(

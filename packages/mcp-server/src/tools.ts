@@ -47,6 +47,66 @@ export interface CopilotArchitectMcpToolDefinition {
   handler: ToolHandler;
 }
 
+export const MCP_TOOLSET_NAMES = ["full", "intellij"] as const;
+export type McpToolsetName = (typeof MCP_TOOLSET_NAMES)[number];
+
+/**
+ * The MCP tools a Copilot Chat conversation actually needs live, curated
+ * once here so the CLI's `--toolset` flag, `CopilotChatMcpConfigService`,
+ * and every test asserting the list stay pointed at the same source rather
+ * than three copies that can quietly disagree — the same failure mode the
+ * Core Rule in the repo root AGENTS.md describes for retrieval itself.
+ *
+ * `search_across_repos`/`analyze_cross_repo_impact` are left out of this
+ * list even though they're cheap: they only make sense in a registered
+ * multi-repo workspace, and a caller who has one can still reach them by
+ * choosing "full". `get_latest_validation`/`get_latest_review`/
+ * `resolve_review_finding` are left out as optional, not core — cheap
+ * reads and one durable judgment call a team may or may not want live in
+ * chat.
+ *
+ * `detect_*`, `get_validation_commands`, and `get_safety_policy` are
+ * excluded on purpose: a repo with generated Copilot instructions
+ * (`packages/instructions`) already has languages, frameworks, package
+ * managers, and build/test/lint/format commands printed in
+ * `.github/copilot-instructions.md`, so a live tool call to re-discover
+ * them is a wasted round trip, not a needed one. `repo_map`/`workspace_map`/
+ * `get_symbol_graph` are one-time structural dumps that belong to a Setup
+ * Repo step, not a per-turn conversational call. `find_impacted_files` is a
+ * strict subset of `analyze_impact`.
+ *
+ * `approve_plan` is excluded for a different reason than the rest — not
+ * tokens: if the model can call it, "approve it" typed in chat becomes a
+ * real approval, which is exactly what "approval is a button, not a
+ * phrase" (AGENTS.md, Safety Rules) exists to prevent. Approval stays a
+ * Tool Window click or `plan approve --approve`, never a tool a
+ * conversation can reach for on its own.
+ */
+const INTELLIJ_CORE_TOOL_NAMES: readonly string[] = [
+  "list_repo_files",
+  "search_repo",
+  "analyze_query_intent",
+  "find_similar_feature",
+  "analyze_impact",
+  "generate_plan_context",
+  "measure_context_reduction",
+  "generate_feature_plan",
+  "revise_feature_plan",
+  "get_latest_plan",
+  "get_approved_plan_contract",
+  "verify_claims",
+  "get_session"
+];
+
+export const MCP_TOOLSETS: Record<McpToolsetName, readonly string[] | undefined> = {
+  full: undefined,
+  intellij: INTELLIJ_CORE_TOOL_NAMES
+};
+
+export function isMcpToolsetName(value: string): value is McpToolsetName {
+  return (MCP_TOOLSET_NAMES as readonly string[]).includes(value);
+}
+
 export function registerCopilotArchitectTools(
   server: McpServer,
   options: CopilotArchitectMcpServerOptions = {}
@@ -82,7 +142,7 @@ export function registerCopilotArchitectTools(
 export function createCopilotArchitectTools(
   options: CopilotArchitectMcpServerOptions = {}
 ): CopilotArchitectMcpToolDefinition[] {
-  return [
+  const tools = [
     tool(
       "repo_map",
       "Read or generate the current repo map.",
@@ -529,6 +589,26 @@ export function createCopilotArchitectTools(
         })
     )
   ];
+
+  return filterToolset(tools, options.toolset);
+}
+
+function filterToolset(
+  tools: CopilotArchitectMcpToolDefinition[],
+  toolset: string | undefined
+): CopilotArchitectMcpToolDefinition[] {
+  if (!toolset || toolset === "full") {
+    return tools;
+  }
+
+  if (!isMcpToolsetName(toolset)) {
+    throw new Error(
+      `Unknown MCP toolset "${toolset}". Known toolsets: ${MCP_TOOLSET_NAMES.join(", ")}.`
+    );
+  }
+
+  const allowed = new Set(MCP_TOOLSETS[toolset]);
+  return tools.filter((toolDefinition) => allowed.has(toolDefinition.name));
 }
 
 export function listCopilotArchitectMcpToolNames(): string[] {

@@ -9,7 +9,9 @@ import { SessionService } from "../packages/session/src/index.js";
 
 import {
   CopilotChatMcpConfigService,
+  MCP_TOOLSETS,
   createCopilotArchitectMcpServer,
+  createCopilotArchitectTools,
   listCopilotArchitectMcpToolNames
 } from "../packages/mcp-server/src/index.js";
 
@@ -356,6 +358,74 @@ describe("Copilot Architect MCP server", () => {
     await access(result.configPath);
   });
 
+  it("registers only the curated tool set when --toolset intellij is requested", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "toolset-intellij" })
+    });
+    const { client } = await createConnectedServer(repoRoot, "intellij");
+
+    const tools = await client.listTools();
+    const names = tools.tools.map((tool) => tool.name).sort();
+
+    expect(names).toEqual([...MCP_TOOLSETS.intellij!].sort());
+    // approve_plan is deliberately excluded — approval must stay a button
+    // or --approve, never something a chat turn can reach for on its own.
+    expect(names).not.toContain("approve_plan");
+    // Redundant with what's already printed in generated Copilot
+    // instructions, so it's excluded from the live conversational set too.
+    expect(names).not.toContain("detect_languages");
+  });
+
+  it("registers every tool when no toolset (or 'full') is requested", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "toolset-full" })
+    });
+    const { client: defaultClient } = await createConnectedServer(repoRoot);
+    const { client: explicitClient } = await createConnectedServer(repoRoot, "full");
+
+    const defaultNames = (await defaultClient.listTools()).tools.map(
+      (tool) => tool.name
+    );
+    const explicitNames = (await explicitClient.listTools()).tools.map(
+      (tool) => tool.name
+    );
+
+    expect(defaultNames.sort()).toEqual(listCopilotArchitectMcpToolNames().sort());
+    expect(explicitNames.sort()).toEqual(listCopilotArchitectMcpToolNames().sort());
+  });
+
+  it("rejects an unrecognized toolset name rather than silently registering everything", () => {
+    expect(() => createCopilotArchitectTools({ toolset: "bogus" })).toThrow(
+      /Unknown MCP toolset "bogus"/
+    );
+  });
+
+  it("bakes --toolset into the generated Copilot Chat MCP config", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "mcp-config-toolset" })
+    });
+
+    const result = await new CopilotChatMcpConfigService().write({
+      startPath: repoRoot,
+      toolset: "intellij"
+    });
+    const config = JSON.parse(await readFile(result.configPath, "utf8"));
+
+    expect(config.servers.copilotArchitect.args).toContain("--toolset");
+    expect(config.servers.copilotArchitect.args).toContain("intellij");
+    expect(result.messages).toContain('Registered the "intellij" MCP toolset.');
+  });
+
+  it("rejects writing a Copilot Chat MCP config with an unrecognized toolset", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "mcp-config-bad-toolset" })
+    });
+
+    await expect(
+      new CopilotChatMcpConfigService().write({ startPath: repoRoot, toolset: "bogus" })
+    ).rejects.toThrow(/Unknown MCP toolset "bogus"/);
+  });
+
   it("supports multi-repo workspace map, search, and cross-repo impact tools", async () => {
     const fixture = await createWorkspaceFixture();
     const { client } = await createConnectedServer(fixture.workspaceRoot);
@@ -510,8 +580,8 @@ describe("the session model over MCP", () => {
   });
 });
 
-async function createConnectedServer(repoRoot: string) {
-  const server = createCopilotArchitectMcpServer({ startPath: repoRoot });
+async function createConnectedServer(repoRoot: string, toolset?: string) {
+  const server = createCopilotArchitectMcpServer({ startPath: repoRoot, toolset });
   const client = new Client({ name: "mcp-test-client", version: "0.1.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
