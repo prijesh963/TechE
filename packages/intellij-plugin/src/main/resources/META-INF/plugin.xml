@@ -10,6 +10,26 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <!-- Through build 261 (IDE 2026.1), com.intellij.ui.jcef.JBCefApp/
+         JBCefBrowser shipped in the platform core and needed no explicit
+         dependency. Starting with build 262 (IDE 2026.2), JetBrains
+         extracted JCEF into its own bundled "Web Browser (JCEF)" plugin
+         (module id com.intellij.modules.jcef); a plugin that only depends
+         on com.intellij.modules.platform no longer gets those classes on
+         its classpath at all, and DashboardToolWindowFactory's JBCefBrowser
+         use throws java.lang.ClassNotFoundException: com.intellij.ui.jcef
+         .JBCefApp at runtime — confirmed against a real IntelliJ 2026.2
+         install (build IU-262.8665.258), not assumed; see
+         docs/KNOWN_LIMITATIONS.md 4.24. `optional="true"` with a
+         config-file is required rather than a plain <depends>: IDEs before
+         the JCEF split (242-261, this plugin's own sinceBuild floor) may
+         not recognize com.intellij.modules.jcef as a resolvable module id
+         at all, and a required dependency on an unresolvable module would
+         fail this plugin's load there outright. Optional means the classes
+         become visible on 262+ where the module exists, while pre-262
+         IDEs simply skip it — JCEF was already implicitly on their
+         classpath from core, same as before this fix. -->
+    <depends optional="true" config-file="withJcef.xml">com.intellij.modules.jcef</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow id="Copilot Architect"

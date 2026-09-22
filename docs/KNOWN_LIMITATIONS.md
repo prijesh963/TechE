@@ -1198,6 +1198,70 @@ confirmed by the build script agreeing with itself — only by the IDE.
 
 ---
 
+### 4.24 The tool window crashed on IntelliJ 2026.2: JCEF became a separate bundled plugin in build 262
+
+**The first genuine runtime crash this plugin has ever had, found by
+actually clicking on it.** After 4.23's `untilBuild` fix, a real install
+into IntelliJ 2026.2 (build `IU-262.8665.258`) got past the compatibility
+rejection — but the "Copilot Architect" tool window never appeared. `Help
+→ Show Log` surfaced the real cause: `java.lang.ClassNotFoundException:
+com.intellij.ui.jcef.JBCefApp PluginClassLoader`, thrown wherever
+`DashboardToolWindowFactory`/`DashboardPanel` constructs a `JBCefBrowser`.
+
+**Root cause, confirmed against real JetBrains sources (blog post,
+Plugin SDK docs, and multiple independent third-party plugins hitting the
+identical crash on 2026.2), not assumed from a stack trace alone:**
+through build 261 (IDE 2026.1), `com.intellij.ui.jcef.*` shipped in the
+platform core and was visible to any plugin depending on
+`com.intellij.modules.platform` — no extra declaration needed, which is
+exactly why this plugin never needed one and nothing before 2026.2 could
+have caught the gap. Starting with build 262 (IDE 2026.2), JetBrains
+extracted JCEF into its own bundled "Web Browser (JCEF)" plugin
+(`com.intellij.modules.jcef`); a plugin's classloader only gets access to
+another plugin's classes if it explicitly depends on it, so
+`DashboardToolWindowFactory`'s classes silently stopped resolving on
+2026.2+ the moment JCEF moved out from under the umbrella dependency this
+plugin already had.
+
+**Fix:** `plugin.xml` gained
+`<depends optional="true" config-file="withJcef.xml">com.intellij.modules
+.jcef</depends>`, with a new, intentionally empty
+`META-INF/withJcef.xml`. `optional="true"` is required, not a plain
+`<depends>`: this plugin's own `sinceBuild` is 242, and an IDE from before
+the JCEF split (242–261) may not recognize `com.intellij.modules.jcef` as
+a resolvable module id at all — a *required* dependency on an
+unresolvable module would fail this plugin's load outright on every IDE
+version it previously worked on. Optional means 262+ gets the classloader
+edge it now needs, while 242–261 simply skips the dependency and keeps
+getting JCEF from the platform core exactly as before — verified as the
+real, documented pattern (not invented) by cross-checking three
+independent sources: JetBrains' own JCEF blog post/Plugin SDK docs, and a
+real third-party plugin's actual merged fix for this identical crash on
+2026.2, fetched and read directly rather than paraphrased from a search
+snippet.
+
+**What is still not confirmed:** whether this specific fix actually makes
+the tool window render on the reporting developer's real 2026.2 install —
+CI going green after this (build + `verifyPlugin` against `2024.2.3`,
+per 4.23) proves the plugin still compiles and still passes verification
+against an IDE that never had this bug to begin with; it does not and
+cannot prove the JCEF classloader edge actually resolves on 262+, since
+nothing in this CI pipeline launches a real 2026.2 IDE. That confirmation
+is, once again, only a real install away.
+
+**Cost, stated plainly, continuing the pattern 4.23 named:** three real,
+independent bugs now found in the time between "CI went green" and "a
+developer actually used it" — an incompatible upper-version cap, a broken
+verification target, and a missing classloader dependency for a platform
+API the plugin depends on entirely for its one visible feature. None of
+the three were reachable by any check this repository's own CI runs
+today; all three were reachable only by a human clicking Install on a
+real, current IDE. `./gradlew runIde` — never yet attempted, per 4.19 —
+would very likely have caught at least this one locally, long before a
+real developer had to.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

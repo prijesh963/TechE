@@ -1,0 +1,9 @@
+<!-- Intentionally empty. The optional com.intellij.modules.jcef dependency
+     in plugin.xml exists only to put the "Web Browser (JCEF)" plugin on
+     this plugin's class loader on IDE 2026.2 (build 262) and later, where
+     JCEF was extracted out of the platform core — see the comment next to
+     that <depends> line in plugin.xml for the full account. An optional
+     <depends> must name a descriptor file; this is it, and it has nothing
+     to configure. -->
+<idea-plugin>
+</idea-plugin>
