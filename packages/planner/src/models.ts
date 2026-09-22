@@ -162,6 +162,43 @@ export interface PlanDraftArtifactPaths {
   latestMarkdownPath: string;
 }
 
+export interface PlanDiffOptions {
+  startPath?: string;
+  strictRoot?: boolean;
+  planId?: string;
+  /** Defaults to `to - 1` — the revision immediately before `to`. */
+  from?: number;
+  /** Defaults to the latest revision on disk. */
+  to?: number;
+}
+
+/**
+ * One `PlanSectionOverrides` field that differs between two revisions.
+ * `revisePlan` only ever touches these fields — everything else on a
+ * `FeaturePlanArtifact` (id, status, revision, requestIntent, etc.) is
+ * identity/schema/computed and never revision-editable, so diffing is scoped
+ * to exactly the keys a revision could have changed.
+ */
+export interface PlanFieldDiff {
+  field: keyof PlanSectionOverrides;
+  /** `"list"` fields report `added`/`removed`; `"scalar"` fields report `before`/`after`. */
+  kind: "scalar" | "list";
+  before?: string;
+  after?: string;
+  added?: string[];
+  removed?: string[];
+}
+
+export interface PlanRevisionDiffResult {
+  planId: string;
+  from: number;
+  to: number;
+  /** Verbatim feedback recorded against `to`'s own revision entry, when present. */
+  feedback?: string;
+  /** Only fields that actually differ — an unchanged field is not reported. */
+  changes: PlanFieldDiff[];
+}
+
 export interface PlanEndpointReference {
   method: string;
   routePath: string;

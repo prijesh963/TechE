@@ -129,7 +129,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               50 files, 575 tests
+├── tests/               50 files, 598 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -342,7 +342,8 @@ decision carries.
     is excluded for safety, not tokens: if the model can call it, "approve
     it" typed in chat becomes a real approval, which is exactly what
     "approval is a button, not a phrase" (Safety Rules, below) exists to
-    prevent. Approval stays a Tool Window click or `plan approve --approve`.
+    prevent. Approval stays a Tool Window click (see item 31) or
+    `plan approve --revision <n> --by <name>` from a terminal.
     Generated Copilot instructions also gained a "Retrieval Workflow"
     section telling Copilot to search before reading a file directly and to
     stop re-discovering facts the instructions file already states — the
@@ -362,6 +363,45 @@ createPlanPreview()` once and returns search results, impact analysis,
     what each of the three used to return and why `find_impacted_files`'s
     own shape isn't reproduced separately — it was a strict subset of
     `likelyFilesToModify`, never additional information.
+31. Plan review and approval from the IntelliJ Tool Window, closing the gap
+    item 29 left open: `approve_plan` is excluded from the `intellij` MCP
+    toolset by deliberate safety design, so until now the only way to
+    promote an MCP-generated `FeaturePlanArtifact` revision to `approved`
+    from IntelliJ was a terminal (`plan approve --revision <n> --by
+<name>`). VS Code's own equivalent is a real chat button rendered directly
+    under the plan's markdown (`stream.button({command: APPROVE_PLAN_COMMAND,
+    ...})`); IntelliJ has no chat-button API to mirror, so the click surface
+    is the Tool Window instead — the same place every other IntelliJ action
+    already lives.
+    - `FeaturePlanningService.diffRevisions()` (`packages/planner`), new:
+      a field-level diff between two revisions, scoped to exactly the
+      `PlanSectionOverrides` keys `revise_feature_plan` can change — every
+      other `FeaturePlanArtifact` field is identity/schema/computed and
+      never revision-editable, so it is never reported as a "change". List
+      fields (`likelyFilesToModify`, `openQuestions`, etc.) report
+      added/removed; scalar fields (`title`, `summary`, `impactAnalysis`,
+      etc.) report before/after. Defaults to the immediately preceding
+      revision (`to - 1`) — `from`/`to` are both overridable, and diffing a
+      revision against itself, or revision 1 against a revision that does
+      not exist, is rejected rather than silently returning nothing.
+    - CLI: `plan diff [--from <n>] [--to <n>] [--path <repo>] [--json]`.
+    - The `dashboard` command's action row gains two conditional links,
+      parameterized by the revision the render actually showed rather than
+      a fixed id like every other action — `showPlanDiff:<n>` (once a prior
+      revision exists to diff against) and `approvePlan:<n>` (while the
+      latest revision is still a draft) — so the exact revision approved can
+      never drift from the one displayed, matching `approvePlan()`'s own
+      "revision is required, never 'whatever is newest'" rule
+      (`packages/planner/src/feature-planning-service.ts`).
+    - Kotlin: `ActionDispatcher` routes `showPlanDiff:<n>` to a new,
+      read-only `PlanDiffDialog` (plain `JTextArea`/`JBScrollPane`, matching
+      this plugin's existing preference for the smallest Swing API surface
+      that does the job) and `approvePlan:<n>` to a native
+      `Messages.showYesNoDialog` confirm — an actual button, not a phrase
+      typed into chat, the same gate the Safety Rules apply to `@architect`'s
+      own chat button — before running `plan approve` with `approvedBy`
+      taken from the OS account (an audit field, not a choice, so it is
+      never prompted for).
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -496,7 +536,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 575 tests must pass before merging.
+Use Vitest. All 598 tests must pass before merging.
 
 Cover:
 
@@ -565,6 +605,12 @@ Cover:
   (a named constant resolved to its declared value; an unresolved reference
   dropped rather than read as literal path text)
 - feature planning (JSON + Markdown output)
+- plan revision diffing (added/removed list items, scalar before/after,
+  defaulting to the immediately preceding revision, rejecting a
+  revision-against-itself or a nonexistent prior revision) and its CLI
+  surface (`plan diff`, text and JSON) and dashboard action links
+  (`approvePlan:<n>`/`showPlanDiff:<n>`, gated on draft status and on a
+  prior revision existing, carrying the exact revision rendered)
 - integration detection (datastore/messaging/micro-frontend/microservice/
   orchestration/monorepo-tooling/test-automation, by content and by
   canonical filename, and the risk guidance each carries into a plan)

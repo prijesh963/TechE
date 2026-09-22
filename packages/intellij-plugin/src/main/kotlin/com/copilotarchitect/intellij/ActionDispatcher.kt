@@ -6,6 +6,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
 import java.nio.file.Path
 
@@ -53,6 +54,20 @@ object ActionDispatcher {
     fun dispatch(project: Project, actionId: String): Outcome? {
         val workspaceRoot = project.basePath
             ?: return Outcome(actionId, -1, "", "No project folder open.")
+
+        // Plan actions carry a revision number in the id itself
+        // (`approvePlan:<n>`, `showPlanDiff:<n>`) rather than being a fixed
+        // id like every other action — see `buildPlanActionLinks` in
+        // `packages/cli/src/index.ts` for why: the revision approved must be
+        // the one this exact dashboard render showed, never "whatever is
+        // newest".
+        if (actionId.startsWith("approvePlan:")) {
+            return dispatchApprovePlan(project, workspaceRoot, actionId)
+        }
+
+        if (actionId.startsWith("showPlanDiff:")) {
+            return dispatchShowPlanDiff(project, workspaceRoot, actionId)
+        }
 
         return when (actionId) {
             "setupRepo" -> runCli(workspaceRoot, "setup")
@@ -103,6 +118,58 @@ object ActionDispatcher {
             stdout = truncate(result.stdout),
             stderr = truncate(result.stderr)
         )
+    }
+
+    /**
+     * Approval is a real confirm dialog, not a click that silently runs a
+     * command — the same "a button, not a phrase" gate the Safety Rules
+     * apply to `@architect`'s own chat button, adapted to a shell with no
+     * chat button to render. `approvedBy` is an audit field, not a choice,
+     * so it is taken from the OS account rather than prompted for.
+     */
+    private fun dispatchApprovePlan(project: Project, workspaceRoot: String, actionId: String): Outcome? {
+        val revision = actionId.removePrefix("approvePlan:").toIntOrNull()
+            ?: return Outcome(actionId, -1, "", "Invalid plan approval action: $actionId")
+
+        var confirmed = false
+        ApplicationManager.getApplication().invokeAndWait {
+            confirmed = Messages.showYesNoDialog(
+                project,
+                "Approve plan revision $revision? This freezes it for /implement. " +
+                    "Use \"Show Plan Diff\" first if you have not reviewed what this revision changed.",
+                "Approve Plan",
+                Messages.getQuestionIcon()
+            ) == Messages.YES
+        }
+
+        if (!confirmed) return null
+
+        val approvedBy = System.getProperty("user.name") ?: "unknown"
+        return runCli(workspaceRoot, "plan", "approve", "--revision", revision.toString(), "--by", approvedBy)
+    }
+
+    /**
+     * Shown in its own read-only dialog rather than folded into the confirm
+     * dialog above: a diff can run to many lines, and cramming it into a
+     * Yes/No prompt would make the one question that dialog exists to ask —
+     * approve or not — harder to see, not easier. Not run through `runCli`
+     * (which truncates for the dashboard's "Last command" card) — a diff
+     * shown as a review surface should not be silently cut off.
+     */
+    private fun dispatchShowPlanDiff(project: Project, workspaceRoot: String, actionId: String): Outcome? {
+        val revision = actionId.removePrefix("showPlanDiff:").toIntOrNull()
+            ?: return Outcome(actionId, -1, "", "Invalid plan diff action: $actionId")
+
+        val result = CliBridge.run(workspaceRoot, "plan", "diff", "--to", revision.toString())
+
+        if (result.exitCode != 0) {
+            return Outcome("plan diff", result.exitCode, truncate(result.stdout), truncate(result.stderr))
+        }
+
+        ApplicationManager.getApplication().invokeLater {
+            PlanDiffDialog(project, result.stdout, revision).show()
+        }
+        return null
     }
 
     /** `FileChooser` shows a modal dialog and requires the EDT — hop there and back. */

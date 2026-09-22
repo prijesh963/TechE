@@ -1036,6 +1036,70 @@ verbatim.
 
 ---
 
+### 4.22 Plan diff/approve in the IntelliJ Tool Window: no revision-diff for the full JSON, approve/diff only, unverified in a real IDE
+
+**Item 31, AGENTS.md.** Closes the gap 4.20 named as a consequence of
+`approve_plan`'s deliberate exclusion from the `intellij` MCP toolset:
+until now, approving an MCP-generated `FeaturePlanArtifact` revision from
+IntelliJ required a terminal. `showPlanDiff:<n>`/`approvePlan:<n>` give the
+Tool Window its own click surface for both, mirroring the review-then-click
+shape VS Code's chat button already has (the plan's markdown rendered,
+then the button), adapted to a shell with no chat-button API to render
+into.
+
+**What the diff covers, and does not.** `diffPlanSections()`
+(`packages/planner/src/feature-planning-service.ts`) is scoped to exactly
+the `PlanSectionOverrides` keys `revise_feature_plan` can change — the only
+fields two revisions of the same plan can actually differ on. It is a
+**field-level** diff, not a text/line diff: a list field reports whole
+items added/removed (by exact-match comparison, so an item reworded rather
+than added/removed shows as one removal plus one addition, not an edit);
+a scalar field (`summary`, `impactAnalysis`, `stackSpecificPlan`, etc.)
+reports whole before/after values, truncated at 500 characters each
+(`DIFF_VALUE_MAX_LENGTH`) — a long `impactAnalysis` object's exact
+before/after JSON can be cut off in the CLI's text output (`--json` gets
+the same truncated strings; there is no untruncated escape hatch today).
+There is no line-level "this sentence changed" view the way a source-file
+diff has.
+
+**Approval still has exactly one path per surface.** The Tool Window's
+`approvePlan:<n>` always resolves the revision from the id baked into the
+dashboard render that showed it — never inferred as "whatever is newest"
+(matching `approvePlan()`'s own rule) — but there is still no reject/
+request-changes action next to it: declining a revision has no button of
+its own, the same as before this phase. Feedback still has to go back
+through a chat turn calling `revise_feature_plan`; the Tool Window can only
+say yes or say nothing.
+
+**`approvedBy` is the OS account name, not chosen.** `System.getProperty
+("user.name")` is used directly, with no prompt and no way to approve
+under a different recorded name from the Tool Window (the CLI's `--by
+<name>` still allows any string). This was a deliberate simplification —
+prompting for a name on every approval click would turn one button into
+two — but it means the audit trail's `approvedBy` field reflects the local
+OS account of whoever clicked, not necessarily a name meaningful outside
+that machine (an email, a team handle).
+
+**The Kotlin side is unverified the same way every other Kotlin change in
+this plugin started out** (see 4.19's own account of what a green CI build
+does and does not prove): this sandbox cannot reach JetBrains' distribution
+hosts, so `PlanDiffDialog.kt` and `ActionDispatcher.kt`'s two new dispatch
+functions were written against the platform SDK and checked by eye, not
+compiled here. Unlike the Phase 1/2 Kotlin work, this has not yet been run
+through a CI-verifying PR either (PR #3 was closed rather than merged, by
+explicit instruction — see the PR's own closing comment) — so this is a
+strictly weaker verification state than 4.19 reached: "written against the
+right APIs" rather than "compiles and passes the Plugin Verifier." A future
+CI-verification pass would need its own PR the way PR #3 was.
+
+**Cost:** the terminal-only approval gap 4.20 named is closed for the
+common case (approving is a two-click Tool Window flow: review the diff,
+then approve). What remains open: no reject action, no untruncated diff
+view for very large plans, an audit name tied to the OS account, and Kotlin
+correctness that is asserted, not proven, until a real build verifies it.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

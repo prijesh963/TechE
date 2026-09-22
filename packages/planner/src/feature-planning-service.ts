@@ -46,13 +46,17 @@ import type {
   PlanApproval,
   PlanApprovalOptions,
   PlanArtifactPaths,
+  PlanDiffOptions,
   PlanDraftArtifactPaths,
   PlanEndpointReference,
+  PlanFieldDiff,
   PlanFileReference,
   PlanningContextSummary,
+  PlanRevisionDiffResult,
   PlanRevisionEntry,
   PlanRevisionOptions,
   PlanRevisionSummary,
+  PlanSectionOverrides,
   StackSpecificPlan
 } from "./models.js";
 
@@ -304,6 +308,59 @@ export class FeaturePlanningService {
     }
 
     return plan;
+  }
+
+  /**
+   * Field-level diff between two revisions of the same plan, scoped to the
+   * `PlanSectionOverrides` keys a revision can actually change — everything
+   * else on a `FeaturePlanArtifact` is identity/schema/computed and never
+   * revision-editable, so it is never reported as a "change" here.
+   *
+   * Exists because `revise_feature_plan` is deliberately excluded from
+   * having to re-derive what changed (it just merges `sections` and moves
+   * on) — approving a revision, whether from a chat turn or the IntelliJ
+   * Tool Window, is an easier decision when the developer can see exactly
+   * what a round of feedback altered rather than re-reading the whole plan.
+   */
+  async diffRevisions(options: PlanDiffOptions): Promise<PlanRevisionDiffResult> {
+    const startPath = path.resolve(options.startPath ?? process.cwd());
+    const repoMap = await ensureRepoMap(startPath, options.strictRoot);
+    const repoRoot = repoMap.workspaceRoot;
+    const planId = options.planId ?? (await findLatestDraftPlanId(repoRoot));
+
+    if (!planId) {
+      throw new Error("No draft plan found. Call generate_feature_plan first.");
+    }
+
+    const to =
+      options.to ?? (await this.showRevision({ startPath, strictRoot: options.strictRoot, planId })).revision;
+
+    if (options.from !== undefined && options.from === to) {
+      throw new Error(`--from and --to are both revision ${to}; nothing to diff.`);
+    }
+
+    const from = options.from ?? to - 1;
+
+    if (from < 1) {
+      throw new Error(
+        `Revision ${to} has no prior revision to diff against (there is no revision ${from}).`
+      );
+    }
+
+    const [fromPlan, toPlan] = await Promise.all([
+      this.showRevision({ startPath, strictRoot: options.strictRoot, planId, revision: from }),
+      this.showRevision({ startPath, strictRoot: options.strictRoot, planId, revision: to })
+    ]);
+
+    const feedback = toPlan.revisions.find((entry) => entry.revision === to)?.feedback;
+
+    return {
+      planId,
+      from,
+      to,
+      feedback,
+      changes: diffPlanSections(fromPlan, toPlan)
+    };
   }
 
   async createPlanPreview(
@@ -1424,6 +1481,107 @@ function describeRelevance(
   }
 
   return parts.length > 0 ? `${parts.join("; ")}.` : "Matched in local index search.";
+}
+
+/**
+ * The exact `PlanSectionOverrides` keys, kept as one list so `diffPlanSections`
+ * cannot silently drift from what `revisePlan` actually accepts — a field
+ * added to one and not the other would mean either a real revision-editable
+ * field going undiffed, or a diff reporting a field revisions can never
+ * actually change.
+ */
+const PLAN_SECTION_OVERRIDE_KEYS: (keyof PlanSectionOverrides)[] = [
+  "title",
+  "summary",
+  "requestInterpretation",
+  "assumptions",
+  "implementationSteps",
+  "impactAnalysis",
+  "validationPlan",
+  "likelyFilesToModify",
+  "likelyNewFiles",
+  "frontendImpact",
+  "backendImpact",
+  "dataConfigImpact",
+  "securityConsiderations",
+  "performanceConsiderations",
+  "testStrategy",
+  "openQuestions",
+  "stackSpecificPlan",
+  "relatedEndpoints"
+];
+
+const DIFF_VALUE_MAX_LENGTH = 500;
+
+function diffPlanSections(
+  from: FeaturePlanArtifact,
+  to: FeaturePlanArtifact
+): PlanFieldDiff[] {
+  const changes: PlanFieldDiff[] = [];
+
+  for (const field of PLAN_SECTION_OVERRIDE_KEYS) {
+    const fromValue = from[field];
+    const toValue = to[field];
+
+    if (Array.isArray(fromValue) || Array.isArray(toValue)) {
+      const fromItems = (Array.isArray(fromValue) ? fromValue : []).map(stringifyPlanItem);
+      const toItems = (Array.isArray(toValue) ? toValue : []).map(stringifyPlanItem);
+      const fromSet = new Set(fromItems);
+      const toSet = new Set(toItems);
+      const added = toItems.filter((item) => !fromSet.has(item));
+      const removed = fromItems.filter((item) => !toSet.has(item));
+
+      if (added.length > 0 || removed.length > 0) {
+        changes.push({ field, kind: "list", added, removed });
+      }
+      continue;
+    }
+
+    if (JSON.stringify(fromValue) !== JSON.stringify(toValue)) {
+      changes.push({
+        field,
+        kind: "scalar",
+        before: stringifyPlanValue(fromValue),
+        after: stringifyPlanValue(toValue)
+      });
+    }
+  }
+
+  return changes;
+}
+
+/** A single list-field element (a string, or an object like a `ValidationCommand`/`PlanStep`), as one display line. */
+function stringifyPlanItem(item: unknown): string {
+  if (typeof item === "string") {
+    return item;
+  }
+
+  if (item && typeof item === "object") {
+    const record = item as Record<string, unknown>;
+    const label =
+      record.command ?? record.relativePath ?? record.path ?? record.title ?? record.description;
+
+    if (typeof label === "string") {
+      return label;
+    }
+  }
+
+  return truncateDiffValue(JSON.stringify(item));
+}
+
+/** A scalar field's whole value (a string, or an object like `impactAnalysis`), truncated for display. */
+function stringifyPlanValue(value: unknown): string {
+  if (typeof value === "string") {
+    return truncateDiffValue(value);
+  }
+
+  return truncateDiffValue(JSON.stringify(value, null, 2));
+}
+
+function truncateDiffValue(value: string): string {
+  return value.length > DIFF_VALUE_MAX_LENGTH
+    ? `${value.slice(0, DIFF_VALUE_MAX_LENGTH - 1)}…`
+    : value;
 }
 
 function createPlanArtifactPaths(repoRoot: string, id: string): PlanArtifactPaths {

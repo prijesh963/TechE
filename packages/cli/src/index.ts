@@ -41,6 +41,7 @@ import {
   type FeaturePlanArtifact,
   type FeaturePlanningResult,
   type HandoffGenerationResult,
+  type PlanRevisionDiffResult,
   type PlanRevisionSummary,
   type WorkspaceImpactResult,
   type WorkspacePlanningResult
@@ -156,7 +157,10 @@ const commandUsage = {
     'npm run cli -- intent "query" [--path <repo>|--root <repo>] [--limit <n>] [--json]',
   plan:
     'npm run cli -- plan "feature request" [--path <repo>|--root <repo>] [--json]\n' +
-    "  npm run cli -- plan approve --revision <n> --by <name> [--path <repo>] [--json]",
+    "  npm run cli -- plan approve --revision <n> --by <name> [--path <repo>] [--json]\n" +
+    "  npm run cli -- plan revisions [--path <repo>] [--json]\n" +
+    "  npm run cli -- plan show [--revision <n>] [--path <repo>] [--json]\n" +
+    "  npm run cli -- plan diff [--from <n>] [--to <n>] [--path <repo>] [--json]",
   measure:
     'npm run cli -- measure "feature request" [--path <repo>|--root <repo>] [--json]',
   commands: "npm run cli -- commands <list|validate> [--path <repo>] [--json]",
@@ -748,6 +752,18 @@ export async function runCli(
           revision: options.revision
         });
         stdout(options.json ? JSON.stringify(plan, null, 2) : getPlanShowText(plan));
+        return { exitCode: 0 };
+      }
+
+      if (options.subcommand === "diff") {
+        const diff = await service.diffRevisions({
+          startPath: options.startPath,
+          strictRoot: options.strictRoot,
+          planId: options.planId,
+          from: options.from,
+          to: options.to
+        });
+        stdout(options.json ? JSON.stringify(diff, null, 2) : getPlanDiffText(diff));
         return { exitCode: 0 };
       }
 
@@ -1896,12 +1912,15 @@ function getMeasureSummaryText(result: ContextMeasurement): string {
 }
 
 interface PlanCliOptions {
-  subcommand: "generate" | "approve" | "revisions" | "show";
+  subcommand: "generate" | "approve" | "revisions" | "show" | "diff";
   request: string;
   planId?: string;
   revision?: number;
   approvedBy?: string;
   note?: string;
+  /** `plan diff` only. */
+  from?: number;
+  to?: number;
   startPath?: string;
   strictRoot?: boolean;
   json: boolean;
@@ -1996,7 +2015,7 @@ function parseValidateArgs(args: string[]): ValidateCliOptions {
 
 function parsePlanArgs(args: string[]): PlanCliOptions {
   const subcommand: PlanCliOptions["subcommand"] =
-    args[0] === "approve" || args[0] === "revisions" || args[0] === "show"
+    args[0] === "approve" || args[0] === "revisions" || args[0] === "show" || args[0] === "diff"
       ? args[0]
       : "generate";
   const rest = subcommand === "generate" ? args : args.slice(1);
@@ -2048,6 +2067,30 @@ function parsePlanArgs(args: string[]): PlanCliOptions {
       }
 
       options.revision = revision;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--from") {
+      const from = Number(rest[index + 1]);
+
+      if (!Number.isFinite(from)) {
+        throw new Error("Missing or invalid value for --from");
+      }
+
+      options.from = from;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--to") {
+      const to = Number(rest[index + 1]);
+
+      if (!Number.isFinite(to)) {
+        throw new Error("Missing or invalid value for --to");
+      }
+
+      options.to = to;
       index += 1;
       continue;
     }
@@ -2176,6 +2219,40 @@ function getPlanShowText(plan: FeaturePlanArtifact): string {
   ].join("\n");
 }
 
+function getPlanDiffText(diff: PlanRevisionDiffResult): string {
+  const header = [
+    `${PROJECT_NAME}: plan diff`,
+    "",
+    `Plan ID: ${diff.planId}`,
+    `Revision ${diff.from} → ${diff.to}`,
+    ...(diff.feedback ? [`Feedback: ${diff.feedback}`] : [])
+  ];
+
+  if (diff.changes.length === 0) {
+    return [...header, "", "No differences between these revisions."].join("\n");
+  }
+
+  const body = diff.changes.flatMap((change) => {
+    if (change.kind === "list") {
+      return [
+        "",
+        `${change.field}:`,
+        ...(change.added ?? []).map((item) => `  + ${item}`),
+        ...(change.removed ?? []).map((item) => `  - ${item}`)
+      ];
+    }
+
+    return [
+      "",
+      `${change.field}:`,
+      `  before: ${change.before}`,
+      `  after:  ${change.after}`
+    ];
+  });
+
+  return [...header, ...body].join("\n");
+}
+
 function getValidateSummaryText(result: ValidationRunResult): string {
   const report = result.report;
 
@@ -2293,8 +2370,52 @@ function renderArchitectActionLink(action: { id: string; label: string }): strin
   return `<a href="architect-action:${action.id}">${escapeHtml(action.label)}</a>`;
 }
 
-function buildDashboardActionsHtml(): string {
-  return [...DASHBOARD_ACTION_LINKS, ...DASHBOARD_SECONDARY_ACTION_LINKS]
+/**
+ * Plan actions, unlike every other action link, carry a revision number in
+ * their own id (`approvePlan:<n>`, `showPlanDiff:<n>`) rather than being a
+ * fixed id — `approve_plan` is deliberately excluded from the `intellij` MCP
+ * toolset (see MCP_TOOLSETS in packages/mcp-server) precisely so "approve
+ * it" typed in Copilot Chat can never become a real approval, so this is the
+ * only click surface that can promote a draft revision at all. The revision
+ * baked into the id is the one this exact render showed the developer —
+ * `plan approve` never infers "whatever is newest" (see
+ * FeaturePlanningService.approvePlan), so the id must not either.
+ *
+ * "Show Plan Diff" is offered only once a prior revision exists to diff
+ * against; "Approve Plan" only while the latest revision is still a draft.
+ */
+function buildPlanActionLinks(
+  latestPlan: DashboardArtifacts["latestPlan"]
+): { id: string; label: string }[] {
+  if (!latestPlan || latestPlan.revision === undefined) {
+    return [];
+  }
+
+  const links: { id: string; label: string }[] = [];
+
+  if ((latestPlan.revisionCount ?? 0) > 1) {
+    links.push({
+      id: `showPlanDiff:${latestPlan.revision}`,
+      label: `Show Plan Diff (rev ${latestPlan.revision})`
+    });
+  }
+
+  if (latestPlan.status === "draft") {
+    links.push({
+      id: `approvePlan:${latestPlan.revision}`,
+      label: `Approve Plan (rev ${latestPlan.revision})`
+    });
+  }
+
+  return links;
+}
+
+function buildDashboardActionsHtml(latestPlan: DashboardArtifacts["latestPlan"]): string {
+  return [
+    ...DASHBOARD_ACTION_LINKS,
+    ...DASHBOARD_SECONDARY_ACTION_LINKS,
+    ...buildPlanActionLinks(latestPlan)
+  ]
     .map(renderArchitectActionLink)
     .join("");
 }
@@ -2799,7 +2920,7 @@ async function buildDashboardPayload(
       session,
       buildVersion: COPILOT_ARCHITECT_VERSION
     },
-    { actionsHtml: buildDashboardActionsHtml() }
+    { actionsHtml: buildDashboardActionsHtml(artifacts.latestPlan) }
   );
 
   return { html, workspaceRoot, artifacts, session };

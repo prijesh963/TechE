@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -65,5 +65,31 @@ describe("@copilot-architect/dashboard", () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-dashboard-pkg-"));
 
     expect(await loadDashboardSession(workspaceRoot)).toBeUndefined();
+  });
+
+  it("reads the latest plan's revision and revision count for the approve/diff action links", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-dashboard-pkg-"));
+    const plansDir = path.join(workspaceRoot, ".copilot-architect", "plans");
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      path.join(plansDir, "latest-plan.json"),
+      JSON.stringify({
+        title: "Add invoice approval workflow",
+        status: "draft",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 2,
+        revisions: [{ revision: 1 }, { revision: 2 }]
+      }),
+      "utf8"
+    );
+
+    const artifacts = await loadDashboardArtifacts(workspaceRoot);
+
+    expect(artifacts.latestPlan).toMatchObject({
+      title: "Add invoice approval workflow",
+      status: "draft",
+      revision: 2,
+      revisionCount: 2
+    });
   });
 });

@@ -98,7 +98,14 @@ export interface SessionActivityInsights {
 export interface DashboardArtifacts {
   languages?: string[];
   frameworks?: string[];
-  latestPlan?: { title: string; status?: string; generatedAt?: string };
+  latestPlan?: {
+    title: string;
+    status?: string;
+    generatedAt?: string;
+    /** The revision currently in `plans/latest-plan.json` — required to approve it (`plan approve` never infers "whatever is newest"). */
+    revision?: number;
+    revisionCount?: number;
+  };
   latestValidation?: {
     status?: string;
     generatedAt?: string;
@@ -467,12 +474,16 @@ export async function loadDashboardArtifacts(
     status?: string;
     generatedAt?: string;
     relevantFiles?: Array<{ filePath?: string }>;
+    revision?: number;
+    revisions?: unknown[];
   }>(path.join(root, "plans", "latest-plan.json"));
   if (plan) {
     artifacts.latestPlan = {
       title: plan.title ?? plan.task ?? "Untitled plan",
       status: plan.status,
-      generatedAt: plan.generatedAt
+      generatedAt: plan.generatedAt,
+      revision: plan.revision,
+      revisionCount: plan.revisions?.length
     };
   }
 

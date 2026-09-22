@@ -441,6 +441,117 @@ describe("FeaturePlanningService", () => {
     expect(revisions[1].approval).toBeUndefined();
   });
 
+  it("diffs two revisions, reporting only fields that actually changed", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({
+        scripts: { test: "vitest run" },
+        dependencies: { react: "^18.2.0" }
+      }),
+      "src/invoices/InvoiceApproval.tsx":
+        "export function InvoiceApproval() { return 'invoice approval'; }"
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+
+    await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Also cover the rejection path.",
+      sections: {
+        summary: "Adds invoice approval, including rejection.",
+        likelyFilesToModify: ["src/invoices/InvoiceReject.tsx"]
+      }
+    });
+
+    const diff = await service.diffRevisions({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      from: 1,
+      to: 2
+    });
+
+    expect(diff.planId).toBe(initial.plan.id);
+    expect(diff.from).toBe(1);
+    expect(diff.to).toBe(2);
+    expect(diff.feedback).toBe("Also cover the rejection path.");
+
+    const summaryChange = diff.changes.find((change) => change.field === "summary");
+    expect(summaryChange).toMatchObject({
+      kind: "scalar",
+      after: "Adds invoice approval, including rejection."
+    });
+
+    const filesChange = diff.changes.find(
+      (change) => change.field === "likelyFilesToModify"
+    );
+    expect(filesChange?.kind).toBe("list");
+    expect(filesChange?.added).toContain("src/invoices/InvoiceReject.tsx");
+
+    // A field the revision's `sections` never touched must not be reported,
+    // even though it happens to be a non-empty array on both sides.
+    expect(diff.changes.some((change) => change.field === "testStrategy")).toBe(false);
+  });
+
+  it("diffs against the immediately preceding revision by default", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "diff-defaults" })
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+    await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Tighten the scope.",
+      sections: { title: "Add invoice approval workflow (scoped)" }
+    });
+
+    const diff = await service.diffRevisions({ startPath: repoRoot, planId: initial.plan.id });
+
+    expect(diff.from).toBe(1);
+    expect(diff.to).toBe(2);
+  });
+
+  it("rejects diffing a revision against itself", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "diff-same-revision" })
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+
+    await expect(
+      service.diffRevisions({
+        startPath: repoRoot,
+        planId: initial.plan.id,
+        from: 1,
+        to: 1
+      })
+    ).rejects.toThrow(/nothing to diff/);
+  });
+
+  it("rejects diffing revision 1 against a nonexistent prior revision", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "diff-no-prior-revision" })
+    });
+    const service = new FeaturePlanningService();
+    await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+
+    await expect(
+      new FeaturePlanningService().diffRevisions({ startPath: repoRoot })
+    ).rejects.toThrow(/no prior revision/);
+  });
+
   it("uses optional workspace config, custom commands, and instruction files", async () => {
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({

@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "../packages/cli/src/index.js";
+import { FeaturePlanningService } from "../packages/planner/src/index.js";
 import { CLI_COMMANDS } from "../packages/shared/src/index.js";
 
 function createCapture() {
@@ -122,6 +123,113 @@ describe("Phase 12 CLI completion", () => {
     expect(json.html).toContain("<!doctype html>");
     expect(json.session).toBeUndefined();
     expect(json.artifacts).toBeDefined();
+  });
+
+  it("omits the plan action links when no plan has been generated yet", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "dashboard-no-plan" })
+    });
+    const capture = createCapture();
+
+    await runCli(["dashboard", "--path", repoRoot], capture.io);
+    const html = capture.stdout.join("\n");
+
+    expect(html).not.toContain("architect-action:approvePlan");
+    expect(html).not.toContain("architect-action:showPlanDiff");
+  });
+
+  it("offers Approve Plan but not Show Plan Diff for a single-revision draft", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "dashboard-rev1-draft" })
+    });
+    await new FeaturePlanningService().createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+    const capture = createCapture();
+
+    await runCli(["dashboard", "--path", repoRoot], capture.io);
+    const html = capture.stdout.join("\n");
+
+    expect(html).toContain('<a href="architect-action:approvePlan:1">');
+    expect(html).not.toContain("architect-action:showPlanDiff");
+  });
+
+  it("offers both plan links on a multi-revision draft, and neither once approved", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "dashboard-rev2-draft" })
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+    await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Also cover rejection.",
+      sections: { openQuestions: ["Who can reject?"] }
+    });
+
+    const draftCapture = createCapture();
+    await runCli(["dashboard", "--path", repoRoot], draftCapture.io);
+    const draftHtml = draftCapture.stdout.join("\n");
+
+    // approvePlan carries the exact revision this render showed — never
+    // "whatever is newest" — so the id must be pinned to rev 2 here.
+    expect(draftHtml).toContain('<a href="architect-action:approvePlan:2">');
+    expect(draftHtml).toContain('<a href="architect-action:showPlanDiff:2">');
+
+    await service.approvePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      revision: 2,
+      approvedBy: "reviewer"
+    });
+
+    const approvedCapture = createCapture();
+    await runCli(["dashboard", "--path", repoRoot], approvedCapture.io);
+    const approvedHtml = approvedCapture.stdout.join("\n");
+
+    expect(approvedHtml).not.toContain("architect-action:approvePlan");
+    // Still reachable — a diff is a read, not an action gated on draft status.
+    expect(approvedHtml).toContain('<a href="architect-action:showPlanDiff:2">');
+  });
+
+  it("prints a plan diff as readable text and as JSON", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "plan-diff-cli" })
+    });
+    const service = new FeaturePlanningService();
+    const initial = await service.createPlan({
+      startPath: repoRoot,
+      request: "Add invoice approval workflow"
+    });
+    await service.revisePlan({
+      startPath: repoRoot,
+      planId: initial.plan.id,
+      feedback: "Tighten the scope.",
+      sections: { title: "Add invoice approval workflow (scoped)" }
+    });
+
+    const textCapture = createCapture();
+    const textResult = await runCli(["plan", "diff", "--path", repoRoot], textCapture.io);
+    const text = textCapture.stdout.join("\n");
+
+    expect(textResult.exitCode).toBe(0);
+    expect(text).toContain("Revision 1 → 2");
+    expect(text).toContain("Tighten the scope.");
+    expect(text).toContain("title:");
+
+    const jsonCapture = createCapture();
+    await runCli(["plan", "diff", "--path", repoRoot, "--json"], jsonCapture.io);
+    const json = JSON.parse(jsonCapture.stdout.join("\n"));
+
+    expect(json.from).toBe(1);
+    expect(json.to).toBe(2);
+    expect(
+      json.changes.some((change: { field: string }) => change.field === "title")
+    ).toBe(true);
   });
 
   it("runs workspace init, add, show, search, and validate-plan commands", async () => {
