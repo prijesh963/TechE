@@ -1098,6 +1098,31 @@ then approve). What remains open: no reject action, no untruncated diff
 view for very large plans, an audit name tied to the OS account, and Kotlin
 correctness that is asserted, not proven, until a real build verifies it.
 
+**A sharper gap, found while explaining this workflow rather than while
+building it: `get_approved_plan_contract` (in the `intellij` toolset)
+cannot see what this phase approves at all.** It reads `plans/approved/
+latest.json` / `plans/approved/v<n>.json` via `readApprovedPlan()`
+(`packages/planner/src/plan-contract.ts`) — files written only by
+`writeApprovedPlan()`, which is called only from the VS Code chat's
+session-based `/create-plan` → approve flow (`PlanContract`, a distinct
+type from `FeaturePlanArtifact`). `FeaturePlanningService.approvePlan()` —
+the function behind `approve_plan`, `plan approve`, and this phase's
+`approvePlan:<n>` Tool Window button — writes a differently-named,
+differently-shaped artifact instead (`plans/approved/<planId>-rev<n>-plan
+.json`, plus `plans/latest-plan.json`). IntelliJ has no session/chat-
+participant flow at all, so nothing in a pure-IntelliJ workflow ever calls
+`writeApprovedPlan()` — a Copilot Chat turn that calls
+`get_approved_plan_contract` right after a real Tool Window approval still
+gets back `{plan: null, reason: "no plan has been approved in this
+workspace"}`. `get_latest_plan` is the tool that actually reflects an
+IntelliJ-side approval (its `status` field flips to `"approved"`); anyone
+working this way in Copilot Chat should be told to check that one, not
+`get_approved_plan_contract`. Not fixed here — folding the two plan
+lifecycles together, or dropping `get_approved_plan_contract` from the
+`intellij` toolset in favor of `get_latest_plan`, is real design work of
+its own kind rather than a one-line change, and out of scope for a phase
+about the approve *button*, not the plan *model*.
+
 ---
 
 ## 5. Scale and housekeeping
