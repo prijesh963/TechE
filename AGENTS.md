@@ -116,7 +116,7 @@ copilot-architect/
 │   ├── reviewer/        review report generation
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 30 tools
+│   ├── mcp-server/      MCP server and 28 tools
 │   ├── dashboard/       shared dashboard render+load logic (used by vscode-extension and the CLI's `dashboard` command)
 │   ├── cli/             CLI entry point and command routing
 │   ├── vscode-extension the @architect chat participant and dashboard
@@ -168,7 +168,7 @@ decision carries.
 ## Implemented
 
 1. TypeScript CLI with 25 commands including `demo`.
-2. Local MCP server with 30 tools, including the session, plan contract and
+2. Local MCP server with 28 tools, including the session, plan contract and
    grounding — so a policy-blocked developer gets the same product.
 3. VS Code extension with the `@architect` chat participant and four phases.
 4. Repo analysis and discovery; language/framework/package-manager detection.
@@ -330,25 +330,38 @@ decision carries.
     turn, whether or not that turn uses it. `packages/mcp-server`'s
     `MCP_TOOLSETS` (in `tools.ts`, the one place the actual tool identity
     lives, so the curated list can't drift from what's really registered)
-    names two: `full` (all 30 tools, unchanged default behavior) and
-    `intellij` (13 tools — retrieval, planning, and read-only session/plan/
+    names two: `full` (all 28 tools, unchanged default behavior) and
+    `intellij` (12 tools — retrieval, planning, and read-only session/plan/
     grounding state). `--toolset <name>` on `mcp`/`mcp config` selects one;
-    `mcp config` bakes it into the generated server's `args`. The other 17
+    `mcp config` bakes it into the generated server's `args`. The other 16
     tools are excluded for two different reasons, not one: most (`detect_*`,
     `get_validation_commands`, `get_safety_policy`, `repo_map`,
-    `workspace_map`, `get_symbol_graph`, `find_impacted_files`) are
-    redundant — either already printed in generated Copilot instructions
-    (item 26) or a one-time Setup Repo step rather than a per-turn
-    conversational call — but `approve_plan` is excluded for safety, not
-    tokens: if the model can call it, "approve it" typed in chat becomes a
-    real approval, which is exactly what "approval is a button, not a
-    phrase" (Safety Rules, below) exists to prevent. Approval stays a Tool
-    Window click or `plan approve --approve`. Generated Copilot instructions
-    also gained a "Retrieval Workflow" section telling Copilot to search
-    before reading a file directly and to stop re-discovering facts the
-    instructions file already states — the two are complementary: the
-    toolset limits what's callable, the instructions steer how what remains
-    gets used.
+    `workspace_map`, `get_symbol_graph`) are redundant — either already
+    printed in generated Copilot instructions (item 26) or a one-time Setup
+    Repo step rather than a per-turn conversational call — but `approve_plan`
+    is excluded for safety, not tokens: if the model can call it, "approve
+    it" typed in chat becomes a real approval, which is exactly what
+    "approval is a button, not a phrase" (Safety Rules, below) exists to
+    prevent. Approval stays a Tool Window click or `plan approve --approve`.
+    Generated Copilot instructions also gained a "Retrieval Workflow"
+    section telling Copilot to search before reading a file directly and to
+    stop re-discovering facts the instructions file already states — the
+    two are complementary: the toolset limits what's callable, the
+    instructions steer how what remains gets used.
+30. `find_impacted_files` and `analyze_impact` no longer exist as separate
+    MCP tools — both folded into `generate_plan_context` (28 tools total
+    now, down from 30), which calls `FeaturePlanningService.
+createPlanPreview()` once and returns search results, impact analysis,
+    and likely-files-to-modify/add together, rather than three tools each
+    independently re-running overlapping search/analysis for one
+    conversation's "what would this touch" question. Verified against the
+    real tool, not only the unit fixtures: one call now returns search
+    results, `impactAnalysis` (with risks and affected commands), and
+    `likelyFilesToModify` together, where three separate calls returned
+    each piece on its own before. See `docs/KNOWN_LIMITATIONS.md` 4.21 for
+    what each of the three used to return and why `find_impacted_files`'s
+    own shape isn't reproduced separately — it was a strict subset of
+    `likelyFilesToModify`, never additional information.
 
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
@@ -560,7 +573,7 @@ Cover:
   contains "test")
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
-- MCP tools (all 30 tools)
+- MCP tools (all 28 tools)
 - role prompt rendering
 - instructions generation and validation
 - handoff generation (approval gating, git checkpoint)

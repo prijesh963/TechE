@@ -72,8 +72,10 @@ export type McpToolsetName = (typeof MCP_TOOLSET_NAMES)[number];
  * `.github/copilot-instructions.md`, so a live tool call to re-discover
  * them is a wasted round trip, not a needed one. `repo_map`/`workspace_map`/
  * `get_symbol_graph` are one-time structural dumps that belong to a Setup
- * Repo step, not a per-turn conversational call. `find_impacted_files` is a
- * strict subset of `analyze_impact`.
+ * Repo step, not a per-turn conversational call. `find_impacted_files` and
+ * `analyze_impact` no longer exist as separate tools at all — both were
+ * folded into `generate_plan_context`, which already appears below; see
+ * that tool's own comment for why.
  *
  * `approve_plan` is excluded for a different reason than the rest — not
  * tokens: if the model can call it, "approve it" typed in chat becomes a
@@ -87,7 +89,6 @@ const INTELLIJ_CORE_TOOL_NAMES: readonly string[] = [
   "search_repo",
   "analyze_query_intent",
   "find_similar_feature",
-  "analyze_impact",
   "generate_plan_context",
   "measure_context_reduction",
   "generate_feature_plan",
@@ -315,59 +316,52 @@ export function createCopilotArchitectTools(
           })
         )
     ),
-    tool(
-      "find_impacted_files",
-      "Find likely impacted files for a request.",
-      requestSchema,
-      true,
-      async (args) => {
-        const response = await new IndexingService().findSimilarFeatures({
-          startPath: resolveStartPath(args, options),
-          query: stringArg(args, "request"),
-          limit: numberArg(args, "limit", 12)
-        });
-        return response.results.map((result) => ({
-          filePath: result.relativePath,
-          score: result.score,
-          matchedFields: result.matchedFields
-        }));
-      }
-    ),
-    tool(
-      "analyze_impact",
-      "Generate impact context for a request without implementation.",
-      requestSchema,
-      true,
-      async (args) => {
-        const plan = await new FeaturePlanningService().createPlanPreview({
-          startPath: resolveStartPath(args, options),
-          request: stringArg(args, "request"),
-          searchLimit: numberArg(args, "limit", 12)
-        });
-        return {
-          impactAnalysis: plan.plan.impactAnalysis,
-          impactedLanguages: plan.plan.impactedLanguages,
-          impactedFrameworks: plan.plan.impactedFrameworks,
-          impactedModules: plan.plan.impactedModules,
-          likelyFilesToModify: plan.plan.likelyFilesToModify,
-          likelyNewFiles: plan.plan.likelyNewFiles
-        };
-      }
-    ),
+    /**
+     * Consolidates what were three separate tools — find_impacted_files,
+     * analyze_impact, and generate_plan_context — each independently
+     * re-deriving overlapping data from the same underlying search/analysis
+     * `createPlanPreview` already computes in one pass. Three calls a
+     * conversation had to make (and mentally merge) to answer "what would
+     * this touch" is now one: fewer round trips, and one client that
+     * resends its whole growing history every turn (a Copilot Chat client
+     * with no other model route in, e.g. IntelliJ) pays for that once, not
+     * three times. See docs/KNOWN_LIMITATIONS.md 4.21 for what each of the
+     * three used to return on its own and why find_impacted_files's own
+     * shape (filePath/score/matchedFields) isn't reproduced here — it was a
+     * strict subset of likelyFilesToModify, never additional information.
+     */
     tool(
       "generate_plan_context",
-      "Generate repo/search context for a feature plan.",
+      "Generate consolidated planning context for a feature request in one " +
+        "call, without writing any plan artifact: ranked search results, " +
+        "impact analysis (affected languages/frameworks/modules), and " +
+        "likely files to modify or add. Call this once before proposing a " +
+        "plan rather than chaining separate search and impact calls.",
       requestSchema,
       true,
       async (args) => {
-        const startPath = resolveStartPath(args, options);
-        const repoMap = await ensureRepoMap(startPath);
-        const search = await new IndexingService().findSimilarFeatures({
-          startPath,
-          query: stringArg(args, "request"),
-          limit: numberArg(args, "limit", 12)
+        const request = stringArg(args, "request");
+        const preview = await new FeaturePlanningService().createPlanPreview({
+          startPath: resolveStartPath(args, options),
+          request,
+          searchLimit: numberArg(args, "limit", 12)
         });
-        return { repoMap, search: shapeSearchForModel(search) };
+
+        return {
+          search: shapeSearchForModel({
+            schemaVersion: CURRENT_SCHEMA_VERSION,
+            generatedAt: new Date().toISOString(),
+            query: request,
+            repoRoot: preview.repoRoot,
+            results: preview.searchResults
+          }),
+          impactAnalysis: preview.plan.impactAnalysis,
+          impactedLanguages: preview.plan.impactedLanguages,
+          impactedFrameworks: preview.plan.impactedFrameworks,
+          impactedModules: preview.plan.impactedModules,
+          likelyFilesToModify: preview.plan.likelyFilesToModify,
+          likelyNewFiles: preview.plan.likelyNewFiles
+        };
       }
     ),
     tool(

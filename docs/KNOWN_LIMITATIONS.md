@@ -944,7 +944,7 @@ can never close on its own: a human running the actual plugin.
 ### 4.20 The `intellij` MCP toolset is a fixed, hand-picked list
 
 **Item 29, AGENTS.md.** `MCP_TOOLSETS.intellij` (`packages/mcp-server/src/
-tools.ts`) is 13 tool names written down once, not derived from any
+tools.ts`) is 12 tool names written down once, not derived from any
 property on the tool definitions themselves (no `tier: "core"` field, no
 per-tool token-cost estimate). A new MCP tool added to the server in the
 future defaults to appearing only in `full` — nothing forces a decision
@@ -963,7 +963,7 @@ question, not a test one.
 **Also worth stating plainly:** only one curated toolset exists.
 Earlier scoping work sketched a three-tier design (core / conditional for
 multi-repo workspaces / optional for review-and-validation Q&A); what
-shipped is the single 13-tool core tier only. `search_across_repos`,
+shipped is the single 12-tool core tier only. `search_across_repos`,
 `analyze_cross_repo_impact`, `get_latest_validation`, `get_latest_review`,
 and `resolve_review_finding` are reachable only via `full` today — a team
 that wants them live in IntelliJ's Copilot Chat without the rest of `full`
@@ -974,6 +974,65 @@ running plain `mcp` (defaulting to `full`) in IntelliJ instead of `mcp
 --toolset intellij`, or from manually re-checking an excluded tool in
 JetBrains' own "Add MCP Tools" picker. The flag makes the curated set easy
 to select; it does not make the full set unreachable.
+
+---
+
+### 4.21 `find_impacted_files` and `analyze_impact` were removed, folded into `generate_plan_context`
+
+**Item 30, AGENTS.md.** All three tools answered overlapping versions of
+"what would this feature touch" from a request string, each independently
+re-running search/analysis that `FeaturePlanningService.createPlanPreview()`
+already computes in one pass internally:
+
+- `find_impacted_files` called `IndexingService.findSimilarFeatures()`
+  directly and returned `{filePath, score, matchedFields}` per result.
+- `analyze_impact` called `createPlanPreview()` and returned only
+  `impactAnalysis`/`impactedLanguages`/`impactedFrameworks`/
+  `impactedModules`/`likelyFilesToModify`/`likelyNewFiles` from it,
+  discarding the search results the same call had already computed.
+- `generate_plan_context` called `findSimilarFeatures()` a second time
+  (redundant with `analyze_impact`'s own internal call) and returned only
+  `{repoMap, search}`.
+
+A conversation that wanted both impact analysis and search context — the
+common case going into a plan — had to call at least two of the three,
+correlate the results itself, and pay for three tool schemas in every
+turn's context regardless of which one that turn used. This is the same
+"answers the same question differently because retrieval was
+reimplemented rather than shared" failure the Core Rule's own preamble in
+AGENTS.md describes for `@architect` vs. the MCP tools, at smaller scale
+and inside the MCP surface itself rather than across shells.
+
+**What changed:** `generate_plan_context` now calls `createPlanPreview()`
+once and returns the union: `search` (shaped, ranked results),
+`impactAnalysis`, `impactedLanguages`, `impactedFrameworks`,
+`impactedModules`, `likelyFilesToModify`, `likelyNewFiles`.
+`find_impacted_files` and `analyze_impact` no longer exist as separate
+tools — not deprecated, not aliased, actually removed from both `full` and
+the tool registry (28 tools, down from 30). `find_impacted_files`'s
+`{filePath, score, matchedFields}` shape is not reproduced in any form:
+every file it could name was already present in `likelyFilesToModify`
+(which additionally distinguishes modify-vs-new) or in `search.results`
+(which additionally carries the matched symbols and preview
+`find_impacted_files` never did) — it added a third, narrower view of
+data the other two already fully covered, not new information.
+
+**This is a breaking change for any MCP client that called either
+removed tool by name** — there is no compatibility shim. Given at the time
+of writing the only real consumers were this repo's own tests (updated)
+and the VS Code extension's own service-layer calls (which use
+`FeaturePlanningService` directly, not through MCP, so unaffected), this
+was judged safe. A client outside this repo calling `find_impacted_files`
+or `analyze_impact` over MCP would need to switch to
+`generate_plan_context` and read the fields it now needs from the
+combined response.
+
+**Cost:** none identified — every field either tool returned is still
+returned, from `generate_plan_context` now, in fewer round trips. The
+risk is the same as any consolidation: a future need genuinely specific to
+one of the removed tools' narrower shapes would have to be reintroduced
+as a new, deliberately-scoped tool rather than resurrecting either old one
+verbatim.
 
 ---
 
@@ -1090,6 +1149,22 @@ still describe the eleven-agent product as current.
 — the failure that produced a bug report about "the Code Analysis Agent" that
 was really about `@architect`. Corrected only where a doc named a mention that
 no longer resolves; a full rewrite of each is a phase of its own.
+
+**Widened, item 30 (AGENTS.md).** Three more join this list, discovered
+auditing every reference to `find_impacted_files`/`analyze_impact` before
+removing them (4.21), not from a scheduled review: `README.md`'s MCP tool
+table and `docs/MCP_TOOLS.md` were already missing `get_session`/
+`get_approved_plan_contract`/`verify_claims` (added under item 15, never
+backfilled into either table) before today, and now also name two tools
+that no longer exist at all. `PROJECT_HANDOVER.md` is further gone — its
+MCP section still says "21 repo-intelligence tools" and its agent section
+still describes "The 7 generated Copilot agents (`.github/agents/
+*.agent.md`, model `gpt-4o`)", the exact pre-redesign system 6.4 already
+records as dropped. None of the three were corrected here, for the same
+reason the original five weren't: a full pass belongs to a phase of its
+own, and a partial one — fixing just the two names this change happens to
+touch — would leave the surrounding staleness looking more current than
+it is.
 
 ### 6.6 `--help` still says `npm run cli --`
 

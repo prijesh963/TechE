@@ -139,7 +139,9 @@ describe("Copilot Architect MCP server", () => {
     expect(latest.data.missing).toBe(true);
   });
 
-  it("keeps analyze_impact from writing plan artifacts", async () => {
+  it("returns consolidated search + impact context from generate_plan_context without writing plan artifacts", async () => {
+    // generate_plan_context absorbed the old analyze_impact and
+    // find_impacted_files tools — one call now, not three.
     const repoRoot = await createRepo({
       "package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
       "src/invoices/invoice-service.ts":
@@ -147,7 +149,7 @@ describe("Copilot Architect MCP server", () => {
     });
     const { client } = await createConnectedServer(repoRoot);
 
-    const impact = await callJsonTool(client, "analyze_impact", {
+    const context = await callJsonTool(client, "generate_plan_context", {
       path: repoRoot,
       request: "Add invoice approval workflow"
     });
@@ -155,9 +157,30 @@ describe("Copilot Architect MCP server", () => {
       path: repoRoot
     });
 
-    expect(impact.ok).toBe(true);
-    expect(impact.data.impactAnalysis.summary).toContain("Likely impact");
+    expect(context.ok).toBe(true);
+    expect(context.data.impactAnalysis.summary).toContain("Likely impact");
+    expect(
+      (context.data.search.results as Array<{ relativePath: string }>).map(
+        (result) => result.relativePath
+      )
+    ).toContain("src/invoices/invoice-service.ts");
+    expect(context.data.likelyFilesToModify).toContain(
+      "src/invoices/invoice-service.ts"
+    );
     expect(latestPlan.data.missing).toBe(true);
+  });
+
+  it("no longer registers find_impacted_files or analyze_impact as separate tools", async () => {
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "consolidated-planning-tools" })
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+
+    expect(names).not.toContain("find_impacted_files");
+    expect(names).not.toContain("analyze_impact");
+    expect(names).toContain("generate_plan_context");
   });
 
   it("requires approval before generating feature plan artifacts", async () => {
