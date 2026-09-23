@@ -1,6 +1,9 @@
 package com.creditoptimizer.plugin
 
 import com.creditoptimizer.core.IndexService
+import com.creditoptimizer.core.handoff.CopilotHandoffService
+import com.creditoptimizer.core.handoff.FeaturePlan
+import com.creditoptimizer.core.handoff.PlanStorage
 import com.creditoptimizer.core.model.ServiceIndex
 import com.creditoptimizer.core.model.ServiceInfo
 import com.creditoptimizer.core.router.FreePathRouter
@@ -37,6 +40,10 @@ class IndexBridge(private val project: Project) {
     private val dataDir: File = File(project.basePath ?: ".", ".idea/creditOptimizer")
     private val indexService = IndexService(IndexStorage(File(dataDir, "index")))
     private val usageLog = UsageLog(File(dataDir, "usage.jsonl"))
+    private val planStorage = PlanStorage(File(dataDir, "plans"))
+
+    /** One feature in flight at a time, same as the old Copilot Architect project's session model — no plan-id UI needed. */
+    private val currentPlanId = "current"
 
     @Volatile
     private var lastBuiltAt: Instant? = null
@@ -94,12 +101,49 @@ class IndexBridge(private val project: Project) {
             }
             RouterResult.NeedsGeneration -> {
                 usageLog.record(UsageEntry(question, UsageKind.COPILOT, "handed to Copilot"))
-                AskOutcome.NeedsCopilot
+                AskOutcome.NeedsCopilot(CopilotHandoffService.buildAskPrompt(question, indexes))
             }
         }
     }
 
     fun recentHistory(limit: Int = 30) = usageLog.recent(limit)
+
+    // --- Plan / implement hand-off ---------------------------------------------------
+    // Clipboard-mediated by design, not a shortcut: there is no API for a plugin to send
+    // text into Copilot Chat programmatically, and this org's Copilot policy blocks MCP
+    // (the one mechanism that could have made this a `/mcp...` prompt instead). This is
+    // the real ceiling of what's possible here, not a placeholder for something better.
+
+    fun currentPlan(): FeaturePlan? = planStorage.loadLatest(currentPlanId)
+
+    /** Builds the prompt to copy into Copilot Chat for a new plan draft; does not persist anything yet. */
+    fun draftPlanPrompt(request: String): String =
+        CopilotHandoffService.buildPlanPrompt(request, indexService.loadAll())
+
+    /**
+     * Parses Copilot's pasted reply into the next plan revision and persists it.
+     * Always a new revision, never approved - re-importing after edits is how a
+     * plan gets corrected, matching the old project's versioned-plan rule.
+     */
+    fun importPlanReply(request: String, reply: String): FeaturePlan {
+        val plan = CopilotHandoffService.importPlan(currentPlanId, request, reply, indexService.loadAll(), currentPlan())
+        planStorage.saveRevision(plan)
+        return plan
+    }
+
+    /** Approves the current plan revision exactly as it stands - never "whatever is newest" implicitly. */
+    fun approveCurrentPlan(): FeaturePlan? {
+        val plan = currentPlan() ?: return null
+        val approved = CopilotHandoffService.approve(plan)
+        planStorage.saveRevision(approved)
+        return approved
+    }
+
+    /** Null when there is no plan, or the current one is still a draft - implementing a draft is refused, not just discouraged. */
+    fun buildImplementPrompt(): String? {
+        val plan = currentPlan() ?: return null
+        return CopilotHandoffService.buildImplementPrompt(plan, indexService.loadAll())
+    }
 
     companion object {
         fun getInstance(project: Project): IndexBridge = project.service<IndexBridge>()
@@ -125,5 +169,6 @@ data class IndexStatus(
 
 sealed interface AskOutcome {
     data class Answered(val summary: String, val detail: String, val sourceFiles: List<String>) : AskOutcome
-    data object NeedsCopilot : AskOutcome
+    /** [groundedPrompt] is what to copy into Copilot Chat - built from the same indexed facts an [Answered] would have quoted. */
+    data class NeedsCopilot(val groundedPrompt: String) : AskOutcome
 }

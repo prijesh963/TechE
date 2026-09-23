@@ -46,7 +46,7 @@ repos are indexed.
 
 ## What's actually built, and tested
 
-`:core` — 48 tests, all passing (`gradle :core:test`):
+`:core` — 64 tests, all passing (`gradle :core:test`):
 
 - **`JavaServiceParser`** (`core/src/main/kotlin/.../parse/JavaServiceParser.kt`)
   — extracts from `.java` source on disk, no compiled classpath needed:
@@ -136,6 +136,21 @@ repos are indexed.
   real," below).
 - **`IndexService`** — ties discovery, parsing and storage together;
   re-indexing one service doesn't touch another's stored index.
+- **`ContextRetrieval`** (`core/src/main/kotlin/.../handoff/ContextRetrieval.kt`)
+  — deterministic keyword-overlap retrieval over every fact type, used to
+  ground an Ask/Plan prompt with real facts instead of nothing or a whole
+  file dump. It only picks which true facts are worth quoting; it never
+  guesses at what they mean — that's still Copilot's job, same boundary
+  `FreePathRouter` draws.
+- **`CopilotHandoffService`** (`core/src/main/kotlin/.../handoff/CopilotHandoffService.kt`)
+  — builds the Ask/Plan/Implement prompts and parses a pasted Copilot
+  reply into a [FeaturePlan]: an `UPDATE`/`DELETE` naming a path the
+  index has never indexed for that service is dropped, never trusted;
+  `buildImplementPrompt` refuses (`null`) for a draft plan and quotes an
+  `UPDATE` file's real current on-disk content, not Copilot's memory of
+  it.
+- **`PlanStorage`** — every plan revision, one JSON file per plan id,
+  same shape as `IndexStorage`; revisions are kept, not overwritten.
 
 ### Cross-repo linking — what's real now, and what deliberately isn't
 
@@ -168,6 +183,27 @@ repos are indexed.
   to `IndexBridge.ask()`, and a history view), and a Ctrl+Alt+K quick-ask
   popup — both call the same `IndexBridge`, so there is exactly one path
   from a question to an answer, not two that could disagree.
+- **Plan a feature / Paste Copilot's reply / Current plan / Approve /
+  Copy Implement Prompt** — a Plan/Implement section in the same Tool
+  Window, clipboard-mediated end to end: Draft Plan copies a grounded
+  prompt; a pasted reply is parsed into a plan revision (an invented
+  path dropped, per `CopilotHandoffService`); Approve gates Implement,
+  which is disabled until a plan is approved and copies a prompt quoting
+  each `UPDATE` file's real current content. One plan in flight at a
+  time — no plan-id field, matching the old Copilot Architect project's
+  "one feature at a time" session rule. A question that needs Copilot
+  now also auto-copies its own grounded prompt to the clipboard, instead
+  of just saying so.
+  **Why clipboard, not `@mention` or an MCP `/` prompt:** GitHub Copilot
+  Extensions (the only mechanism that ever let a third-party tool
+  respond to a typed `@mention` across IDEs) were shut down entirely on
+  November 10, 2025. MCP would have been the modern equivalent
+  (`/mcp.credit-optimizer.plan`), but this project's target org has the
+  "MCP servers in Copilot" admin policy disabled — which blocks *any*
+  MCP server for *any* user in that org, not just this one. With both
+  closed and no other API to send text into Copilot Chat
+  programmatically, a copy/paste hand-off is the actual ceiling of what's
+  possible today, not a placeholder for something better.
 - `PluginSettings` — per-project, persisted sibling-repo paths.
 - `CreditOptimizerSettingsConfigurable` (Settings > Tools > Credit
   Optimizer) — a real settings page: a list with `+`/`-` toolbar buttons,
@@ -178,9 +214,6 @@ repos are indexed.
 
 ## Not yet built
 
-- **How a "needs Copilot" bundle actually reaches Copilot Chat.** This
-  was flagged as the one open integration question in the design
-  discussion and still is — nothing here fakes an answer to it.
 - **PSI-based exact resolution for the currently-open file**, layered on
   top of the JavaParser baseline every service gets (see ADR-001).
 - **Gutter icons / line markers** for passive discovery (hover a Feign
