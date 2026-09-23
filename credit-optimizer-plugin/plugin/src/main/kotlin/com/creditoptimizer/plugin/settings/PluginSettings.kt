@@ -14,9 +14,10 @@ import com.intellij.util.xmlb.XmlSerializerUtil
  * a developer's own disk layout for sibling checkouts is not something a
  * teammate's IDE should inherit).
  *
- * PHASE 1 LIMITATION: no settings UI yet — edited by hand in
- * `.idea/creditOptimizer.xml`, or a fast-follow `Configurable` adds a real
- * page. The state shape here is what that page would bind to.
+ * Edited through Settings > Tools > Credit Optimizer
+ * ([CreditOptimizerSettingsConfigurable]), which binds to this exact state
+ * shape — hand-editing the XML directly still works too, it's just no
+ * longer the only way in.
  */
 @State(name = "CreditOptimizerSettings", storages = [Storage("creditOptimizer.xml")])
 class PluginSettings : PersistentStateComponent<PluginSettings.State> {

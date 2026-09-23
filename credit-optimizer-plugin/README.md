@@ -88,9 +88,13 @@ repos are indexed.
   to `IndexBridge.ask()`, and a history view), and a Ctrl+Alt+K quick-ask
   popup — both call the same `IndexBridge`, so there is exactly one path
   from a question to an answer, not two that could disagree.
-- `PluginSettings` — per-project, persisted sibling-repo paths. No
-  settings *UI* yet (edited by hand in `.idea/creditOptimizer.xml` for
-  now) — a fast-follow `Configurable` page binds to the same state shape.
+- `PluginSettings` — per-project, persisted sibling-repo paths.
+- `CreditOptimizerSettingsConfigurable` (Settings > Tools > Credit
+  Optimizer) — a real settings page: a list with `+`/`-` toolbar buttons,
+  `+` opening a directory-only file chooser rather than a free-text
+  field, bound to the exact same `PluginSettings` state the XML already
+  round-trips. Hand-editing `.idea/creditOptimizer.xml` still works, it's
+  just no longer the only way in.
 
 ## Not yet built
 
@@ -102,7 +106,6 @@ repos are indexed.
 - **Gutter icons / line markers** for passive discovery (hover a Feign
   call, see its resolved route) — deferred rather than shipped as
   speculative, unverifiable `LineMarkerProvider` code in a first slice.
-- **A real Settings UI**, instead of hand-editing the XML.
 - **Running inside a real IDE at all.** Every claim above about the
   `:plugin` module is "written correctly against the API," not "seen to
   work" — the same honest distinction the `intellij-main` branch's own

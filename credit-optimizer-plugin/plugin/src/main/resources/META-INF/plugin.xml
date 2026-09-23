@@ -22,6 +22,12 @@
 
         <projectService serviceImplementation="com.creditoptimizer.plugin.IndexBridge"/>
         <projectService serviceImplementation="com.creditoptimizer.plugin.settings.PluginSettings"/>
+
+        <projectConfigurable
+                parentId="tools"
+                instance="com.creditoptimizer.plugin.settings.CreditOptimizerSettingsConfigurable"
+                id="com.creditoptimizer.plugin.settings.CreditOptimizerSettingsConfigurable"
+                displayName="Credit Optimizer"/>
     </extensions>
 
     <actions>
