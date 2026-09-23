@@ -203,4 +203,153 @@ class JavaServiceParserTest {
         val index = JavaServiceParser.parseService(service)
         assertTrue(index.messaging.isEmpty())
     }
+
+    @Test
+    fun `resolves a call through a field, a parameter, a local variable and a for-each loop variable`() {
+        val service = tempService(
+            "OrderService.java" to """
+                public class OrderService {
+                    private OrderRepository repo;
+
+                    public void approve(NotificationSender sender) {
+                        this.repo.save("x");
+                        sender.notify("approved");
+
+                        AuditLog log = new AuditLog();
+                        log.record("approved");
+
+                        for (LineItem item : items()) {
+                            item.validate();
+                        }
+
+                        selfCheck();
+                    }
+
+                    private void selfCheck() {}
+
+                    private java.util.List<LineItem> items() { return null; }
+                }
+            """.trimIndent()
+        )
+
+        val index = JavaServiceParser.parseService(service)
+        val approveCalls = index.calls.filter { it.callerMethod == "approve" }
+
+        fun calleeOf(method: String) = approveCalls.first { it.calleeMethod == method }.calleeType
+
+        assertEquals("OrderRepository", calleeOf("save"))       // field, reached via this.
+        assertEquals("NotificationSender", calleeOf("notify"))  // parameter
+        assertEquals("AuditLog", calleeOf("record"))             // local variable
+        assertEquals("LineItem", calleeOf("validate"))           // for-each loop variable
+        assertEquals("OrderService", calleeOf("selfCheck"))      // unqualified -> same class
+    }
+
+    @Test
+    fun `a local declared with var has an unresolved callee type, never guessed`() {
+        val service = tempService(
+            "Thing.java" to """
+                public class Thing {
+                    public void run() {
+                        var helper = newHelper();
+                        helper.doWork();
+                    }
+                    private Helper newHelper() { return null; }
+                }
+            """.trimIndent()
+        )
+
+        val index = JavaServiceParser.parseService(service)
+        val call = index.calls.first { it.calleeMethod == "doWork" }
+        // Not "Helper" - a var-typed local's real type isn't available without a resolved
+        // classpath, so the raw identifier is kept rather than guessed at.
+        assertEquals("helper", call.calleeType)
+    }
+
+    @Test
+    fun `resolves a RestTemplate call's HTTP verb and literal path`() {
+        val service = tempService(
+            "OrderClient.java" to """
+                public class OrderClient {
+                    private RestTemplate restTemplate;
+                    public void charge(String id) {
+                        restTemplate.postForObject("/payments/" + id, null, String.class);
+                        restTemplate.getForObject("/orders/{id}", Order.class);
+                    }
+                }
+            """.trimIndent()
+        )
+
+        val index = JavaServiceParser.parseService(service)
+        // The concatenated path is built at runtime and is dropped, not guessed at.
+        assertEquals(1, index.httpClientCalls.size)
+        val call = index.httpClientCalls.first()
+        assertEquals("GET", call.httpMethod)
+        assertEquals("/orders/{id}", call.path)
+    }
+
+    @Test
+    fun `resolves a WebClient fluent call's verb from its scope chain`() {
+        val service = tempService(
+            "OrderClient.java" to """
+                public class OrderClient {
+                    private WebClient webClient;
+                    public void fetch() {
+                        webClient.get().uri("/orders/{id}").retrieve();
+                    }
+                }
+            """.trimIndent()
+        )
+
+        val index = JavaServiceParser.parseService(service)
+        assertEquals(1, index.httpClientCalls.size)
+        assertEquals("GET", index.httpClientCalls.first().httpMethod)
+        assertEquals("/orders/{id}", index.httpClientCalls.first().path)
+    }
+
+    @Test
+    fun `parseService also picks up the service's own declared build dependencies`() {
+        val service = tempService(
+            "pom.xml" to """
+                <project>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-starter-web</artifactId>
+                            <version>3.2.5</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+            """.trimIndent(),
+            "PlainService.java" to """
+                public class PlainService {
+                    public void doWork() {}
+                }
+            """.trimIndent()
+        )
+
+        val index = JavaServiceParser.parseService(service)
+        assertEquals(1, index.dependencies.size)
+        assertEquals("spring-boot-starter-web", index.dependencies.first().artifactId)
+    }
+
+    @Test
+    fun `a FeignClient interface's own mappings are recorded as calls it makes, not routes it exposes`() {
+        val service = tempService(
+            "OrderClient.java" to """
+                @FeignClient(name = "order-service", path = "/orders")
+                public interface OrderClient {
+                    @GetMapping("/{id}")
+                    Order getOrder(@PathVariable String id);
+                }
+            """.trimIndent()
+        )
+
+        val index = JavaServiceParser.parseService(service)
+        assertTrue(index.routes.isEmpty())
+        assertEquals(1, index.httpClientCalls.size)
+        val call = index.httpClientCalls.first()
+        assertEquals("GET", call.httpMethod)
+        assertEquals("/orders/{id}", call.path)
+        assertEquals("getOrder", call.methodName)
+    }
 }

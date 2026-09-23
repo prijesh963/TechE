@@ -29,6 +29,8 @@ object FreePathRouter {
         routeAnswer(question, lower, indexes)?.let { return it }
         messagingAnswer(lower, indexes)?.let { return it }
         beanAnswer(lower, indexes)?.let { return it }
+        callGraphAnswer(lower, indexes)?.let { return it }
+        dependencyAnswer(lower, indexes)?.let { return it }
 
         return RouterResult.NeedsGeneration
     }
@@ -42,19 +44,32 @@ object FreePathRouter {
         val matches = indexes.flatMap { it.routes }.filter { it.path.contains(pathToken, ignoreCase = true) }
         if (matches.isEmpty()) return null
 
+        val callers = indexes.flatMap { it.httpClientCalls }
+            .filter { normalizePathVars(it.path).contains(normalizePathVars(pathToken), ignoreCase = true) }
+
         val lines = matches.map { route ->
             buildString {
                 append("${route.httpMethod} ${route.path} on ${route.service} (${route.className}.${route.methodName})")
                 if (route.requestType != null) append("\n  request: ${route.requestType}")
                 if (route.responseType != null) append("\n  response: ${route.responseType}")
+                val ownCallers = callers.filter { it.service != route.service }
+                if (ownCallers.isNotEmpty()) {
+                    append("\n  called from:")
+                    ownCallers.forEach { caller ->
+                        append("\n    ${caller.service} (${caller.className}.${caller.methodName}) — ${caller.httpMethod} ${caller.path}")
+                    }
+                }
             }
         }
         return RouterResult.LocalAnswer(
             summary = "${matches.size} matching route(s) for $pathToken",
             detail = lines.joinToString("\n\n"),
-            sourceFiles = matches.map { "${it.service}/${it.sourceFile}" }
+            sourceFiles = (matches.map { "${it.service}/${it.sourceFile}" } + callers.map { "${it.service}/${it.sourceFile}" }).distinct()
         )
     }
+
+    /** `{id}` vs `{orderId}` are the same path shape — normalize path variables before comparing. */
+    private fun normalizePathVars(path: String): String = path.replace(Regex("""\{[^}]*}"""), "{}")
 
     private fun messagingAnswer(lower: String, indexes: List<ServiceIndex>): RouterResult? {
         val askingConsumers = "consume" in lower || "listen" in lower || "reacts to" in lower
@@ -102,6 +117,75 @@ object FreePathRouter {
             summary = "${matches.size} implementation(s) of $interfaceName",
             detail = lines.joinToString("\n"),
             sourceFiles = matches.map { "${it.service}/${it.sourceFile}" }
+        )
+    }
+
+    // A bare method reference, required with "()" so a common English word never gets read as a
+    // method name — the same "an explicit signal, not a guess" rule every other matcher follows.
+    private val METHOD_REF = Regex("""\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*\)""")
+
+    private fun callGraphAnswer(lower: String, indexes: List<ServiceIndex>): RouterResult? {
+        if ("call" !in lower) return null
+        val match = METHOD_REF.find(lower) ?: return null
+        val methodName = match.groupValues[1]
+
+        // "who calls X()" (call word before the reference) asks for callers;
+        // "what does X() call" (call word after) asks for what X calls.
+        val wantCallers = lower.indexOf("call") < match.range.first
+
+        val calls = indexes.flatMap { it.calls }
+        val matches = if (wantCallers) {
+            calls.filter { it.calleeMethod.equals(methodName, ignoreCase = true) }
+        } else {
+            calls.filter { it.callerMethod.equals(methodName, ignoreCase = true) }
+        }
+        if (matches.isEmpty()) return null
+
+        val lines = matches.map { call ->
+            if (wantCallers) "${call.service}: ${call.callerClass}.${call.callerMethod}() calls $methodName()"
+            else "${call.service}: $methodName() calls ${call.calleeType}.${call.calleeMethod}()"
+        }
+        val summary = if (wantCallers) "${matches.size} caller(s) of $methodName()" else "${matches.size} call(s) made by $methodName()"
+        return RouterResult.LocalAnswer(
+            summary = summary,
+            detail = lines.distinct().joinToString("\n"),
+            sourceFiles = matches.map { "${it.service}/${it.sourceFile}" }.distinct()
+        )
+    }
+
+    private fun dependencyAnswer(lower: String, indexes: List<ServiceIndex>): RouterResult? {
+        if ("depend" !in lower) return null
+
+        val service = indexes.map { it.service.name }.firstOrNull { it.lowercase() in lower }
+        val scoped = if (service != null) indexes.filter { it.service.name == service } else indexes
+        val deps = scoped.flatMap { it.dependencies }
+        if (deps.isEmpty()) return null
+
+        val onIndex = lower.indexOf(" on ")
+        val artifactFilter = if (onIndex >= 0) lower.substring(onIndex + 4).trim().trim('?', '.', '!') else null
+
+        val matches = if (!artifactFilter.isNullOrBlank()) {
+            deps.filter { it.artifactId.contains(artifactFilter, ignoreCase = true) || it.groupId.contains(artifactFilter, ignoreCase = true) }
+        } else {
+            deps
+        }
+        if (matches.isEmpty()) return null
+
+        val lines = matches.distinct().sortedBy { it.artifactId }.map { dep ->
+            buildString {
+                append("${dep.groupId}:${dep.artifactId}")
+                if (dep.version != null) append(":${dep.version}")
+                append(" (${dep.service}")
+                if (dep.scope != null) append(", ${dep.scope}")
+                append(")")
+            }
+        }
+        val summary = if (service != null) "${matches.size} dependenc${if (matches.size == 1) "y" else "ies"} for $service"
+            else "${matches.size} dependenc${if (matches.size == 1) "y" else "ies"} across all indexed services"
+        return RouterResult.LocalAnswer(
+            summary = summary,
+            detail = lines.joinToString("\n"),
+            sourceFiles = matches.map { "${it.service}/${it.sourceFile}" }.distinct()
         )
     }
 }

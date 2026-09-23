@@ -46,7 +46,7 @@ repos are indexed.
 
 ## What's actually built, and tested
 
-`:core` — 20 tests, all passing (`gradle :core:test`):
+`:core` — 35 tests, all passing (`gradle :core:test`):
 
 - **`JavaServiceParser`** (`core/src/main/kotlin/.../parse/JavaServiceParser.kt`)
   — extracts from `.java` source on disk, no compiled classpath needed:
@@ -62,25 +62,68 @@ repos are indexed.
     implement, with `@Profile`/`@ConditionalOnProperty` captured as the
     bean's condition.
   - Every method as a symbol, with its file and start line.
-  - Incremental: a file whose content hash is unchanged from the last run
-    keeps its previously-extracted facts rather than being re-parsed —
-    there's a test that proves reuse, not just unchanged output, by
-    planting a marker into the "previous" facts and checking it survives.
+  - **Call graph** (`CallFact`): every method call inside a class, with the
+    receiver resolved through a field, a method parameter, a local
+    variable with an explicit type, or a for-each loop variable — `this.`
+    reached fields included, a local correctly shadowing a same-named
+    field or parameter. An unqualified call is attributed to its own
+    class. A `var`-typed local's real type isn't recoverable without a
+    resolved classpath, so its raw identifier is kept rather than guessed.
+  - **Outbound HTTP calls** (`HttpClientCallFact`): a `RestTemplate`
+    call (`getForObject`/`postForObject`/`exchange`/...) whose path is a
+    literal or same-file constant; a `WebClient` fluent call, verb read
+    from its `.get()`/`.post()`/... in the same chain; and a
+    `@FeignClient` interface's own `@GetMapping`-style methods — the call
+    it declares, not a route it exposes (kept out of the route extractor
+    the same way a `@FeignClient` already was).
   - A file that fails to parse (invalid syntax, an unsupported
     construct) is skipped, not fatal to the rest of the service.
+- **`DependencyParser`** (`core/src/main/kotlin/.../parse/DependencyParser.kt`)
+  — declared build dependencies, from a `pom.xml`'s `<dependencies>`
+  (with `${property}` versions resolved against that same POM's
+  `<properties>`) or a Gradle `implementation("group:artifact:version")`
+  line, Groovy or Kotlin DSL. Syntax-level like the Java parser: no
+  parent-POM inheritance, no BOM import, no Gradle version-catalog
+  (`libs.spring.boot`) lookup — those have no literal coordinate in the
+  file itself, so they're left unmatched rather than guessed.
 - **`IndexStorage`** — one JSON file per service, round-tripped losslessly;
   a service that was never indexed loads as nothing, not an error.
-- **`FreePathRouter`** — answers three question shapes directly from the
-  index (a route's contract, who consumes/produces a channel, which bean
-  implements an interface) and returns `NeedsGeneration` for everything
-  else, on purpose — this router does no fuzzy/LLM-like guessing; a wrong
-  "free" answer would be worse than admitting a question needs Copilot.
+- **`FreePathRouter`** — answers five question shapes directly from the
+  index (a route's contract — including which *other* service calls
+  it, resolved across all configured repos — who consumes/produces a
+  channel, which bean implements an interface, who calls/what a method
+  calls, and a service's declared dependencies) and returns
+  `NeedsGeneration` for everything else, on purpose — this router does no
+  fuzzy/LLM-like guessing; a wrong "free" answer would be worse than
+  admitting a question needs Copilot. A method must be named with `()`
+  (`"who calls processOrder()"`) — the same "an explicit signal, not a
+  guess" rule every other matcher already followed.
 - **`UsageLog`** — an append-only JSONL log tagging every question INDEX
   or COPILOT, and `localAnswerShare()` — the actual, measured version of
   the earlier discussion's percentage estimate (see "Measuring it for
   real," below).
 - **`IndexService`** — ties discovery, parsing and storage together;
   re-indexing one service doesn't touch another's stored index.
+
+### Cross-repo linking — what's real now, and what still isn't
+
+- **HTTP, real:** an `HttpClientCallFact` in one service is matched
+  against a `RouteFact` in every *other* configured service by path
+  (`{id}` vs `{orderId}` normalized to the same shape before comparing) —
+  this is an actual resolved link, not a name coincidence, and shows up
+  directly in a route answer as "called from."
+- **Messaging, name-matched, not a resolved link:** "who consumes
+  `order.created`" already searches every configured service's
+  `MessagingFact`s by channel name, so it reads as cross-repo — but it's
+  a flat filter over channel names across all loaded indexes, not a
+  computed producer→consumer edge the way the HTTP link now is.
+- **Call graph, single-repo only:** `CallFact` resolution never crosses a
+  service boundary — there's no equivalent yet of "this call in service A
+  resolves to that method in service B." Only HTTP calls get true
+  cross-repo resolution today.
+- **Still not read at all:** non-Java config (`application.yml`,
+  Dockerfiles, K8s manifests), certificates/keystores, and anything a
+  `@Value("${...}")` string would need a properties file to resolve.
 
 `:plugin` — written, not yet run in a real IDE:
 
@@ -106,6 +149,18 @@ repos are indexed.
 - **Gutter icons / line markers** for passive discovery (hover a Feign
   call, see its resolved route) — deferred rather than shipped as
   speculative, unverifiable `LineMarkerProvider` code in a first slice.
+- **A cross-repo call graph.** Today only HTTP calls resolve across a
+  service boundary (see above) — a Feign/RestTemplate call that isn't
+  matched to a route, or any call within one service's own `CallFact`s,
+  never crosses into another service's code.
+- **A real Maven/Gradle model.** `DependencyParser` reads literal
+  coordinates out of the build file text; it has no parent-POM
+  inheritance, no BOM resolution, and no Gradle version-catalog lookup —
+  a dependency declared any other way is invisible to it.
+- **Non-Java config, certificates, and anything outside `.java`/build
+  files.** No `application.yml`, no Dockerfiles/K8s manifests, no
+  keystores — a `@Value("${...}")` placeholder is recorded as text, never
+  resolved against a properties file.
 - **Running inside a real IDE at all.** Every claim above about the
   `:plugin` module is "written correctly against the API," not "seen to
   work" — the same honest distinction the `intellij-main` branch's own

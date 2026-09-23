@@ -1,6 +1,9 @@
 package com.creditoptimizer.core.parse
 
 import com.creditoptimizer.core.model.BeanFact
+import com.creditoptimizer.core.model.CallFact
+import com.creditoptimizer.core.model.DependencyFact
+import com.creditoptimizer.core.model.HttpClientCallFact
 import com.creditoptimizer.core.model.MessagingDirection
 import com.creditoptimizer.core.model.MessagingFact
 import com.creditoptimizer.core.model.RouteFact
@@ -15,11 +18,15 @@ import com.github.javaparser.ast.body.MethodDeclaration
 import com.github.javaparser.ast.expr.AnnotationExpr
 import com.github.javaparser.ast.expr.ArrayInitializerExpr
 import com.github.javaparser.ast.expr.Expression
+import com.github.javaparser.ast.expr.FieldAccessExpr
 import com.github.javaparser.ast.expr.MethodCallExpr
 import com.github.javaparser.ast.expr.NameExpr
 import com.github.javaparser.ast.expr.NormalAnnotationExpr
 import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr
 import com.github.javaparser.ast.expr.StringLiteralExpr
+import com.github.javaparser.ast.expr.ThisExpr
+import com.github.javaparser.ast.expr.VariableDeclarationExpr
+import com.github.javaparser.ast.stmt.ForEachStmt
 import java.io.File
 
 /**
@@ -63,6 +70,8 @@ object JavaServiceParser {
         val messaging = mutableListOf<MessagingFact>()
         val beans = mutableListOf<BeanFact>()
         val symbols = mutableListOf<SymbolFact>()
+        val calls = mutableListOf<CallFact>()
+        val httpClientCalls = mutableListOf<HttpClientCallFact>()
         val fileHashes = mutableMapOf<String, String>()
 
         for (file in findJavaFiles(root)) {
@@ -76,6 +85,8 @@ object JavaServiceParser {
                 messaging += previous.messaging.filter { it.sourceFile == relativePath }
                 beans += previous.beans.filter { it.sourceFile == relativePath }
                 symbols += previous.symbols.filter { it.sourceFile == relativePath }
+                calls += previous.calls.filter { it.sourceFile == relativePath }
+                httpClientCalls += previous.httpClientCalls.filter { it.sourceFile == relativePath }
                 continue
             }
 
@@ -91,6 +102,8 @@ object JavaServiceParser {
                 messaging += extractConsumers(unit, classDecl, service.name, relativePath, className)
                 messaging += extractProducers(unit, classDecl, service.name, relativePath, className)
                 beans += extractBeans(unit, classDecl, service.name, relativePath)
+                calls += extractCalls(classDecl, service.name, relativePath, className)
+                httpClientCalls += extractHttpClientCalls(unit, classDecl, service.name, relativePath, className)
 
                 for (method in classDecl.methods) {
                     val line = method.begin.map { it.line }.orElse(0)
@@ -99,12 +112,17 @@ object JavaServiceParser {
             }
         }
 
+        val dependencies = findBuildFiles(root).flatMap { DependencyParser.parse(service.name, root, it) }
+
         return ServiceIndex(
             service = service,
             routes = routes,
             messaging = messaging,
             beans = beans,
             symbols = symbols,
+            dependencies = dependencies,
+            calls = calls,
+            httpClientCalls = httpClientCalls,
             fileHashes = fileHashes
         )
     }
@@ -241,6 +259,162 @@ object JavaServiceParser {
             )
         }
     }
+
+    /**
+     * Every method call inside [classDecl]'s methods, with the callee's
+     * receiver resolved as far as a field/parameter/local-variable/for-each
+     * symbol table for that one method allows — see [CallFact]'s own doc
+     * for exactly what "resolved" means here. No cross-file, no inherited
+     * members, no `var`-inferred local types: those stay unresolved rather
+     * than guessed.
+     */
+    private fun extractCalls(
+        classDecl: ClassOrInterfaceDeclaration,
+        serviceName: String,
+        relativePath: String,
+        className: String
+    ): List<CallFact> {
+        val fieldTypes = classDecl.fields.flatMap { field ->
+            field.variables.map { it.nameAsString to simpleTypeName(field.elementType.asString()) }
+        }.toMap()
+
+        val result = mutableListOf<CallFact>()
+        for (method in classDecl.methods) {
+            val body = method.body.orElse(null) ?: continue
+
+            val paramTypes = method.parameters.associate { it.nameAsString to simpleTypeName(it.type.asString()) }
+
+            val localTypes = mutableMapOf<String, String>()
+            for (localDecl in body.findAll(VariableDeclarationExpr::class.java)) {
+                for (variable in localDecl.variables) {
+                    val typeStr = variable.type.asString()
+                    if (typeStr != "var") localTypes[variable.nameAsString] = simpleTypeName(typeStr)
+                }
+            }
+            for (forEach in body.findAll(ForEachStmt::class.java)) {
+                val variable = forEach.variable.variables.firstOrNull() ?: continue
+                val typeStr = variable.type.asString()
+                if (typeStr != "var") localTypes[variable.nameAsString] = simpleTypeName(typeStr)
+            }
+
+            // Later entries win — a local shadows a same-named parameter, which shadows a same-named field.
+            val symbolTable = fieldTypes + paramTypes + localTypes
+
+            for (call in body.findAll(MethodCallExpr::class.java)) {
+                val scope = call.scope.orElse(null)
+                val calleeType = when {
+                    scope == null || scope is ThisExpr -> className
+                    scope is NameExpr -> symbolTable[scope.nameAsString] ?: scope.nameAsString
+                    scope is FieldAccessExpr -> symbolTable[scope.nameAsString] ?: scope.nameAsString
+                    else -> scope.toString().substringAfterLast('.')
+                }
+                result += CallFact(
+                    service = serviceName,
+                    sourceFile = relativePath,
+                    callerClass = className,
+                    callerMethod = method.nameAsString,
+                    calleeType = calleeType,
+                    calleeMethod = call.nameAsString,
+                    line = call.begin.map { it.line }.orElse(0)
+                )
+            }
+        }
+        return result
+    }
+
+    private val REST_CLIENT_METHODS = mapOf(
+        "getForObject" to "GET", "getForEntity" to "GET",
+        "postForObject" to "POST", "postForEntity" to "POST",
+        "put" to "PUT", "patchForObject" to "PATCH",
+        "delete" to "DELETE", "exchange" to "CALL"
+    )
+    private val WEBCLIENT_VERBS = setOf("get", "post", "put", "delete", "patch")
+
+    /**
+     * Outbound calls this class makes: a `RestTemplate`/`WebClient`-shaped
+     * call whose path is a literal or same-file constant, and — if
+     * [classDecl] is a `@FeignClient` interface — every one of its own
+     * `@GetMapping`-style methods, which are calls it declares, never
+     * routes it exposes (kept out of [extractRoutes] because a Feign
+     * interface is never `@RestController`/`@Controller`).
+     */
+    private fun extractHttpClientCalls(
+        unit: CompilationUnit,
+        classDecl: ClassOrInterfaceDeclaration,
+        serviceName: String,
+        relativePath: String,
+        className: String
+    ): List<HttpClientCallFact> {
+        val result = mutableListOf<HttpClientCallFact>()
+
+        val feignAnnotation = classDecl.annotations.firstOrNull { it.nameAsString == "FeignClient" }
+        if (feignAnnotation != null) {
+            val basePath = annotationPathValue(unit, feignAnnotation).orEmpty()
+            for (method in classDecl.methods) {
+                val mapping = method.annotations.firstOrNull {
+                    it.nameAsString in HTTP_METHOD_ANNOTATIONS || it.nameAsString == "RequestMapping"
+                } ?: continue
+                val httpMethod = HTTP_METHOD_ANNOTATIONS[mapping.nameAsString] ?: requestMappingHttpMethod(mapping) ?: "REQUEST"
+                val methodPath = annotationPathValue(unit, mapping).orEmpty()
+                result += HttpClientCallFact(
+                    service = serviceName,
+                    sourceFile = relativePath,
+                    className = className,
+                    methodName = method.nameAsString,
+                    httpMethod = httpMethod,
+                    path = joinPaths(basePath, methodPath),
+                    line = method.begin.map { it.line }.orElse(0)
+                )
+            }
+        }
+
+        for (call in classDecl.findAll(MethodCallExpr::class.java)) {
+            val name = call.nameAsString
+            val enclosingMethod = { call.findAncestor(MethodDeclaration::class.java).map { it.nameAsString }.orElse("<init>") }
+
+            if (name in REST_CLIENT_METHODS) {
+                val path = call.arguments.firstOrNull()?.let { resolveStringExpr(unit, it) } ?: continue
+                result += HttpClientCallFact(
+                    service = serviceName,
+                    sourceFile = relativePath,
+                    className = className,
+                    methodName = enclosingMethod(),
+                    httpMethod = REST_CLIENT_METHODS.getValue(name),
+                    path = path,
+                    line = call.begin.map { it.line }.orElse(0)
+                )
+            } else if (name == "uri") {
+                val path = call.arguments.firstOrNull()?.let { resolveStringExpr(unit, it) } ?: continue
+                val verb = findWebClientVerb(call) ?: continue
+                result += HttpClientCallFact(
+                    service = serviceName,
+                    sourceFile = relativePath,
+                    className = className,
+                    methodName = enclosingMethod(),
+                    httpMethod = verb.uppercase(),
+                    path = path,
+                    line = call.begin.map { it.line }.orElse(0)
+                )
+            }
+        }
+        return result
+    }
+
+    /** Walks a fluent call's scope chain (`webClient.get().uri(...)`) for the verb call it hangs off. */
+    private fun findWebClientVerb(call: MethodCallExpr): String? {
+        var current: Expression? = call.scope.orElse(null)
+        var depth = 0
+        while (current is MethodCallExpr && depth < 10) {
+            if (current.nameAsString.lowercase() in WEBCLIENT_VERBS) return current.nameAsString
+            current = current.scope.orElse(null)
+            depth++
+        }
+        return null
+    }
+
+    /** Strips generics/varargs/array markers and package qualification down to a bare type name. */
+    private fun simpleTypeName(rawType: String): String =
+        rawType.removeSuffix("...").replace("[]", "").substringBefore('<').substringAfterLast('.').trim()
 
     // --- annotation/expression helpers -------------------------------------------------
 

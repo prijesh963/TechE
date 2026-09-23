@@ -10,7 +10,14 @@ private val IGNORED_DIR_NAMES = setOf(
 )
 
 /** Every `.java` file under [root], skipping [IGNORED_DIR_NAMES] at any depth. */
-fun findJavaFiles(root: File): List<File> {
+fun findJavaFiles(root: File): List<File> = findFiles(root) { it.name.endsWith(".java") }
+
+/** Every Maven or Gradle build file under [root] — a multi-module repo can have more than one. */
+fun findBuildFiles(root: File): List<File> = findFiles(root) {
+    it.name == "pom.xml" || it.name == "build.gradle" || it.name == "build.gradle.kts"
+}
+
+private fun findFiles(root: File, matches: (File) -> Boolean): List<File> {
     if (!root.isDirectory) return emptyList()
     val results = mutableListOf<File>()
     val stack = ArrayDeque<File>()
@@ -22,7 +29,7 @@ fun findJavaFiles(root: File): List<File> {
         for (child in children) {
             when {
                 child.isDirectory && child.name !in IGNORED_DIR_NAMES -> stack.add(child)
-                child.isFile && child.name.endsWith(".java") -> results.add(child)
+                child.isFile && matches(child) -> results.add(child)
             }
         }
     }
