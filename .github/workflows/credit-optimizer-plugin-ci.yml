@@ -4,12 +4,13 @@ on:
   pull_request:
     paths:
       - "credit-optimizer-plugin/**"
-      - ".github/workflows/plugin-ci.yml"
+      - ".github/workflows/credit-optimizer-plugin-ci.yml"
   push:
     branches:
       - credit-optimizer-plugin
     paths:
       - "credit-optimizer-plugin/**"
+      - ".github/workflows/credit-optimizer-plugin-ci.yml"
   workflow_dispatch: {}
 
 jobs:
@@ -28,7 +29,7 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: Test :core
-        run: gradle :core:test --console=plain
+        run: ./gradlew :core:test --console=plain
 
   plugin:
     # :plugin resolves the IntelliJ Platform distribution from JetBrains'
@@ -47,9 +48,9 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: Build
-        run: gradle :plugin:buildPlugin --console=plain
+        run: ./gradlew :plugin:buildPlugin --console=plain
       - name: Verify plugin
-        run: gradle :plugin:verifyPlugin --console=plain
+        run: ./gradlew :plugin:verifyPlugin --console=plain
       - name: Upload built plugin
         uses: actions/upload-artifact@v4
         with:
