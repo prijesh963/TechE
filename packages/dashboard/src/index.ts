@@ -148,13 +148,12 @@ export interface ContextInsights {
  * no session open should be told what to type, not left guessing whether the
  * extension is working.
  */
-export function formatSession(session: DashboardSession | undefined): string {
+export function formatSession(
+  session: DashboardSession | undefined,
+  hints: SessionHints = DEFAULT_SESSION_HINTS
+): string {
   if (!session) {
-    return [
-      "<em>No session open.</em>",
-      "Start one in Copilot Chat with <code>@architect /create-plan &lt;what you want&gt;</code>,",
-      "or ask a question with <code>@architect /analyze</code>."
-    ].join(" ");
+    return `<em>No session open.</em> ${hints.idle}`;
   }
 
   const lines = [
@@ -168,14 +167,38 @@ export function formatSession(session: DashboardSession | undefined): string {
     );
   }
 
-  lines.push(formatSessionDecisions(session.decisions));
+  lines.push(formatSessionDecisions(session.decisions, hints));
 
   return lines.join("<br>");
 }
 
-function formatSessionDecisions(decisions: DashboardSession["decisions"]): string {
+/**
+ * What the Current work card tells a developer to do. Host-specific, like
+ * the action row: VS Code's front door is `@architect`, which does not exist
+ * in a host without a chat-participant API, and naming a front door that is
+ * not there sends the developer to type into the void.
+ */
+export interface SessionHints {
+  /** HTML shown after "No session open." */
+  idle: string;
+  /** HTML shown after "Decisions: none recorded". */
+  noDecisions: string;
+}
+
+export const DEFAULT_SESSION_HINTS: SessionHints = {
+  idle: [
+    "Start one in Copilot Chat with <code>@architect /create-plan &lt;what you want&gt;</code>,",
+    "or ask a question with <code>@architect /analyze</code>."
+  ].join(" "),
+  noDecisions: "<code>/create-plan</code> proposes them to confirm"
+};
+
+function formatSessionDecisions(
+  decisions: DashboardSession["decisions"],
+  hints: SessionHints
+): string {
   if (decisions.length === 0) {
-    return "Decisions: none recorded — <code>/create-plan</code> proposes them to confirm";
+    return `Decisions: none recorded — ${hints.noDecisions}`;
   }
 
   // Joined with <br> rather than a <ul>: each section body is rendered inside
@@ -241,6 +264,8 @@ export interface CreateDashboardHtmlOptions {
    * Omitted or empty renders an empty (but valid) action row.
    */
   actionsHtml?: string;
+  /** Defaults to VS Code's `@architect` wording ({@link DEFAULT_SESSION_HINTS}). */
+  sessionHints?: SessionHints;
 }
 
 export function createDashboardHtml(
@@ -253,7 +278,7 @@ export function createDashboardHtml(
       // First, because it is the answer to "where am I?" — the question the
       // dashboard exists to answer and previously could not.
       title: "Current work",
-      body: formatSession(state.session),
+      body: formatSession(state.session, options.sessionHints),
       accent: "var(--vscode-charts-blue)",
       icon: DASHBOARD_ICONS.currentWork
     },

@@ -800,8 +800,9 @@ reachable from the IntelliJ dashboard, closing the "No action buttons" gap
   CLI render has no running process or command history of its own to
   report honestly — a long-lived caller (this plugin) supplies its own.
 - **Kotlin side (compiles and passes the IntelliJ Plugin Verifier in CI as
-  of 4.19; still never run inside an actual IDE):** `ActionLinkInterceptor.kt`
-  intercepts `architect-action:` navigation on the JBCefBrowser;
+  of 4.19; the click path confirmed in a real IDE per 4.25):**
+  `ActionLinkInterceptor.kt` routes `architect-action:` link clicks to the
+  plugin (through the browser console since 0.1.4 — see 4.25);
   `ActionDispatcher.kt` routes each id to `CliBridge` (for
   `setup`/`analyze`/`index`/`graph`/`instructions generate`/`workspace
 scan`), to a new `McpProcessManager.kt` (a project-level service holding
@@ -1121,7 +1122,7 @@ working this way in Copilot Chat should be told to check that one, not
 lifecycles together, or dropping `get_approved_plan_contract` from the
 `intellij` toolset in favor of `get_latest_plan`, is real design work of
 its own kind rather than a one-line change, and out of scope for a phase
-about the approve *button*, not the plan *model*.
+about the approve _button_, not the plan _model_.
 
 ---
 
@@ -1152,7 +1153,7 @@ named as still open after a green CI build — "compiles and passes static
 checks" is not "installs and runs" — except this particular gap wasn't
 even a runtime-behavior question; it was a version string, and no amount
 of `verifyPlugin` running green was ever going to catch it, because
-`verifyPlugin` checks the plugin against IDEs *within* its own declared
+`verifyPlugin` checks the plugin against IDEs _within_ its own declared
 range, and the declared range was exactly the bug.
 
 **The fix:** `ideaVersion { untilBuild = provider { null } }`, added
@@ -1174,14 +1175,14 @@ not assumed. `recommended()` was replaced with an explicit
 against, so it is guaranteed resolvable rather than trusted a second time
 to guess correctly. This means CI's `verifyPlugin` step now checks the
 plugin against exactly one concrete IDE version again, same as before this
-whole fix — the `untilBuild` fix widens what the plugin *declares* itself
+whole fix — the `untilBuild` fix widens what the plugin _declares_ itself
 compatible with; it does not and cannot make CI verify against every
 version that declaration now covers, since there is no way to statically
 enumerate "every future IDE version" for a verifier to check against.
 
 **Neither fix has yet been confirmed by re-installing into a real
 IntelliJ 2026.2** as of this writing — CI going green after the second fix
-proves the plugin now builds and the *2024.2.3* verification target still
+proves the plugin now builds and the _2024.2.3_ verification target still
 passes; it does not by itself prove the rejection on 2026.2 is actually
 gone, the same distinction 4.19 already drew between a green build and a
 real install. That confirmation is the next real test.
@@ -1229,7 +1230,7 @@ plugin already had.
 `META-INF/withJcef.xml`. `optional="true"` is required, not a plain
 `<depends>`: this plugin's own `sinceBuild` is 242, and an IDE from before
 the JCEF split (242–261) may not recognize `com.intellij.modules.jcef` as
-a resolvable module id at all — a *required* dependency on an
+a resolvable module id at all — a _required_ dependency on an
 unresolvable module would fail this plugin's load outright on every IDE
 version it previously worked on. Optional means 262+ gets the classloader
 edge it now needs, while 242–261 simply skips the dependency and keeps
@@ -1259,6 +1260,102 @@ today; all three were reachable only by a human clicking Install on a
 real, current IDE. `./gradlew runIde` — never yet attempted, per 4.19 —
 would very likely have caught at least this one locally, long before a
 real developer had to.
+
+---
+
+### 4.25 Dashboard action links rendered but did nothing when clicked, on IntelliJ 2026.2
+
+**Found by a real install (0.1.2, IntelliJ 2026.2), fixed and then
+confirmed in that same install:** after 4.24's fix, the dashboard rendered,
+but clicking Setup Repo (or any action link) did nothing — no dashboard
+refresh, no "Last command" card, and `ActionDispatcher` always produces an
+outcome for `setupRepo`, so the click never reached Kotlin at all.
+
+**Two approaches failed before one worked:**
+
+1. **`CefRequestHandler.onBeforeBrowse` (0.1.0–0.1.2).** Chromium treats
+   the unregistered `architect-action:` scheme as an external protocol and
+   drops the navigation before any browse callback runs.
+2. **`JBCefJSQuery` (0.1.3).** An injected click listener cancelled the
+   navigation and called a JS query. Still nothing arrived: a query is only
+   reachable from the page when it is created before the native browser
+   is, or when `JS_QUERY_POOL_SIZE` is set on the client, and the plain
+   `JBCefBrowser()` `DashboardPanel` constructs satisfies neither. This
+   explanation matches the JCEF documentation and the observed behavior; it
+   was not isolated further.
+3. **Browser console (0.1.4, works).** The injected click listener logs a
+   `copilot-architect-click:<id>` marker with `console.log`, and a
+   `CefDisplayHandler.onConsoleMessage` on the browser's client dispatches
+   it. That transport has no creation-order precondition. Confirmed in the
+   real 2026.2 install: clicking Setup Repo showed the in-page
+   "Running Setup Repo…" banner, the dashboard re-rendered with a "Last
+   command" card, and `setup` exited 0.
+
+**What remains:**
+
+- Only Setup Repo has been clicked in a real IDE. The other actions share
+  the same transport, so they should be reached too, but their own
+  dispatch paths (`McpProcessManager`, the folder pickers, `Open Repo`'s
+  `OpenProjectTask` parameters, the plan diff/approve dialogs) are still
+  unexercised at runtime.
+- The console marker is a string convention: any script on the page that
+  logs the same prefix would dispatch an action. The page is HTML this
+  plugin renders itself from the CLI's own output, so no third-party
+  script runs there today; this would need revisiting if the dashboard
+  ever loaded remote content.
+- `ActionDispatcher` still runs each action against `CliBridge`'s fixed
+  60s timeout, so `setup` on a large workspace can time out.
+
+---
+
+### 4.26 Copilot Chat without MCP: a clipboard handoff, with what that cannot do
+
+**Why it exists:** in the reporting developer's organization, Copilot's
+"MCP servers in Copilot" policy is off, so Copilot in IntelliJ cannot load
+the MCP server at all and item 29's `intellij` toolset never reaches it.
+JetBrains Copilot has no chat-participant API either. The only channel left
+to the model is text the developer pastes into Copilot Chat, so the IntelliJ
+Tool Window's "Work with Copilot Chat" panel (plugin 0.2.0,
+`CopilotHandoffService`, CLI `copilot`) hands prompts over through the
+clipboard and reads Copilot's plan reply back the same way.
+
+**What it keeps from `@architect`:** grounded prompts built from the local
+index; a plan reply parsed by the same parsers into the same `PlanContract`,
+stored as a versioned draft in the same session; invented paths dropped and
+cited symbols checked against the index; snapshots and hashes read from
+disk; approval as a dialog for the exact version shown; implementation
+refused for a draft, or once a planned file has changed since the plan
+quoted it.
+
+**What it does not do (yet):**
+
+- **One reply instead of three questions.** `/create-plan` asks for the
+  selection, then the approach, then outlines, each with the previous
+  answer in hand. Here all three come in one reply, so steps and outlines
+  are written before the selection has been validated; a step about a
+  dropped file is discarded rather than re-asked.
+- **Copilot does the editing.** In Agent mode Copilot writes the files
+  itself, with its own keep/undo review. The `@architect` guarantees for
+  `/implement` — quote-to-replace edits refused unless they match exactly
+  once, a diff of every file before anything lands, all-or-nothing — do
+  not apply. The prompt limits Copilot to the approved files and steps, but
+  nothing enforces that, and the plan is not marked implemented.
+- **No review phase and no decisions yet.** `/review` against the approved
+  plan and `/create-plan`'s proposed decisions have no panel equivalent;
+  review still needs the CLI or VS Code. No implementation checkpoint is
+  captured either, which review will need.
+- **Clipboard assumptions.** Import reads whatever text is on the clipboard;
+  copying something else in between imports that instead (a reply with no
+  plan lines is refused, so the usual result is an error, not a wrong
+  plan). A very large Ask prompt is capped at about 24 KB of excerpts, with
+  the omission stated in the prompt.
+- **Opening Copilot Chat is best-effort.** The chat tool window's id is not
+  a public API; the plugin tries the ids GitHub Copilot has used and, when
+  none matches, says to open Copilot Chat by hand.
+- **Unverified in a real IDE when written.** The TypeScript side is tested
+  (`tests/copilot-handoff.test.ts`) and the panel's HTML and click payloads
+  were checked in headless Chromium; the Kotlin side builds in CI but, like
+  everything in this plugin, had to be installed to be proven.
 
 ---
 

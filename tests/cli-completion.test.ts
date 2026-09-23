@@ -213,7 +213,10 @@ describe("Phase 12 CLI completion", () => {
     });
 
     const textCapture = createCapture();
-    const textResult = await runCli(["plan", "diff", "--path", repoRoot], textCapture.io);
+    const textResult = await runCli(
+      ["plan", "diff", "--path", repoRoot],
+      textCapture.io
+    );
     const text = textCapture.stdout.join("\n");
 
     expect(textResult.exitCode).toBe(0);

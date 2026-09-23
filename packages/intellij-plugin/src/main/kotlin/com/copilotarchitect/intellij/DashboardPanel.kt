@@ -28,13 +28,19 @@ import javax.swing.SwingConstants
 class DashboardPanel(private val project: Project) {
     val component: JPanel = JPanel(BorderLayout())
     private val browser: JBCefBrowser? = if (JBCefApp.isSupported()) JBCefBrowser() else null
+    private val actionLinks: ActionLinkBridge? =
+        browser?.let { ActionLinkBridge(it) { actionId, text -> handleAction(actionId, text) } }
     private var lastOutcome: ActionDispatcher.Outcome? = null
+
+    /** The Copilot panel's text box, kept across re-renders (each click reloads the page). */
+    private var task: String = ""
+    private var notice: String? = null
+    private var noticeIsError = false
 
     init {
         val hostedBrowser = browser
         if (hostedBrowser != null) {
             component.add(hostedBrowser.component, BorderLayout.CENTER)
-            hostedBrowser.interceptActionLinks { actionId -> handleAction(actionId) }
             refresh()
         } else {
             component.add(
@@ -48,16 +54,26 @@ class DashboardPanel(private val project: Project) {
     }
 
     /**
-     * `onBeforeBrowse` fires off the EDT, and `ActionDispatcher.dispatch` can
+     * The JS query handler fires off the EDT, and `ActionDispatcher.dispatch` can
      * block for as long as `CliBridge`'s 60s CLI timeout — run it on a pooled
      * thread rather than whatever thread JCEF calls back on, then hop back to
      * the EDT (`invokeLater`, required for `refresh()`'s Swing/JCEF calls).
      */
-    private fun handleAction(actionId: String) {
+    private fun handleAction(actionId: String, text: String?) {
+        if (text != null) task = text
         ApplicationManager.getApplication().executeOnPooledThread {
-            val outcome = ActionDispatcher.dispatch(project, actionId)
-            if (outcome != null) {
-                lastOutcome = outcome
+            if (CopilotActions.handles(actionId)) {
+                val result = CopilotActions.dispatch(project, actionId, text)
+                if (result != null) {
+                    notice = result.notice
+                    noticeIsError = result.isError
+                    lastOutcome = result.outcome
+                }
+            } else {
+                val outcome = ActionDispatcher.dispatch(project, actionId)
+                if (outcome != null) {
+                    lastOutcome = outcome
+                }
             }
             invokeLater { refresh() }
         }
@@ -85,6 +101,16 @@ class DashboardPanel(private val project: Project) {
             }
         }
 
+        if (task.isNotBlank()) {
+            args += "--task"
+            args += task
+        }
+        notice?.let { text ->
+            args += "--notice"
+            args += text
+            if (noticeIsError) args += "--notice-error"
+        }
+
         val result = CliBridge.run(workspaceRoot, *args.toTypedArray())
 
         val html = if (result.exitCode == 0) {
@@ -97,7 +123,7 @@ class DashboardPanel(private val project: Project) {
     }
 
     private fun injectTheme(html: String): String {
-        val themeStyle = ThemeColors.styleBlock()
+        val themeStyle = ThemeColors.styleBlock() + (actionLinks?.clickScript() ?: "")
         return if (html.contains("<head>")) {
             html.replaceFirst("<head>", "<head>$themeStyle")
         } else {

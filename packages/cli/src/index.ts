@@ -5,6 +5,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  buildCopilotPanelHtml,
+  parseCopilotArgs,
+  runCopilotCommand
+} from "./copilot-command.js";
+
+import {
   AdvancedAnalysisService,
   RepoDiscoveryService,
   WorkspaceService,
@@ -35,6 +41,7 @@ import {
   type ContextMeasurement
 } from "@copilot-architect/measurement";
 import {
+  CopilotHandoffService,
   FeaturePlanningService,
   HandoffService,
   WorkspacePlanningService,
@@ -135,6 +142,8 @@ const commandDescriptions = {
   serve: "Start the optional local web UI shell.",
   dashboard:
     "Render the same dashboard every shell shows, as HTML on stdout — for a host that cannot import it directly.",
+  copilot:
+    "Prepare grounded Copilot Chat prompts and import Copilot's plan replies — the workflow for hosts without MCP.",
   setup:
     "One-shot repo onboarding: initialize, analyze, build graph and index, assess readiness, configure MCP.",
   diagnostics: "Report repo readiness and advanced local intelligence.",
@@ -182,7 +191,13 @@ const commandUsage = {
   serve:
     "npm run cli -- serve [--path <repo>] [--host 127.0.0.1] [--port <n>] [--json]",
   dashboard:
-    "npm run cli -- dashboard [--path <repo>] [--mcp-status <stopped|starting|running>] [--last-command <text>] [--last-exit-code <n>] [--last-stdout <text>] [--last-stderr <text>] [--json]",
+    "npm run cli -- dashboard [--path <repo>] [--mcp-status <stopped|starting|running>] [--last-command <text>] [--last-exit-code <n>] [--last-stdout <text>] [--last-stderr <text>] [--task <text>] [--notice <text>] [--notice-error] [--json]",
+  copilot:
+    'npm run cli -- copilot <ask|plan> --text "<question or change>" [--prompt-out <file>] [--path <repo>] [--json]\n' +
+    "  npm run cli -- copilot import --response-file <file> [--path <repo>] [--json]\n" +
+    "  npm run cli -- copilot approve --version <n> [--path <repo>] [--json]\n" +
+    "  npm run cli -- copilot implement [--prompt-out <file>] [--path <repo>] [--json]\n" +
+    "  npm run cli -- copilot state [--path <repo>] [--json]",
   setup: "npm run cli -- setup [--path <repo>] [--workspace] [--json]",
   diagnostics: "npm run cli -- diagnostics [--path <repo>] [--json]",
   status: "npm run cli -- status [--path <repo>] [--json]",
@@ -925,6 +940,18 @@ export async function runCli(
       const result = await runSetupCommand(options);
       stdout(options.json ? JSON.stringify(result, null, 2) : getSetupText(result));
       return { exitCode: result.ok ? 0 : 1 };
+    } catch (error) {
+      stderr(error instanceof Error ? error.message : String(error));
+      return { exitCode: 1 };
+    }
+  }
+
+  if (rawCommand === "copilot") {
+    try {
+      const options = parseCopilotArgs(commandArgs);
+      const outcome = await runCopilotCommand(options);
+      stdout(options.json ? JSON.stringify(outcome, null, 2) : outcome.message);
+      return { exitCode: 0 };
     } catch (error) {
       stderr(error instanceof Error ? error.message : String(error));
       return { exitCode: 1 };
@@ -2015,7 +2042,10 @@ function parseValidateArgs(args: string[]): ValidateCliOptions {
 
 function parsePlanArgs(args: string[]): PlanCliOptions {
   const subcommand: PlanCliOptions["subcommand"] =
-    args[0] === "approve" || args[0] === "revisions" || args[0] === "show" || args[0] === "diff"
+    args[0] === "approve" ||
+    args[0] === "revisions" ||
+    args[0] === "show" ||
+    args[0] === "diff"
       ? args[0]
       : "generate";
   const rest = subcommand === "generate" ? args : args.slice(1);
@@ -2338,6 +2368,11 @@ interface DashboardCliOptions {
   lastExitCode?: number;
   lastStdout?: string;
   lastStderr?: string;
+  /** Text to keep in the Copilot panel's box across a re-render. */
+  task?: string;
+  /** One line shown at the top of the Copilot panel — what the last click did. */
+  notice?: string;
+  noticeIsError?: boolean;
   json: boolean;
 }
 
@@ -2410,7 +2445,9 @@ function buildPlanActionLinks(
   return links;
 }
 
-function buildDashboardActionsHtml(latestPlan: DashboardArtifacts["latestPlan"]): string {
+function buildDashboardActionsHtml(
+  latestPlan: DashboardArtifacts["latestPlan"]
+): string {
   return [
     ...DASHBOARD_ACTION_LINKS,
     ...DASHBOARD_SECONDARY_ACTION_LINKS,
@@ -2870,6 +2907,23 @@ function parseDashboardArgs(args: string[]): DashboardCliOptions {
       continue;
     }
 
+    if (arg === "--task") {
+      options.task = requiredValue(args, index, "--task");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--notice") {
+      options.notice = requiredValue(args, index, "--notice");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--notice-error") {
+      options.noticeIsError = true;
+      continue;
+    }
+
     throw new Error(`Unknown dashboard argument: ${arg}`);
   }
 
@@ -2903,9 +2957,10 @@ async function buildDashboardPayload(
   options: DashboardCliOptions
 ): Promise<DashboardCliResult> {
   const workspaceRoot = path.resolve(options.startPath ?? process.cwd());
-  const [artifacts, session] = await Promise.all([
+  const [artifacts, session, copilotState] = await Promise.all([
     loadDashboardArtifacts(workspaceRoot),
-    loadDashboardSession(workspaceRoot)
+    loadDashboardSession(workspaceRoot),
+    new CopilotHandoffService().state({ workspaceRoot }).catch(() => ({}))
   ]);
 
   const html = createDashboardHtml(
@@ -2920,7 +2975,22 @@ async function buildDashboardPayload(
       session,
       buildVersion: COPILOT_ARCHITECT_VERSION
     },
-    { actionsHtml: buildDashboardActionsHtml(artifacts.latestPlan) }
+    {
+      actionsHtml:
+        buildCopilotPanelHtml(copilotState, {
+          task: options.task,
+          notice: options.notice,
+          noticeIsError: options.noticeIsError
+        }) +
+        '<span class="ca-setup-label">Repo setup:</span>' +
+        buildDashboardActionsHtml(artifacts.latestPlan),
+      // This command's caller is a host without `@architect` (the IntelliJ
+      // plugin); its front door is the Copilot panel above.
+      sessionHints: {
+        idle: "Describe a question or a change in <em>Work with Copilot Chat</em> above.",
+        noDecisions: "the Copilot panel does not record them yet"
+      }
+    }
   );
 
   return { html, workspaceRoot, artifacts, session };

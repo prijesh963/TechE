@@ -8,3 +8,4 @@ export * from "./plan-execution.js";
 export * from "./change-selection.js";
 export * from "./plan-approach.js";
 export * from "./file-edits.js";
+export * from "./copilot-handoff.js";
