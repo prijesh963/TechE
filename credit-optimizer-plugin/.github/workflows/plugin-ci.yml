@@ -1,0 +1,57 @@
+name: Credit Optimizer CI
+
+on:
+  pull_request:
+    paths:
+      - "credit-optimizer-plugin/**"
+      - ".github/workflows/plugin-ci.yml"
+  push:
+    branches:
+      - credit-optimizer-plugin
+    paths:
+      - "credit-optimizer-plugin/**"
+  workflow_dispatch: {}
+
+jobs:
+  core:
+    # :core has no IntelliJ Platform dependency — runs anywhere, including
+    # the sandbox this was developed in. This job is the real, verified
+    # signal on every push.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: credit-optimizer-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Test :core
+        run: gradle :core:test --console=plain
+
+  plugin:
+    # :plugin resolves the IntelliJ Platform distribution from JetBrains'
+    # own hosts, which this repo's development sandbox cannot reach (see
+    # plugin/build.gradle.kts) — this job is that build's real
+    # verification, the same "written here, proven in CI" pattern the
+    # intellij-main branch's own plugin uses.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: credit-optimizer-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Build
+        run: gradle :plugin:buildPlugin --console=plain
+      - name: Verify plugin
+        run: gradle :plugin:verifyPlugin --console=plain
+      - name: Upload built plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: credit-optimizer-plugin
+          path: credit-optimizer-plugin/plugin/build/distributions/*.zip

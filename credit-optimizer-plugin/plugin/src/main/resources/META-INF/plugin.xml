@@ -1,0 +1,35 @@
+<idea-plugin>
+    <id>com.creditoptimizer.plugin</id>
+    <name>Credit Optimizer</name>
+    <vendor>Internal</vendor>
+    <description><![CDATA[
+        A local index of your microservice repos, so factual questions
+        (a route's contract, who consumes a topic, which bean implements
+        an interface) are answered instantly for free, and only genuine
+        generation tasks reach Copilot Chat, with a minimal, exact bundle
+        instead of whole files. Everything is local-per-developer — no
+        server, no shared index, no MCP.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Credit Optimizer"
+                    secondary="true"
+                    anchor="right"
+                    factoryClass="com.creditoptimizer.plugin.ui.CreditOptimizerToolWindowFactory"/>
+
+        <projectService serviceImplementation="com.creditoptimizer.plugin.IndexBridge"/>
+        <projectService serviceImplementation="com.creditoptimizer.plugin.settings.PluginSettings"/>
+    </extensions>
+
+    <actions>
+        <action id="CreditOptimizer.QuickAsk"
+                class="com.creditoptimizer.plugin.ui.QuickAskAction"
+                text="Ask the Local Index"
+                description="Ask a factual question, answered from the local index when possible, before it ever reaches Copilot">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt K"/>
+        </action>
+    </actions>
+</idea-plugin>
