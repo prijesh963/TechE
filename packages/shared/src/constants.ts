@@ -69,6 +69,7 @@ export const CLI_COMMANDS = [
   "mcp",
   "serve",
   "dashboard",
+  "copilot",
   "setup",
   "diagnostics",
   "status",

@@ -129,7 +129,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               50 files, 598 tests
+├── tests/               51 files, 617 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -167,7 +167,7 @@ decision carries.
 
 ## Implemented
 
-1. TypeScript CLI with 25 commands including `demo`.
+1. TypeScript CLI with 27 commands including `demo`.
 2. Local MCP server with 28 tools, including the session, plan contract and
    grounding — so a policy-blocked developer gets the same product.
 3. VS Code extension with the `@architect` chat participant and four phases.
@@ -403,6 +403,31 @@ createPlanPreview()` once and returns search results, impact analysis,
       taken from the OS account (an audit field, not a choice, so it is
       never prompted for).
 
+32. Copilot Chat without MCP, from the IntelliJ Tool Window — for an
+    organization whose Copilot policy blocks MCP servers, so Copilot cannot
+    call Copilot Architect's tools at all and item 29's toolset never loads.
+    The only channel left to the model is what a developer pastes into
+    Copilot Chat, so the Tool Window gained a "Work with Copilot Chat" panel
+    (a text box and one button per phase) and the product hands prompts over
+    through the clipboard instead of tool calls:
+    - `CopilotHandoffService` (`packages/planner`): Ask builds a prompt with
+      the index's top matches quoted in, under the analyze role; Plan asks for
+      all three `/create-plan` record kinds (selection, approach/steps,
+      new-file outlines) in one reply, since each parser skips lines that are
+      not its own; Import parses a pasted reply into the same `PlanContract`,
+      in the same session, that `/create-plan` produces — invented paths
+      dropped, cited symbols checked, snapshots read from disk; Approve
+      promotes the exact version clicked and writes `plans/approved/`;
+      Implement builds a prompt from the newest approved version and refuses
+      if a planned file changed since the plan quoted it.
+    - CLI: `copilot <ask|plan|import|approve|implement|state>`, prompts out
+      via `--prompt-out`, replies in via `--response-file`, so the plugin
+      never parses CLI output. `dashboard` gained `--task`/`--notice` and a
+      host-supplied Current work hint (no `@architect` in IntelliJ).
+    - Kotlin: `CopilotActions.kt` copies the prompt, opens Copilot Chat,
+      reads Copilot's reply back off the clipboard for Import, and asks for
+      approval in a real dialog. See `docs/KNOWN_LIMITATIONS.md` 4.26.
+
 Known gaps are recorded in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
 rather than left to be rediscovered.
 
@@ -536,7 +561,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 598 tests must pass before merging.
+Use Vitest. All 617 tests must pass before merging.
 
 Cover:
 
@@ -604,6 +629,12 @@ Cover:
 - constant resolution in interlink matchers and Spring/Feign route detection
   (a named constant resolved to its declared value; an unresolved reference
   dropped rather than read as literal path text)
+- the no-MCP Copilot handoff (grounded Ask prompt, one-reply Plan prompt,
+  importing a pasted reply into a plan contract with invented paths dropped
+  and unverified symbols reported, re-import as the next version, refusing a
+  reply with no plan lines, approval of the exact version, implement refused
+  for a draft or a drifted file, read-only state) and its CLI command and
+  dashboard panel
 - feature planning (JSON + Markdown output)
 - plan revision diffing (added/removed list items, scalar before/after,
   defaulting to the immediately preceding revision, rejecting a

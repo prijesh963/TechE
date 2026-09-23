@@ -28,8 +28,14 @@ import javax.swing.SwingConstants
 class DashboardPanel(private val project: Project) {
     val component: JPanel = JPanel(BorderLayout())
     private val browser: JBCefBrowser? = if (JBCefApp.isSupported()) JBCefBrowser() else null
-    private val actionLinks: ActionLinkBridge? = browser?.let { ActionLinkBridge(it) { actionId -> handleAction(actionId) } }
+    private val actionLinks: ActionLinkBridge? =
+        browser?.let { ActionLinkBridge(it) { actionId, text -> handleAction(actionId, text) } }
     private var lastOutcome: ActionDispatcher.Outcome? = null
+
+    /** The Copilot panel's text box, kept across re-renders (each click reloads the page). */
+    private var task: String = ""
+    private var notice: String? = null
+    private var noticeIsError = false
 
     init {
         val hostedBrowser = browser
@@ -53,11 +59,21 @@ class DashboardPanel(private val project: Project) {
      * thread rather than whatever thread JCEF calls back on, then hop back to
      * the EDT (`invokeLater`, required for `refresh()`'s Swing/JCEF calls).
      */
-    private fun handleAction(actionId: String) {
+    private fun handleAction(actionId: String, text: String?) {
+        if (text != null) task = text
         ApplicationManager.getApplication().executeOnPooledThread {
-            val outcome = ActionDispatcher.dispatch(project, actionId)
-            if (outcome != null) {
-                lastOutcome = outcome
+            if (CopilotActions.handles(actionId)) {
+                val result = CopilotActions.dispatch(project, actionId, text)
+                if (result != null) {
+                    notice = result.notice
+                    noticeIsError = result.isError
+                    lastOutcome = result.outcome
+                }
+            } else {
+                val outcome = ActionDispatcher.dispatch(project, actionId)
+                if (outcome != null) {
+                    lastOutcome = outcome
+                }
             }
             invokeLater { refresh() }
         }
@@ -83,6 +99,16 @@ class DashboardPanel(private val project: Project) {
                 args += "--last-stderr"
                 args += outcome.stderr
             }
+        }
+
+        if (task.isNotBlank()) {
+            args += "--task"
+            args += task
+        }
+        notice?.let { text ->
+            args += "--notice"
+            args += text
+            if (noticeIsError) args += "--notice-error"
         }
 
         val result = CliBridge.run(workspaceRoot, *args.toTypedArray())

@@ -91,6 +91,30 @@ has to go back through a chat turn calling `revise_feature_plan`. See
 `docs/KNOWN_LIMITATIONS.md` 4.22 for the full account, including why the
 diff is field-level (not a line diff) and truncates long values.
 
+## Copilot Chat without MCP (0.2.0)
+
+For an organization whose Copilot policy blocks MCP servers — Copilot then
+cannot call any Copilot Architect tool, and there is no chat-participant
+API in JetBrains Copilot to add `@architect` instead. The Tool Window's
+**Work with Copilot Chat** panel runs the same four phases through the
+clipboard:
+
+1. **Ask about the code** — the index's best matches for the question are
+   quoted into a prompt, copied, and Copilot Chat is opened: paste and send.
+2. **Plan the change** — a prompt listing candidate files and asking for the
+   plan as pipe-separated records. When Copilot replies, click _Copy_ on the
+   reply, then **Import plan from clipboard**: it becomes plan v1 in the
+   panel. To revise, tell Copilot what to change, copy its new reply, and
+   **Import revised plan** (v2, …).
+3. **Approve plan vN** — a real confirm dialog, for the version shown.
+4. **Implement plan vN with Copilot** — copies a prompt listing exactly the
+   approved files and steps; paste it into Copilot Chat in Agent mode.
+
+All of the logic is the CLI's `copilot` command (`CopilotHandoffService` in
+`packages/planner`); `CopilotActions.kt` only touches the clipboard, the
+Copilot Chat window and the approval dialog. Known limits:
+`docs/KNOWN_LIMITATIONS.md` 4.26.
+
 ## Building
 
 ```bash

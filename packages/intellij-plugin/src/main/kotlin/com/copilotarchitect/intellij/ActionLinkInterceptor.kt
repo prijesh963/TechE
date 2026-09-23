@@ -37,7 +37,7 @@ private const val CONSOLE_MARKER = "copilot-architect-click:"
  * client picks it up. The script also shows an in-page "Running…" banner, so
  * a click that reaches the page is visible even if nothing after it works.
  */
-class ActionLinkBridge(browser: JBCefBrowser, onAction: (String) -> Unit) {
+class ActionLinkBridge(browser: JBCefBrowser, onAction: (actionId: String, text: String?) -> Unit) {
     private val log = Logger.getInstance(ActionLinkBridge::class.java)
 
     init {
@@ -51,9 +51,14 @@ class ActionLinkBridge(browser: JBCefBrowser, onAction: (String) -> Unit) {
                     line: Int
                 ): Boolean {
                     if (message == null || !message.startsWith(CONSOLE_MARKER)) return false
-                    val actionId = message.removePrefix(CONSOLE_MARKER)
+                    // `<id>` alone, or `<id>\n<text>` for a link carrying a
+                    // `data-input` box's value (the Copilot panel's buttons).
+                    val payload = message.removePrefix(CONSOLE_MARKER)
+                    val newline = payload.indexOf('\n')
+                    val actionId = if (newline < 0) payload else payload.substring(0, newline)
+                    val text = if (newline < 0) null else payload.substring(newline + 1)
                     log.info("Dashboard action clicked: $actionId")
-                    onAction(actionId)
+                    onAction(actionId, text)
                     return true
                 }
             },
@@ -82,7 +87,13 @@ class ActionLinkBridge(browser: JBCefBrowser, onAction: (String) -> Unit) {
             document.body.insertBefore(banner, document.body.firstChild);
           }
           banner.textContent = 'Running ' + (link.textContent || '').trim() + '…';
-          console.log('$CONSOLE_MARKER' + href.substring(${ACTION_SCHEME_PREFIX.length}));
+          var payload = href.substring(${ACTION_SCHEME_PREFIX.length});
+          var inputId = link.getAttribute('data-input');
+          if (inputId) {
+            var input = document.getElementById(inputId);
+            payload += '\n' + (input ? input.value : '');
+          }
+          console.log('$CONSOLE_MARKER' + payload);
         }, true);
         </script>
     """.trimIndent()

@@ -1308,6 +1308,57 @@ outcome for `setupRepo`, so the click never reached Kotlin at all.
 
 ---
 
+### 4.26 Copilot Chat without MCP: a clipboard handoff, with what that cannot do
+
+**Why it exists:** in the reporting developer's organization, Copilot's
+"MCP servers in Copilot" policy is off, so Copilot in IntelliJ cannot load
+the MCP server at all and item 29's `intellij` toolset never reaches it.
+JetBrains Copilot has no chat-participant API either. The only channel left
+to the model is text the developer pastes into Copilot Chat, so the IntelliJ
+Tool Window's "Work with Copilot Chat" panel (plugin 0.2.0,
+`CopilotHandoffService`, CLI `copilot`) hands prompts over through the
+clipboard and reads Copilot's plan reply back the same way.
+
+**What it keeps from `@architect`:** grounded prompts built from the local
+index; a plan reply parsed by the same parsers into the same `PlanContract`,
+stored as a versioned draft in the same session; invented paths dropped and
+cited symbols checked against the index; snapshots and hashes read from
+disk; approval as a dialog for the exact version shown; implementation
+refused for a draft, or once a planned file has changed since the plan
+quoted it.
+
+**What it does not do (yet):**
+
+- **One reply instead of three questions.** `/create-plan` asks for the
+  selection, then the approach, then outlines, each with the previous
+  answer in hand. Here all three come in one reply, so steps and outlines
+  are written before the selection has been validated; a step about a
+  dropped file is discarded rather than re-asked.
+- **Copilot does the editing.** In Agent mode Copilot writes the files
+  itself, with its own keep/undo review. The `@architect` guarantees for
+  `/implement` — quote-to-replace edits refused unless they match exactly
+  once, a diff of every file before anything lands, all-or-nothing — do
+  not apply. The prompt limits Copilot to the approved files and steps, but
+  nothing enforces that, and the plan is not marked implemented.
+- **No review phase and no decisions yet.** `/review` against the approved
+  plan and `/create-plan`'s proposed decisions have no panel equivalent;
+  review still needs the CLI or VS Code. No implementation checkpoint is
+  captured either, which review will need.
+- **Clipboard assumptions.** Import reads whatever text is on the clipboard;
+  copying something else in between imports that instead (a reply with no
+  plan lines is refused, so the usual result is an error, not a wrong
+  plan). A very large Ask prompt is capped at about 24 KB of excerpts, with
+  the omission stated in the prompt.
+- **Opening Copilot Chat is best-effort.** The chat tool window's id is not
+  a public API; the plugin tries the ids GitHub Copilot has used and, when
+  none matches, says to open Copilot Chat by hand.
+- **Unverified in a real IDE when written.** The TypeScript side is tested
+  (`tests/copilot-handoff.test.ts`) and the panel's HTML and click payloads
+  were checked in headless Chromium; the Kotlin side builds in CI but, like
+  everything in this plugin, had to be installed to be proven.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
