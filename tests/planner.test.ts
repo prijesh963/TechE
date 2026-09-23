@@ -511,7 +511,10 @@ describe("FeaturePlanningService", () => {
       sections: { title: "Add invoice approval workflow (scoped)" }
     });
 
-    const diff = await service.diffRevisions({ startPath: repoRoot, planId: initial.plan.id });
+    const diff = await service.diffRevisions({
+      startPath: repoRoot,
+      planId: initial.plan.id
+    });
 
     expect(diff.from).toBe(1);
     expect(diff.to).toBe(2);

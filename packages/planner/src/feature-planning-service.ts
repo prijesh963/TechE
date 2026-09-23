@@ -333,7 +333,9 @@ export class FeaturePlanningService {
     }
 
     const to =
-      options.to ?? (await this.showRevision({ startPath, strictRoot: options.strictRoot, planId })).revision;
+      options.to ??
+      (await this.showRevision({ startPath, strictRoot: options.strictRoot, planId }))
+        .revision;
 
     if (options.from !== undefined && options.from === to) {
       throw new Error(`--from and --to are both revision ${to}; nothing to diff.`);
@@ -348,8 +350,18 @@ export class FeaturePlanningService {
     }
 
     const [fromPlan, toPlan] = await Promise.all([
-      this.showRevision({ startPath, strictRoot: options.strictRoot, planId, revision: from }),
-      this.showRevision({ startPath, strictRoot: options.strictRoot, planId, revision: to })
+      this.showRevision({
+        startPath,
+        strictRoot: options.strictRoot,
+        planId,
+        revision: from
+      }),
+      this.showRevision({
+        startPath,
+        strictRoot: options.strictRoot,
+        planId,
+        revision: to
+      })
     ]);
 
     const feedback = toPlan.revisions.find((entry) => entry.revision === to)?.feedback;
@@ -1524,7 +1536,9 @@ function diffPlanSections(
     const toValue = to[field];
 
     if (Array.isArray(fromValue) || Array.isArray(toValue)) {
-      const fromItems = (Array.isArray(fromValue) ? fromValue : []).map(stringifyPlanItem);
+      const fromItems = (Array.isArray(fromValue) ? fromValue : []).map(
+        stringifyPlanItem
+      );
       const toItems = (Array.isArray(toValue) ? toValue : []).map(stringifyPlanItem);
       const fromSet = new Set(fromItems);
       const toSet = new Set(toItems);
@@ -1559,7 +1573,11 @@ function stringifyPlanItem(item: unknown): string {
   if (item && typeof item === "object") {
     const record = item as Record<string, unknown>;
     const label =
-      record.command ?? record.relativePath ?? record.path ?? record.title ?? record.description;
+      record.command ??
+      record.relativePath ??
+      record.path ??
+      record.title ??
+      record.description;
 
     if (typeof label === "string") {
       return label;
