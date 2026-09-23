@@ -5,6 +5,7 @@ import com.creditoptimizer.plugin.IndexBridge
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -12,6 +13,7 @@ import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.datatransfer.StringSelection
 import javax.swing.JPanel
 import javax.swing.KeyStroke
 
@@ -64,10 +66,11 @@ class QuickAskAction : AnAction() {
                             result.text = "${outcome.summary}\n\n${outcome.detail}"
                             result.isVisible = true
                         }
-                        AskOutcome.NeedsCopilot -> {
-                            badge.text = "This needs Copilot"
+                        is AskOutcome.NeedsCopilot -> {
+                            CopyPasteManager.getInstance().setContents(StringSelection(outcome.groundedPrompt))
+                            badge.text = "This needs Copilot — prompt copied to clipboard"
                             badge.isVisible = true
-                            result.text = "Not answerable from the local index alone — open the Credit Optimizer tool window to hand this off."
+                            result.text = outcome.groundedPrompt
                             result.isVisible = true
                         }
                     }
