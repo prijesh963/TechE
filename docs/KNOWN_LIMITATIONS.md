@@ -1349,6 +1349,14 @@ quoted it.
   plan lines is refused, so the usual result is an error, not a wrong
   plan). A very large Ask prompt is capped at about 24 KB of excerpts, with
   the omission stated in the prompt.
+- **Binary files were quoted as text (fixed).** The first real Ask pasted a
+  binary file's bytes into the prompt: files were recognized as binary only
+  by extension, so an `.xlsx`, a keystore or an extensionless binary was
+  indexed as text. Content is now checked too (`isBinaryContent`: a NUL byte
+  or mostly control characters in the first 8000 bytes, git's heuristic), at
+  index time and again when an excerpt is quoted. An index built before the
+  fix still lists such files until it is rebuilt (Setup Repo or Build Index);
+  Ask already skips them either way.
 - **Opening Copilot Chat is best-effort.** The chat tool window's id is not
   a public API; the plugin tries the ids GitHub Copilot has used and, when
   none matches, says to open Copilot Chat by hand.

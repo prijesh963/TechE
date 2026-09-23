@@ -91,11 +91,93 @@ export const BINARY_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".otf",
   ".woff",
   ".woff2",
-  ".eot"
+  ".eot",
+  // Office documents (zip containers) and other common binary artifacts
+  ".xlsx",
+  ".xls",
+  ".docx",
+  ".doc",
+  ".pptx",
+  ".ppt",
+  ".war",
+  ".ear",
+  ".jks",
+  ".keystore",
+  ".p12",
+  ".pfx",
+  ".ser",
+  ".db",
+  ".sqlite",
+  ".mp3",
+  ".mp4",
+  ".mov",
+  ".avi"
 ]);
 
 export function isBinaryPath(filePath: string): boolean {
   return BINARY_FILE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+/** How much of a file {@link isBinaryContent} looks at — git's own heuristic window. */
+const BINARY_SNIFF_BYTES = 8000;
+
+/**
+ * Whether file content is binary, judged by its bytes rather than its name.
+ *
+ * {@link isBinaryPath} only knows the extensions listed above, so an
+ * `.xlsx`, a `.jks` keystore, a serialized `.ser` or an extensionless binary
+ * used to be read as UTF-8 and indexed as text — and then quoted, byte
+ * garbage and all, into a prompt a developer pasted into Copilot Chat.
+ *
+ * A NUL byte in the first 8000 bytes is git's test; a text file essentially
+ * never contains one. A high share of other control characters catches
+ * what gets past that. Invalid UTF-8 alone is deliberately not a test: a
+ * Latin-1 source file is still text worth indexing.
+ */
+export function isBinaryContent(content: Uint8Array): boolean {
+  const length = Math.min(content.length, BINARY_SNIFF_BYTES);
+  if (length === 0) {
+    return false;
+  }
+
+  let control = 0;
+  for (let index = 0; index < length; index += 1) {
+    const byte = content[index];
+    if (byte === 0) {
+      return true;
+    }
+    // Tab, LF, FF, CR and ESC (ANSI colour in logs) are ordinary in text.
+    if (
+      byte < 0x20 &&
+      byte !== 9 &&
+      byte !== 10 &&
+      byte !== 12 &&
+      byte !== 13 &&
+      byte !== 27
+    ) {
+      control += 1;
+    }
+  }
+
+  return control / length > 0.1;
+}
+
+/**
+ * Reads a file as UTF-8 text, or `undefined` when it cannot be read or its
+ * content is binary ({@link isBinaryContent}). The one place a file becomes
+ * "text" for indexing and prompts, so no caller can skip the check.
+ */
+export async function readTextFileIfText(
+  filePath: string
+): Promise<string | undefined> {
+  let content: Buffer;
+  try {
+    content = await readFile(filePath);
+  } catch {
+    return undefined;
+  }
+
+  return isBinaryContent(content) ? undefined : content.toString("utf8");
 }
 
 /**

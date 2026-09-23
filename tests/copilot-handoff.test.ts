@@ -64,10 +64,34 @@ describe("CopilotHandoffService.askPrompt", () => {
 
     expect(result.kind).toBe("ask");
     expect(result.files).toContain("src/invoices.ts");
-    expect(result.prompt).toContain("--- src/invoices.ts (lines 1–");
+    expect(result.prompt).toContain("### src/invoices.ts (lines 1–");
+    expect(result.prompt).toContain("```typescript\nexport function approveInvoice");
     expect(result.prompt).toContain("export function approveInvoice");
     expect(result.prompt).toContain("Explain what is actually in this repository");
     expect(result.prompt).toContain("where is approveInvoice");
+  });
+
+  it("never quotes a binary file, whatever its extension", async () => {
+    // An .xlsx-style zip container that happens to contain the query word:
+    // it used to be indexed as text and pasted into the prompt as byte noise.
+    await writeFile(
+      path.join(workspaceRoot, "src", "approveInvoice-export.dump"),
+      Buffer.concat([
+        Buffer.from("PK\u0003\u0004"),
+        Buffer.from([0x00, 0x14, 0x00, 0x06]),
+        Buffer.from(" approveInvoice approveInvoice ")
+      ])
+    );
+    resetIndexFreshnessCache();
+    await new IndexingService().index({ startPath: workspaceRoot });
+
+    const result = await new CopilotHandoffService().askPrompt({
+      workspaceRoot,
+      question: "approveInvoice"
+    });
+
+    expect(result.files).not.toContain("src/approveInvoice-export.dump");
+    expect(result.prompt).not.toContain("\u0000");
   });
 
   it("refuses an empty question rather than sending Copilot nothing to answer", async () => {
