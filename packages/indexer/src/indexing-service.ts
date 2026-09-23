@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -18,6 +18,7 @@ import {
   isTestFile,
   readGitHead,
   readJsonFile,
+  readTextFileIfText,
   resolveRegisteredRepos,
   scanRepository,
   writeJsonFile
@@ -1551,12 +1552,9 @@ async function tryReadGraph(repoRoot: string): Promise<SymbolGraph | undefined> 
   }
 }
 
+/** Binary content is never indexed, whatever its extension (see `isBinaryContent`). */
 async function readTextFile(filePath: string): Promise<string | undefined> {
-  try {
-    return await readFile(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
+  return readTextFileIfText(filePath);
 }
 
 async function pathExists(filePath: string): Promise<boolean> {

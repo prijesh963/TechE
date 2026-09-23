@@ -129,7 +129,7 @@ copilot-architect/
 │   ├── instructions/
 │   └── skills/
 ├── samples/             8 representative repos (React, Angular, Python, Java, Go, polyglot)
-├── tests/               51 files, 617 tests
+├── tests/               51 files, 621 tests
 ├── docs/                product documentation
 └── scripts/             setup, bundling and packaging scripts
 ```
@@ -561,7 +561,7 @@ broken.
 
 ## Testing
 
-Use Vitest. All 617 tests must pass before merging.
+Use Vitest. All 621 tests must pass before merging.
 
 Cover:
 
@@ -629,6 +629,9 @@ Cover:
 - constant resolution in interlink matchers and Spring/Feign route detection
   (a named constant resolved to its declared value; an unresolved reference
   dropped rather than read as literal path text)
+- binary content never indexed or quoted, whatever the extension (a NUL
+  byte or mostly control characters in the first 8000 bytes; Latin-1 text
+  still indexed)
 - the no-MCP Copilot handoff (grounded Ask prompt, one-reply Plan prompt,
   importing a pasted reply into a plan contract with invented paths dropped
   and unverified symbols reported, re-import as the next version, refusing a

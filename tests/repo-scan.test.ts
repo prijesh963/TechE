@@ -4,7 +4,11 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { isTestFile, scanRepository } from "../packages/shared/src/index.js";
+import {
+  isBinaryContent,
+  isTestFile,
+  scanRepository
+} from "../packages/shared/src/index.js";
 
 describe("scanRepository", () => {
   it("skips the built-in ignore set", async () => {
@@ -123,5 +127,27 @@ describe("isTestFile", () => {
     // implementations had this) false-positived on this exact input.
     expect(isTestFile("contest_entry.py")).toBe(false);
     expect(isTestFile("src/index.ts")).toBe(false);
+  });
+});
+
+describe("isBinaryContent", () => {
+  it("treats a NUL byte as binary, as git does", () => {
+    expect(isBinaryContent(Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x14]))).toBe(
+      true
+    );
+  });
+
+  it("treats content that is mostly control characters as binary", () => {
+    const bytes = Buffer.alloc(200, 0x41);
+    for (let index = 0; index < 40; index += 1) bytes[index * 5] = 0x10;
+    expect(isBinaryContent(bytes)).toBe(true);
+  });
+
+  it("keeps ordinary text, tabs, CRLF, ANSI colour and Latin-1 as text", () => {
+    expect(isBinaryContent(Buffer.from("a\tb\r\nc\u001b[31mred\u001b[0m\n"))).toBe(
+      false
+    );
+    expect(isBinaryContent(Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]))).toBe(false);
+    expect(isBinaryContent(Buffer.alloc(0))).toBe(false);
   });
 });

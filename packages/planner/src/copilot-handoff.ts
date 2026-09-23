@@ -4,7 +4,11 @@ import path from "node:path";
 import { renderRolePrompt } from "@copilot-architect/agents";
 import { IndexingService, type SearchResult } from "@copilot-architect/indexer";
 import { SessionService, type Session } from "@copilot-architect/session";
-import { getArtifactFilePath, getArtifactRoot } from "@copilot-architect/shared";
+import {
+  getArtifactFilePath,
+  getArtifactRoot,
+  readTextFileIfText
+} from "@copilot-architect/shared";
 
 import {
   DEFAULT_MAX_CHANGES,
@@ -613,21 +617,54 @@ async function renderExcerpt(
   result: SearchResult,
   relativePath: string
 ): Promise<string | undefined> {
-  let text: string;
-  try {
-    text = await readFile(result.filePath, "utf8");
-  } catch {
+  // Checked here as well as at index time: an index built before binary
+  // content was detected can still list a binary file, and its bytes pasted
+  // into Copilot Chat are unreadable noise.
+  const text = await readTextFileIfText(result.filePath);
+  if (text === undefined) {
     return undefined;
   }
 
   const excerpt = extractExcerpt(text, result.anchor?.line, ASK_CONTEXT_LINES);
   return [
-    `--- ${relativePath} (lines ${excerpt.startLine}–${excerpt.endLine} of ${excerpt.fileLines})`,
-    "```",
+    `### ${relativePath} (lines ${excerpt.startLine}–${excerpt.endLine} of ${excerpt.fileLines})`,
+    "",
+    `\`\`\`${fenceLanguage(relativePath)}`,
     excerpt.text,
     "```",
     ""
   ].join("\n");
+}
+
+/** A code fence's language, so Copilot Chat highlights the excerpt. */
+function fenceLanguage(relativePath: string): string {
+  const extension = path.extname(relativePath).slice(1).toLowerCase();
+  const aliases: Record<string, string> = {
+    ts: "typescript",
+    tsx: "tsx",
+    js: "javascript",
+    jsx: "jsx",
+    mjs: "javascript",
+    cjs: "javascript",
+    py: "python",
+    java: "java",
+    kt: "kotlin",
+    go: "go",
+    rs: "rust",
+    cs: "csharp",
+    rb: "ruby",
+    yml: "yaml",
+    yaml: "yaml",
+    json: "json",
+    xml: "xml",
+    html: "html",
+    css: "css",
+    scss: "scss",
+    sql: "sql",
+    sh: "bash",
+    md: "markdown"
+  };
+  return aliases[extension] ?? "";
 }
 
 function toRelative(workspaceRoot: string, filePath: string): string {
