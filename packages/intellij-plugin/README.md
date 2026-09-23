@@ -24,7 +24,9 @@ Every dashboard action link VS Code exposes, not just the dashboard view:
   Start & Setup MCP, Stop MCP, Generate Instructions, Open Repo, Scan &
   Register Sub-repos, Analyze Repo, Build Index, and Build Symbol Graph as
   `architect-action:<id>` links — a host-neutral scheme this plugin defines
-  and intercepts itself (`ActionLinkInterceptor.kt`), since JCEF has no
+  and routes to Kotlin itself (`ActionLinkInterceptor.kt`: an injected
+  click listener hands each action id over through the browser console —
+  see `docs/KNOWN_LIMITATIONS.md` 4.25 for why), since JCEF has no
   built-in equivalent to VS Code's webview `command:` URIs. All of them are
   shown together, flat, rather than the primary-four/"More actions…" split
   VS Code's quick pick does — the CLI already lays every action out in one
@@ -144,8 +146,7 @@ static checks against a real 2024.2.x IDE build.
 **What is still not verified: nobody has run `./gradlew runIde` and
 actually clicked anything.** A green `build`/`verifyPlugin` is a static
 guarantee — the code compiles and the plugin descriptor is well-formed. It
-says nothing about whether `ActionLinkInterceptor` actually intercepts a
-click at runtime, whether `McpProcessManager` actually holds a working
+says nothing about whether `McpProcessManager` actually holds a working
 process handle, or whether `OpenProjectTask(projectToClose = ...,
 forceOpenInNewFrame = ...)`'s parameter names — chosen without being able
 to check the real API — happen to produce the intended behavior rather
@@ -153,8 +154,14 @@ than merely type-checking. The Kotlin sources still lean on plain
 `javax.swing.UIManager` over less certain IntelliJ Platform SDK convenience
 methods for the same reason as before (see `ThemeColors.kt`): a compile-time
 guarantee is worth more than a runtime one this sandbox cannot check either
-way. Treat "it builds" and "it works" as two separate claims — only the
-first one is now backed by evidence.
+way. Treat "it builds" and "it works" as two separate claims.
+
+**Since then, one runtime path has been confirmed in a real IDE:** on
+IntelliJ 2026.2, 0.1.4 renders the dashboard, and clicking Setup Repo
+reaches `ActionDispatcher`, runs `setup` (exit 0), and re-renders with the
+"Last command" card. Getting there took two failed click-transport
+attempts first; see `docs/KNOWN_LIMITATIONS.md` 4.25. Every other action's
+own dispatch path is still unexercised at runtime.
 
 ## Pointing it at a built CLI
 
