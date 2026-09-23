@@ -116,6 +116,43 @@ data class HttpClientCallFact(
     val line: Int
 )
 
+enum class IntegrationCategory { DATASTORE, MESSAGING }
+
+/**
+ * A datastore or messaging broker this service is wired to — detected two
+ * ways, either of which stands alone: a build dependency coordinate
+ * matching a known driver/client (`com.oracle.database.jdbc:ojdbc11`,
+ * `org.springframework.kafka:spring-kafka`, `com.tibco:tibjms`, ...), or a
+ * connection string/config key found in a Spring config file
+ * (`application.yml`/`.properties`, including `application-<profile>`
+ * variants) — `jdbc:oracle:`, `mongodb://`, `spring.kafka.*`,
+ * `tibco.ems.*`. This is keyword/coordinate matching, not a live
+ * connection check: it says the service is *wired for* Oracle/Mongo/Kafka/
+ * TIBCO/etc., never that the connection actually works.
+ */
+data class IntegrationFact(
+    val service: String,
+    val sourceFile: String,
+    val category: IntegrationCategory,
+    /** e.g. "Oracle", "MongoDB", "Kafka", "RabbitMQ", "TIBCO EMS". */
+    val name: String,
+    /** What matched — a dependency coordinate or the config key/URI scheme found. */
+    val evidence: String
+)
+
+/**
+ * A resolved cross-repo edge: [producer] in one service and [consumer] in
+ * a *different* service, matched on [MessagingFact.channel] (exact,
+ * case-insensitive) and [MessagingFact.broker] — a computed edge, not the
+ * name-filter a plain "who consumes X" lookup already did. Computed on
+ * demand from the full set of loaded [ServiceIndex]es, not stored in any
+ * one of them, since it spans two.
+ */
+data class MessagingInterlinkFact(
+    val producer: MessagingFact,
+    val consumer: MessagingFact
+)
+
 /** Everything indexed for one service, as one unit that is replaced together on a re-index of that service. */
 data class ServiceIndex(
     val service: ServiceInfo,
@@ -126,6 +163,7 @@ data class ServiceIndex(
     val dependencies: List<DependencyFact> = emptyList(),
     val calls: List<CallFact> = emptyList(),
     val httpClientCalls: List<HttpClientCallFact> = emptyList(),
+    val integrations: List<IntegrationFact> = emptyList(),
     /** Relative path -> content hash, for incremental re-indexing and staleness checks. */
     val fileHashes: Map<String, String> = emptyMap(),
     val indexedAtEpochMillis: Long = System.currentTimeMillis()

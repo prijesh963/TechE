@@ -17,6 +17,11 @@ fun findBuildFiles(root: File): List<File> = findFiles(root) {
     it.name == "pom.xml" || it.name == "build.gradle" || it.name == "build.gradle.kts"
 }
 
+private val CONFIG_FILE_NAME = Regex("""^application(-[\w.-]+)?\.(yml|yaml|properties)$""")
+
+/** Spring config files: `application.yml`/`.properties` and `application-<profile>` variants, at any depth. */
+fun findConfigFiles(root: File): List<File> = findFiles(root) { CONFIG_FILE_NAME.matches(it.name) }
+
 private fun findFiles(root: File, matches: (File) -> Boolean): List<File> {
     if (!root.isDirectory) return emptyList()
     val results = mutableListOf<File>()

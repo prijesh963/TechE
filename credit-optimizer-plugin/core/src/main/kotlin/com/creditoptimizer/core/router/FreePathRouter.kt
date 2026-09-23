@@ -5,6 +5,7 @@ import com.creditoptimizer.core.model.MessagingDirection
 import com.creditoptimizer.core.model.MessagingFact
 import com.creditoptimizer.core.model.RouteFact
 import com.creditoptimizer.core.model.ServiceIndex
+import com.creditoptimizer.core.parse.IntegrationDetector
 
 /**
  * Answers a question directly from the local index when it is a plain
@@ -31,6 +32,7 @@ object FreePathRouter {
         beanAnswer(lower, indexes)?.let { return it }
         callGraphAnswer(lower, indexes)?.let { return it }
         dependencyAnswer(lower, indexes)?.let { return it }
+        integrationAnswer(lower, indexes)?.let { return it }
 
         return RouterResult.NeedsGeneration
     }
@@ -85,8 +87,21 @@ object FreePathRouter {
             .filter { it.direction == wantDirection && it.channel.contains(channel, ignoreCase = true) }
         if (matches.isEmpty()) return null
 
+        val interlinks = InterlinkResolver.messagingInterlinks(indexes)
+
         val lines = matches.map { fact: MessagingFact ->
-            "${fact.service} (${fact.className}.${fact.methodName}) — ${fact.broker} — ${fact.channel}"
+            buildString {
+                append("${fact.service} (${fact.className}.${fact.methodName}) — ${fact.broker} — ${fact.channel}")
+                val linked = if (askingConsumers) {
+                    interlinks.filter { it.consumer == fact }.map { it.producer }
+                } else {
+                    interlinks.filter { it.producer == fact }.map { it.consumer }
+                }
+                if (linked.isNotEmpty()) {
+                    val verb = if (askingConsumers) "produced by" else "consumed by"
+                    append("\n  $verb: " + linked.joinToString(", ") { "${it.service} (${it.className}.${it.methodName})" })
+                }
+            }
         }
         val verb = if (askingConsumers) "Consumer(s)" else "Producer(s)"
         return RouterResult.LocalAnswer(
@@ -182,6 +197,37 @@ object FreePathRouter {
         }
         val summary = if (service != null) "${matches.size} dependenc${if (matches.size == 1) "y" else "ies"} for $service"
             else "${matches.size} dependenc${if (matches.size == 1) "y" else "ies"} across all indexed services"
+        return RouterResult.LocalAnswer(
+            summary = summary,
+            detail = lines.joinToString("\n"),
+            sourceFiles = matches.map { "${it.service}/${it.sourceFile}" }.distinct()
+        )
+    }
+
+    private val INTEGRATION_TRIGGERS = listOf("database", "datastore", "messaging", "broker", "integrat")
+
+    private fun integrationAnswer(lower: String, indexes: List<ServiceIndex>): RouterResult? {
+        // A known technology named in the question (even one this service doesn't have) scopes the
+        // answer to it - "does X use MongoDB?" must fall through to NeedsGeneration when it doesn't,
+        // never quietly list whatever unrelated integrations the service does have.
+        val named = IntegrationDetector.KNOWN_NAMES.firstOrNull { it.lowercase() in lower }
+        val triggered = named != null || INTEGRATION_TRIGGERS.any { it in lower }
+        if (!triggered) return null
+
+        val service = indexes.map { it.service.name }.firstOrNull { it.lowercase() in lower }
+        val scoped = if (service != null) indexes.filter { it.service.name == service } else indexes
+        val integrations = scoped.flatMap { it.integrations }
+        if (integrations.isEmpty()) return null
+
+        val matches = if (named != null) integrations.filter { it.name == named } else integrations
+        if (matches.isEmpty()) return null
+
+        val lines = matches.distinctBy { "${it.service}/${it.name}/${it.category}" }
+            .sortedBy { "${it.service}/${it.name}" }
+            .map { fact -> "${fact.service}: ${fact.name} (${fact.category.name.lowercase()}) — ${fact.evidence} [${fact.sourceFile}]" }
+
+        val summary = if (service != null) "${lines.size} integration(s) for $service"
+            else "${lines.size} integration(s) across all indexed services"
         return RouterResult.LocalAnswer(
             summary = summary,
             detail = lines.joinToString("\n"),

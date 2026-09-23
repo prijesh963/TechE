@@ -4,6 +4,8 @@ import com.creditoptimizer.core.model.BeanFact
 import com.creditoptimizer.core.model.CallFact
 import com.creditoptimizer.core.model.DependencyFact
 import com.creditoptimizer.core.model.HttpClientCallFact
+import com.creditoptimizer.core.model.IntegrationCategory
+import com.creditoptimizer.core.model.IntegrationFact
 import com.creditoptimizer.core.model.MessagingDirection
 import com.creditoptimizer.core.model.MessagingFact
 import com.creditoptimizer.core.model.RouteFact
@@ -84,6 +86,26 @@ class FreePathRouterTest {
                 httpMethod = "POST",
                 path = "/payments/{orderId}/charge",
                 line = 8
+            )
+        ),
+        messaging = listOf(
+            MessagingFact(
+                service = "order-service",
+                sourceFile = "OrderPublisher.java",
+                className = "OrderPublisher",
+                methodName = "publish",
+                direction = MessagingDirection.PRODUCER,
+                channel = "order.created",
+                broker = "kafka"
+            )
+        ),
+        integrations = listOf(
+            IntegrationFact(
+                service = "order-service",
+                sourceFile = "pom.xml",
+                category = IntegrationCategory.DATASTORE,
+                name = "Oracle",
+                evidence = "com.oracle.database.jdbc:ojdbc11"
             )
         )
     )
@@ -182,6 +204,35 @@ class FreePathRouterTest {
         assertIs<RouterResult.LocalAnswer>(yes)
 
         val no = FreePathRouter.answer("does payment-service depend on mongodb?", listOf(paymentIndex))
+        assertEquals(RouterResult.NeedsGeneration, no)
+    }
+
+    @Test
+    fun `a consumer answer shows the real cross-repo producer, not just a name match`() {
+        val result = FreePathRouter.answer("who consumes the order.created topic?", listOf(paymentIndex, orderIndex))
+
+        val answer = assertIs<RouterResult.LocalAnswer>(result)
+        assertTrue("OrderEventListener" in answer.detail)
+        assertTrue("produced by" in answer.detail)
+        assertTrue("order-service" in answer.detail)
+        assertTrue("OrderPublisher" in answer.detail)
+    }
+
+    @Test
+    fun `answers a service's integrations`() {
+        val result = FreePathRouter.answer("what datastore does order-service use?", listOf(paymentIndex, orderIndex))
+
+        val answer = assertIs<RouterResult.LocalAnswer>(result)
+        assertTrue("Oracle" in answer.detail)
+        assertTrue("order-service" in answer.detail)
+    }
+
+    @Test
+    fun `answers whether a service uses a named integration`() {
+        val yes = FreePathRouter.answer("does order-service use Oracle?", listOf(orderIndex))
+        assertIs<RouterResult.LocalAnswer>(yes)
+
+        val no = FreePathRouter.answer("does order-service use MongoDB as its datastore?", listOf(orderIndex))
         assertEquals(RouterResult.NeedsGeneration, no)
     }
 }

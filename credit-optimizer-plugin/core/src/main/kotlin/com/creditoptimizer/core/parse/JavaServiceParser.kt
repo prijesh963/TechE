@@ -112,7 +112,8 @@ object JavaServiceParser {
             }
         }
 
-        val dependencies = findBuildFiles(root).flatMap { DependencyParser.parse(service.name, root, it) }
+        val dependencies = DependencyParser.parseRepo(service.name, root)
+        val integrations = IntegrationDetector.detect(service.name, root, dependencies)
 
         return ServiceIndex(
             service = service,
@@ -123,6 +124,7 @@ object JavaServiceParser {
             dependencies = dependencies,
             calls = calls,
             httpClientCalls = httpClientCalls,
+            integrations = integrations,
             fileHashes = fileHashes
         )
     }

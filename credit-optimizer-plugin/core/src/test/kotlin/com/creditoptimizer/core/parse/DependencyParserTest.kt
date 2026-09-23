@@ -1,6 +1,7 @@
 package com.creditoptimizer.core.parse
 
 import java.nio.file.Files
+import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,6 +15,16 @@ class DependencyParserTest {
         val path = dir.resolve(name)
         path.writeText(content)
         return path.toFile()
+    }
+
+    private fun tempRepo(vararg files: Pair<String, String>): java.io.File {
+        val root = Files.createTempDirectory("dep-parser-repo-")
+        for ((relativePath, content) in files) {
+            val path = root.resolve(relativePath)
+            path.parent.createDirectories()
+            path.writeText(content)
+        }
+        return root.toFile()
     }
 
     @Test
@@ -110,5 +121,89 @@ class DependencyParserTest {
     fun `an unreadable or malformed build file yields no dependencies rather than throwing`() {
         val pom = tempFile("pom.xml", "not even xml <<<")
         assertTrue(DependencyParser.parse("broken-service", pom.parentFile, pom).isEmpty())
+    }
+
+    @Test
+    fun `parseRepo resolves a child module's version from the parent POM's dependencyManagement, pooled across the repo`() {
+        val repo = tempRepo(
+            "pom.xml" to """
+                <project>
+                    <properties>
+                        <spring-kafka.version>3.1.2</spring-kafka.version>
+                    </properties>
+                    <dependencyManagement>
+                        <dependencies>
+                            <dependency>
+                                <groupId>org.springframework.kafka</groupId>
+                                <artifactId>spring-kafka</artifactId>
+                                <version>${'$'}{spring-kafka.version}</version>
+                            </dependency>
+                        </dependencies>
+                    </dependencyManagement>
+                </project>
+            """.trimIndent(),
+            "order-service/pom.xml" to """
+                <project>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.springframework.kafka</groupId>
+                            <artifactId>spring-kafka</artifactId>
+                        </dependency>
+                    </dependencies>
+                </project>
+            """.trimIndent()
+        )
+
+        val deps = DependencyParser.parseRepo("order-service", repo)
+        val kafka = deps.first { it.artifactId == "spring-kafka" }
+        assertEquals("3.1.2", kafka.version)
+    }
+
+    @Test
+    fun `parseRepo resolves a Gradle version-catalog accessor from gradle-libs-versions-toml`() {
+        val repo = tempRepo(
+            "gradle/libs.versions.toml" to """
+                [versions]
+                springBoot = "3.2.5"
+
+                [libraries]
+                spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "springBoot" }
+                guava = "com.google.guava:guava:31.1-jre"
+            """.trimIndent(),
+            "build.gradle.kts" to """
+                dependencies {
+                    implementation(libs.spring.boot.starter.web)
+                    implementation(libs.guava)
+                }
+            """.trimIndent()
+        )
+
+        val deps = DependencyParser.parseRepo("payment-service", repo)
+        assertEquals(2, deps.size)
+
+        val web = deps.first { it.artifactId == "spring-boot-starter-web" }
+        assertEquals("org.springframework.boot", web.groupId)
+        assertEquals("3.2.5", web.version)
+
+        val guava = deps.first { it.artifactId == "guava" }
+        assertEquals("com.google.guava", guava.groupId)
+        assertEquals("31.1-jre", guava.version)
+    }
+
+    @Test
+    fun `a version-catalog accessor with no matching alias is dropped, not guessed`() {
+        val repo = tempRepo(
+            "gradle/libs.versions.toml" to """
+                [libraries]
+                guava = "com.google.guava:guava:31.1-jre"
+            """.trimIndent(),
+            "build.gradle.kts" to """
+                dependencies {
+                    implementation(libs.some.unknown.thing)
+                }
+            """.trimIndent()
+        )
+
+        assertTrue(DependencyParser.parseRepo("payment-service", repo).isEmpty())
     }
 }
