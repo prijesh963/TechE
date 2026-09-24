@@ -105,6 +105,52 @@ class CopilotHandoffServiceTest {
     }
 
     @Test
+    fun `recordPlan saves structured files and steps directly, without parsing any text`() {
+        val index = serviceWithFile("order-service", "src/OrderController.java")
+
+        val plan = CopilotHandoffService.recordPlan(
+            id = "plan-1",
+            request = "add refund support",
+            summary = "Add a refund endpoint that reverses a charge.",
+            files = listOf(
+                PlannedFile("order-service", "src/OrderController.java", ChangeKind.UPDATE, "add the refund handler"),
+                PlannedFile("order-service", "src/RefundService.java", ChangeKind.ADD, "new service to encapsulate refund logic")
+            ),
+            steps = listOf("Add RefundService with a refund(orderId) method.", "Wire OrderController's new endpoint to call it."),
+            indexes = listOf(index)
+        )
+
+        assertEquals(2, plan.files.size)
+        assertEquals(2, plan.steps.size)
+        assertEquals(1, plan.revision)
+        assertFalse(plan.approved)
+    }
+
+    @Test
+    fun `recordPlan drops an UPDATE naming a path the index has never seen, same as importPlan`() {
+        val index = serviceWithFile("order-service", "src/OrderController.java")
+
+        val plan = CopilotHandoffService.recordPlan(
+            id = "plan-1",
+            request = "add refund support",
+            summary = "x",
+            files = listOf(PlannedFile("order-service", "src/DoesNotExist.java", ChangeKind.UPDATE, "invented")),
+            steps = emptyList(),
+            indexes = listOf(index)
+        )
+
+        assertTrue(plan.files.isEmpty())
+    }
+
+    @Test
+    fun `recordPlan increments the revision from the previous plan, same as importPlan`() {
+        val index = serviceWithFile("order-service", "src/OrderController.java")
+        val first = CopilotHandoffService.recordPlan("plan-1", "req", "v1", emptyList(), emptyList(), listOf(index))
+        val second = CopilotHandoffService.recordPlan("plan-1", "req", "v2", emptyList(), emptyList(), listOf(index), previous = first)
+        assertEquals(2, second.revision)
+    }
+
+    @Test
     fun `buildImplementPrompt quotes an UPDATE file's real current content`() {
         val index = serviceWithFile("order-service", "src/OrderController.java", content = "public class OrderController { /* real content */ }")
         val draft = CopilotHandoffService.importPlan(

@@ -4,13 +4,17 @@ import com.creditoptimizer.core.model.ServiceIndex
 import java.io.File
 
 /**
- * Builds the prompts a developer pastes into Copilot Chat, and parses the
- * reply back in — for the three things this project has no local LLM to
- * do itself (see the README's "Why Copilot, not a local model" note):
- * open-ended Q&A, drafting an implementation plan, and writing the
- * approved changes. There is no API that lets a third-party plugin send
- * text into Copilot Chat programmatically, so every step here is
- * clipboard-mediated by design, not a shortcut skipped for time.
+ * Builds the prompts a developer pastes into Copilot Chat, and turns
+ * Copilot's output back into a [FeaturePlan] — either parsed from pasted
+ * text ([importPlan]) or recorded directly from structured arguments
+ * ([recordPlan], for an MCP tool call where Copilot already supplies
+ * files/steps rather than free text). There is no API that lets a
+ * third-party plugin send text into Copilot Chat programmatically, so
+ * Plan/Implement stay clipboard-mediated by design; [recordPlan] is the
+ * one path that skips the clipboard, because drafting a plan only ever
+ * writes to this project's own plan storage, never to source code, and
+ * never sets [FeaturePlan.approved] - approval and Implement stay a
+ * human action regardless of how the draft got recorded.
  *
  * The value this project adds is not the reasoning - that's still
  * Copilot's job, and still spends credits doing it. It's *grounding*:
@@ -105,11 +109,44 @@ object CopilotHandoffService {
         val path = match.groupValues[3].trim()
         val reason = match.groupValues[4].trim()
 
-        if (kind != ChangeKind.ADD) {
-            val existing = knownPaths[service] ?: return null
-            if (path !in existing) return null
-        }
-        return PlannedFile(service, path, kind, reason)
+        val file = PlannedFile(service, path, kind, reason)
+        return if (isKnownOrAdd(file, knownPaths)) file else null
+    }
+
+    /**
+     * Records a plan drafted directly (e.g. by an MCP tool call, where the
+     * caller already supplies structured files/steps rather than text to
+     * parse) as a new revision — the same invented-path-dropped rule
+     * [importPlan] applies to a pasted reply, just applied to already-
+     * structured input instead of parsed lines. Read-only with respect to
+     * source code: this only ever writes to plan storage, never to a
+     * project file, and never sets [FeaturePlan.approved] - that stays a
+     * human action via [approve].
+     */
+    fun recordPlan(
+        id: String,
+        request: String,
+        summary: String,
+        files: List<PlannedFile>,
+        steps: List<String>,
+        indexes: List<ServiceIndex>,
+        previous: FeaturePlan? = null
+    ): FeaturePlan {
+        val knownPaths: Map<String, Set<String>> = indexes.associate { it.service.name to it.fileHashes.keys }
+        return FeaturePlan(
+            id = id,
+            request = request,
+            revision = (previous?.revision ?: 0) + 1,
+            summary = summary,
+            files = files.filter { isKnownOrAdd(it, knownPaths) },
+            steps = steps,
+            approved = false
+        )
+    }
+
+    private fun isKnownOrAdd(file: PlannedFile, knownPaths: Map<String, Set<String>>): Boolean {
+        if (file.kind == ChangeKind.ADD) return true
+        return file.path in (knownPaths[file.service] ?: return false)
     }
 
     fun approve(plan: FeaturePlan): FeaturePlan = plan.copy(approved = true)

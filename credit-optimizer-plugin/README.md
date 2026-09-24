@@ -56,7 +56,7 @@ repos are indexed.
 
 ## What's actually built, and tested
 
-`:core` — 64 tests, all passing (`gradle :core:test`):
+`:core` — 67 tests, all passing (`gradle :core:test`):
 
 - **`JavaServiceParser`** (`core/src/main/kotlin/.../parse/JavaServiceParser.kt`)
   — extracts from `.java` source on disk, no compiled classpath needed:
@@ -153,12 +153,14 @@ repos are indexed.
   guesses at what they mean — that's still Copilot's job, same boundary
   `FreePathRouter` draws.
 - **`CopilotHandoffService`** (`core/src/main/kotlin/.../handoff/CopilotHandoffService.kt`)
-  — builds the Ask/Plan/Implement prompts and parses a pasted Copilot
-  reply into a [FeaturePlan]: an `UPDATE`/`DELETE` naming a path the
-  index has never indexed for that service is dropped, never trusted;
-  `buildImplementPrompt` refuses (`null`) for a draft plan and quotes an
-  `UPDATE` file's real current on-disk content, not Copilot's memory of
-  it.
+  — builds the Ask/Plan/Implement prompts and turns Copilot's output
+  back into a [FeaturePlan] two ways: `importPlan` parses a pasted reply
+  (clipboard flow), `recordPlan` takes already-structured files/steps
+  directly (the MCP `draft_plan` tool's call). Both apply the same rule:
+  an `UPDATE`/`DELETE` naming a path the index has never indexed for
+  that service is dropped, never trusted. `buildImplementPrompt` refuses
+  (`null`) for a draft plan and quotes an `UPDATE` file's real current
+  on-disk content, not Copilot's memory of it.
 - **`PlanStorage`** — every plan revision, one JSON file per plan id,
   same shape as `IndexStorage`; revisions are kept, not overwritten.
 
@@ -211,11 +213,11 @@ repos are indexed.
   just for this org. MCP is the real modern replacement, and it's what
   `:mcp-server` now provides for Q&A (`ask_index`) — no clipboard needed
   there once the org's "MCP servers in Copilot" admin policy is turned
-  on (off by default). Plan/Implement stay clipboard-mediated for now
-  because handing Copilot a tool that can approve or write files raises
-  a real governance question — "should the model be able to call the
-  tool that approves its own plan" — deliberately not answered by
-  bundling it into this pass. See "MCP server" below.
+  on (off by default). Drafting a plan is also now available over MCP
+  (`draft_plan`) — but Approve and Implement still aren't: handing
+  Copilot a tool that can write files or approve its own plan is a real
+  governance line, and this project draws it there on purpose, not by
+  omission. See "MCP server" below.
 - `PluginSettings` — per-project, persisted sibling-repo paths.
 - `CreditOptimizerSettingsConfigurable` (Settings > Tools > Credit
   Optimizer) — a real settings page: a list with `+`/`-` toolbar buttons,
@@ -226,13 +228,25 @@ repos are indexed.
 
 ## MCP server
 
-`ask_index` — one tool, deliberately scoped: answers a question the same
-way the Tool Window's Ask box does (`FreePathRouter` first, falling back
-to `ContextRetrieval`'s closest facts), but callable by Copilot's own
-agent loop instead of requiring a developer to open the Tool Window at
-all. It reads the same on-disk index the plugin's Reindex button writes
-— this process never builds the index itself, so there's exactly one
-indexing path, not two that could disagree.
+Two tools, deliberately scoped where the line is drawn:
+
+- **`ask_index`** — answers a question the same way the Tool Window's
+  Ask box does (`FreePathRouter` first, falling back to
+  `ContextRetrieval`'s closest facts), but callable by Copilot's own
+  agent loop instead of requiring a developer to open the Tool Window.
+- **`draft_plan`** — takes a feature request plus Copilot's own
+  structured summary/files/steps (Copilot does the reasoning; this tool
+  just records it) and saves it as the next plan revision — the exact
+  same [FeaturePlan] the Tool Window's "Current plan" reads, via the
+  exact same invented-path-dropped rule `importPlan` already applies to
+  a pasted reply. It **never writes a source file and never sets a plan
+  approved** — those stay a human action in the Tool Window. A plan
+  drafted over MCP shows up there immediately, ready to Approve.
+
+Both read and write the exact same on-disk state
+(`.idea/creditOptimizer/`) the plugin's Tool Window does — this process
+never builds the index itself, so there's exactly one indexing path,
+not two that could disagree.
 
 **Requires the org's "MCP servers in Copilot" admin policy to be on** —
 disabled by default; blocks any MCP server for anyone in the org until
@@ -251,13 +265,16 @@ an admin enables it. Setup once that's done:
    (the project path is the same one the plugin already indexes into
    `.idea/creditOptimizer/` — reindex there first, via the Tool Window,
    or the MCP tool has nothing to read).
-3. In Copilot Chat, type `/mcp.credit-optimizer.ask_index` or just ask a
-   question naturally — agent mode can call the tool on its own once
-   it's approved (there's a per-server/per-tool auto-approve setting if
-   you don't want to confirm every call).
+3. In Copilot Chat, type `/mcp.credit-optimizer.ask_index` or
+   `/mcp.credit-optimizer.draft_plan`, or just talk naturally — agent
+   mode can call either tool on its own once approved (there's a
+   per-server/per-tool auto-approve setting if you don't want to confirm
+   every call).
 
-**Plan/Implement are not exposed over MCP.** Only `ask_index` is — see
-the Tool Window section above for why.
+**Approve and Implement are still not exposed over MCP, on purpose** —
+see the Tool Window section above for the governance reasoning. After
+`draft_plan` records a draft, open the Tool Window to Approve it and
+Copy Implement Prompt.
 
 ## Not yet built
 
@@ -288,13 +305,20 @@ the Tool Window section above for why.
   question (should the model be able to call the tool that approves its
   own plan) that this pass deliberately left for the clipboard flow to
   keep answering, not solved by exposing it and hoping for the best.
-- **A full MCP protocol round-trip, verified end to end.** `:mcp-server`
-  is confirmed to compile against the real SDK API and to start, stay
-  running, and not crash when fed a real `initialize` request in this
-  sandbox — but that's process-level verification, not a confirmed
-  successful JSON-RPC response observed over stdout (buffering made that
-  awkward to check by hand). The real proof is wiring it into a live
-  IntelliJ + Copilot Chat session once the org's MCP policy is on.
+- **A full MCP protocol round-trip, verified end to end.** Both
+  `:mcp-server` tools are confirmed to compile against the real SDK API
+  (verified via `javap` on the resolved jars), and the process starts,
+  stays running, and never crashes when fed real requests in this
+  sandbox - including a full `draft_plan` call. What isn't confirmed by
+  hand: a successful JSON-RPC response actually observed over stdout
+  (output buffering made that awkward to check without a real MCP
+  client), so `draft_plan`'s write side-effect (a plan file appearing
+  under `.idea/creditOptimizer/plans/`) wasn't observed from a live call
+  either, only from `:core`'s own unit tests of the same
+  `recordPlan`/`PlanStorage` code the tool calls into. The real proof for
+  both tools is wiring it into a live IntelliJ + Copilot Chat session.
+- **Implement over MCP.** Deliberately not built - see "MCP server"
+  above for the governance line this project draws around it.
 
 ## Measuring it for real
 
