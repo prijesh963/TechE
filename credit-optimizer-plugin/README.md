@@ -252,14 +252,21 @@ not two that could disagree.
 disabled by default; blocks any MCP server for anyone in the org until
 an admin enables it. Setup once that's done:
 
-1. Build it: `gradle :mcp-server:installDist` (produces
-   `mcp-server/build/install/mcp-server/bin/mcp-server`).
+1. Download the `credit-optimizer-mcp-server` artifact from a green CI
+   run (same place the plugin's own zip comes from — no local Gradle
+   build needed, and CI already builds it on every push). Unzip it
+   anywhere; the launcher scripts are `mcp-server/bin/mcp-server.bat`
+   (Windows) and `mcp-server/bin/mcp-server` (Unix). Building it
+   yourself (`gradle :mcp-server:distZip`) still works, but the wrapper
+   has to reach `services.gradle.org` to download Gradle itself the
+   first time — the CI artifact skips that entirely.
 2. In IntelliJ: **Tools > GitHub Copilot > Model Context Protocol (MCP)
-   > Configure**, and add:
+   > Configure**, and add (Windows path shown; use `mcp-server` with no
+   extension on macOS/Linux):
    ```json
    { "servers": { "credit-optimizer": {
-       "command": "/absolute/path/to/mcp-server/build/install/mcp-server/bin/mcp-server",
-       "args": ["/absolute/path/to/your/project"]
+       "command": "C:\\absolute\\path\\to\\mcp-server\\bin\\mcp-server.bat",
+       "args": ["C:\\absolute\\path\\to\\your\\project"]
    } } }
    ```
    (the project path is the same one the plugin already indexes into
@@ -334,7 +341,15 @@ computed from your own usage — not estimated.
 
 ```bash
 cd credit-optimizer-plugin
-gradle :core:test              # runs today, anywhere
-gradle :mcp-server:installDist # runs today, anywhere
-gradle :plugin:buildPlugin     # needs JetBrains' distribution hosts — CI only from here
+gradle :core:test          # runs today, anywhere
+gradle :mcp-server:distZip # runs today, anywhere - but CI already builds and uploads this, see below
+gradle :plugin:buildPlugin # needs JetBrains' distribution hosts — CI only from here
 ```
+
+Both `:mcp-server` and `:plugin` are built and uploaded as downloadable
+CI artifacts on every push to this branch — `credit-optimizer-mcp-server`
+and `credit-optimizer-plugin` respectively. Building either locally is
+only for development; end users should download the CI artifact instead
+of running Gradle themselves (Gradle's wrapper needs to reach
+`services.gradle.org` the first time it runs, which fails behind some
+corporate proxies even when a browser works fine).

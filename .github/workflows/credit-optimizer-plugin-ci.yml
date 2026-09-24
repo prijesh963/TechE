@@ -45,7 +45,12 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: Build :mcp-server
-        run: ./gradlew :mcp-server:installDist --console=plain
+        run: ./gradlew :mcp-server:distZip --console=plain
+      - name: Upload built mcp-server
+        uses: actions/upload-artifact@v4
+        with:
+          name: credit-optimizer-mcp-server
+          path: credit-optimizer-plugin/mcp-server/build/distributions/*.zip
 
   plugin:
     # :plugin resolves the IntelliJ Platform distribution from JetBrains'
