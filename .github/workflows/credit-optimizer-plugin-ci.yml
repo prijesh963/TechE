@@ -31,6 +31,22 @@ jobs:
       - name: Test :core
         run: ./gradlew :core:test --console=plain
 
+  mcp-server:
+    # :mcp-server depends on the MCP Kotlin SDK, an ordinary Maven Central
+    # library, not IntelliJ Platform — runs anywhere, same as :core.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: credit-optimizer-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Build :mcp-server
+        run: ./gradlew :mcp-server:installDist --console=plain
+
   plugin:
     # :plugin resolves the IntelliJ Platform distribution from JetBrains'
     # own hosts, which this repo's development sandbox cannot reach (see

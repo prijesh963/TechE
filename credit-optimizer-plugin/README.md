@@ -11,12 +11,22 @@ See the design discussion this was built from for the full architecture,
 the token-economics reasoning, and the UI mockups. This README covers
 what actually exists in code, what is verified, and what is not.
 
-## Two modules, on purpose
+## Three modules, on purpose
 
 - **`:core`** — repo discovery, the lightweight Java parser, local JSON
   storage, the free-path router, the usage log. Plain Kotlin/JVM, **no
   IntelliJ Platform dependency at all.** Fully built and tested in any
   environment, including the sandbox this was developed in.
+- **`:mcp-server`** — exposes `:core`'s router/retrieval as an MCP tool,
+  so Copilot Chat can call directly into the local index. Also plain
+  Kotlin/JVM (the MCP Kotlin SDK is an ordinary Maven Central library,
+  not an IntelliJ Platform dependency) — **buildable, runnable, and
+  actually exercised in this sandbox**, unlike `:plugin`: compiled
+  against the real SDK API (confirmed via `javap` on the resolved jars,
+  not guessed from docs that turned out to disagree with each other on
+  one call), and run end-to-end against a real index fixture to confirm
+  it starts, doesn't crash, and doesn't exit before a client would ever
+  connect. See "MCP server" below.
 - **`:plugin`** — the IntelliJ Platform shell (tool window, quick-ask
   action, settings) that calls `:core` for every real decision. Requires
   resolving the IntelliJ Platform distribution from JetBrains' own hosts,
@@ -194,16 +204,18 @@ repos are indexed.
   "one feature at a time" session rule. A question that needs Copilot
   now also auto-copies its own grounded prompt to the clipboard, instead
   of just saying so.
-  **Why clipboard, not `@mention` or an MCP `/` prompt:** GitHub Copilot
-  Extensions (the only mechanism that ever let a third-party tool
-  respond to a typed `@mention` across IDEs) were shut down entirely on
-  November 10, 2025. MCP would have been the modern equivalent
-  (`/mcp.credit-optimizer.plan`), but this project's target org has the
-  "MCP servers in Copilot" admin policy disabled — which blocks *any*
-  MCP server for *any* user in that org, not just this one. With both
-  closed and no other API to send text into Copilot Chat
-  programmatically, a copy/paste hand-off is the actual ceiling of what's
-  possible today, not a placeholder for something better.
+  **Why clipboard, not `@mention` or an MCP prompt, for Plan/Implement:**
+  GitHub Copilot Extensions (the only mechanism that ever let a
+  third-party tool respond to a typed `@mention` across IDEs) were shut
+  down entirely on November 10, 2025 — that path is gone for good, not
+  just for this org. MCP is the real modern replacement, and it's what
+  `:mcp-server` now provides for Q&A (`ask_index`) — no clipboard needed
+  there once the org's "MCP servers in Copilot" admin policy is turned
+  on (off by default). Plan/Implement stay clipboard-mediated for now
+  because handing Copilot a tool that can approve or write files raises
+  a real governance question — "should the model be able to call the
+  tool that approves its own plan" — deliberately not answered by
+  bundling it into this pass. See "MCP server" below.
 - `PluginSettings` — per-project, persisted sibling-repo paths.
 - `CreditOptimizerSettingsConfigurable` (Settings > Tools > Credit
   Optimizer) — a real settings page: a list with `+`/`-` toolbar buttons,
@@ -211,6 +223,41 @@ repos are indexed.
   field, bound to the exact same `PluginSettings` state the XML already
   round-trips. Hand-editing `.idea/creditOptimizer.xml` still works, it's
   just no longer the only way in.
+
+## MCP server
+
+`ask_index` — one tool, deliberately scoped: answers a question the same
+way the Tool Window's Ask box does (`FreePathRouter` first, falling back
+to `ContextRetrieval`'s closest facts), but callable by Copilot's own
+agent loop instead of requiring a developer to open the Tool Window at
+all. It reads the same on-disk index the plugin's Reindex button writes
+— this process never builds the index itself, so there's exactly one
+indexing path, not two that could disagree.
+
+**Requires the org's "MCP servers in Copilot" admin policy to be on** —
+disabled by default; blocks any MCP server for anyone in the org until
+an admin enables it. Setup once that's done:
+
+1. Build it: `gradle :mcp-server:installDist` (produces
+   `mcp-server/build/install/mcp-server/bin/mcp-server`).
+2. In IntelliJ: **Tools > GitHub Copilot > Model Context Protocol (MCP)
+   > Configure**, and add:
+   ```json
+   { "servers": { "credit-optimizer": {
+       "command": "/absolute/path/to/mcp-server/build/install/mcp-server/bin/mcp-server",
+       "args": ["/absolute/path/to/your/project"]
+   } } }
+   ```
+   (the project path is the same one the plugin already indexes into
+   `.idea/creditOptimizer/` — reindex there first, via the Tool Window,
+   or the MCP tool has nothing to read).
+3. In Copilot Chat, type `/mcp.credit-optimizer.ask_index` or just ask a
+   question naturally — agent mode can call the tool on its own once
+   it's approved (there's a per-server/per-tool auto-approve setting if
+   you don't want to confirm every call).
+
+**Plan/Implement are not exposed over MCP.** Only `ask_index` is — see
+the Tool Window section above for why.
 
 ## Not yet built
 
@@ -236,6 +283,18 @@ repos are indexed.
   `:plugin` module is "written correctly against the API," not "seen to
   work" — the same honest distinction the `intellij-main` branch's own
   plugin draws between a green CI build and a real install.
+- **Plan/Implement over MCP.** `:mcp-server` exposes read-only Q&A only.
+  Adding tools that stage or write a plan raises a real governance
+  question (should the model be able to call the tool that approves its
+  own plan) that this pass deliberately left for the clipboard flow to
+  keep answering, not solved by exposing it and hoping for the best.
+- **A full MCP protocol round-trip, verified end to end.** `:mcp-server`
+  is confirmed to compile against the real SDK API and to start, stay
+  running, and not crash when fed a real `initialize` request in this
+  sandbox — but that's process-level verification, not a confirmed
+  successful JSON-RPC response observed over stdout (buffering made that
+  awkward to check by hand). The real proof is wiring it into a live
+  IntelliJ + Copilot Chat session once the org's MCP policy is on.
 
 ## Measuring it for real
 
@@ -252,5 +311,6 @@ computed from your own usage — not estimated.
 ```bash
 cd credit-optimizer-plugin
 gradle :core:test              # runs today, anywhere
+gradle :mcp-server:installDist # runs today, anywhere
 gradle :plugin:buildPlugin     # needs JetBrains' distribution hosts — CI only from here
 ```
