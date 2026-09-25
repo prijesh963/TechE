@@ -719,6 +719,32 @@ the card says so in place of a number rather than silently reading as zero.
 
 ---
 
+### 4.17 `/implement`'s SEARCH/REPLACE parser required an exact marker line
+
+`parseFileEdits` (`packages/planner/src/file-edits.ts`) matched
+`<<<<<<< SEARCH` and `=======` only when nothing but whitespace followed the
+keyword before the line break. Copilot routinely labels a marker it was told
+to leave bare — `SEARCH:`, `SEARCH (existing)`, `======= (updated)` — and one
+labeled marker made the whole regex fail to match anywhere in the response,
+so every block in that reply was dropped, not just the labeled one. On an
+`update`-kind change this surfaced as `/implement` refusing every file with
+"no usable edits were produced", indistinguishable from Copilot answering in
+prose instead of the requested format.
+
+The marker lines now tolerate trailing text (`SEARCH[^\n]*\n`,
+`=======[^\n]*\n`); the closing `>>>>>>> REPLACE` needs no such tolerance
+since nothing is expected to follow it on the same line. The refusal reason
+also now quotes an excerpt of what Copilot actually replied, so a genuine
+prose refusal is now visibly different from a formatting slip in the Output
+channel instead of both reading as the same opaque message.
+
+**Cost:** low — a model that says something other than "here is a search/
+replace block" is still not something the parser can act on; this only
+widens what it recognizes as one, and closes the gap between "parsed
+nothing" and "cannot tell why" for whatever still doesn't match.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

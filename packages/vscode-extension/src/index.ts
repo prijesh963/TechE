@@ -4318,7 +4318,10 @@ async function editExistingFile(
   const edits = parseFileEdits(response);
 
   if (edits.length === 0) {
-    return { reason: "no usable edits were produced" };
+    // A blank reason here has no diagnostic value: the model did answer, the
+    // parser just found no SEARCH/REPLACE block in it, and the only way to
+    // tell a formatting slip from a refusal is to see what it actually said.
+    return { reason: `no usable edits were produced — Copilot replied: "${excerptReply(response)}"` };
   }
 
   const result = applyFileEdits(original, edits);
@@ -4732,6 +4735,17 @@ async function requestLmText(
 function unfence(text: string): string {
   const fenced = /^\s*```[a-zA-Z0-9+-]*\n([\s\S]*?)\n?```\s*$/.exec(text.trim());
   return (fenced ? fenced[1] : text).trim() + "\n";
+}
+
+/** Bounded length for quoting a model reply back into a refusal reason. */
+const REPLY_EXCERPT = 200;
+
+/** A model's reply, shortened for display in a one-line refusal reason. */
+function excerptReply(text: string): string {
+  const collapsed = text.trim().replace(/\s+/g, " ");
+  return collapsed.length > REPLY_EXCERPT
+    ? `${collapsed.slice(0, REPLY_EXCERPT - 1)}…`
+    : collapsed;
 }
 
 async function streamLmResponse(

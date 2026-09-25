@@ -45,8 +45,12 @@ export interface EditApplication {
   applied: number;
 }
 
+// The rest of the marker line is ignored rather than required to be blank:
+// models routinely add a label ("SEARCH:", "SEARCH (existing)") to a marker
+// they were told to leave bare, and requiring an exact line breaks every
+// block in the response over one habit, not the ones that actually mismatch.
 const BLOCK =
-  /<{5,9}\s*SEARCH\s*\n([\s\S]*?)\n?={5,9}\s*\n([\s\S]*?)\n?>{5,9}\s*REPLACE/g;
+  /<{5,9}\s*SEARCH[^\n]*\n([\s\S]*?)\n?={5,9}[^\n]*\n([\s\S]*?)\n?>{5,9}\s*REPLACE/g;
 
 /** How much of a searched string to quote back when an edit is refused. */
 const REFUSAL_EXCERPT = 60;

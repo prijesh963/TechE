@@ -38,6 +38,42 @@ describe("parseFileEdits", () => {
     ]);
   });
 
+  it("tolerates a label on the SEARCH marker line", () => {
+    // Models routinely add "SEARCH:" or "SEARCH (existing)" even when told to
+    // leave the marker bare. Requiring an exact line would drop every block
+    // in the response over one habit, not just the ones that mismatch.
+    const edits = parseFileEdits(
+      [
+        "<<<<<<< SEARCH:",
+        "  place(invoice: Invoice): void {",
+        "=======",
+        "  place(invoice: Invoice, approver: User): void {",
+        ">>>>>>> REPLACE"
+      ].join("\n")
+    );
+
+    expect(edits).toEqual([
+      {
+        search: "  place(invoice: Invoice): void {",
+        replace: "  place(invoice: Invoice, approver: User): void {"
+      }
+    ]);
+  });
+
+  it("tolerates a label on the ======= divider line", () => {
+    const edits = parseFileEdits(
+      [
+        "<<<<<<< SEARCH",
+        "  place(invoice: Invoice): void {",
+        "======= (updated)",
+        "  place(invoice: Invoice, approver: User): void {",
+        ">>>>>>> REPLACE"
+      ].join("\n")
+    );
+
+    expect(edits).toHaveLength(1);
+  });
+
   it("ignores prose around the blocks", () => {
     // A model that explains itself before answering has still answered.
     const edits = parseFileEdits(
