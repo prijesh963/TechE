@@ -4327,7 +4327,9 @@ async function editExistingFile(
     // A blank reason here has no diagnostic value: the model did answer, the
     // parser just found no SEARCH/REPLACE block in it, and the only way to
     // tell a formatting slip from a refusal is to see what it actually said.
-    return { reason: `no usable edits were produced — Copilot replied: "${excerptReply(response)}"` };
+    return {
+      reason: `no usable edits were produced — Copilot replied: "${excerptReply(response)}"`
+    };
   }
 
   const result = applyFileEdits(original, edits);
