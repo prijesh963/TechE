@@ -3437,6 +3437,12 @@ async function reportReviewFindings(
         ? ` — \`${finding.filePath}${finding.line ? `:${finding.line}` : ""}\``
         : "";
       stream.markdown(`- **${finding.severity}** ${finding.title}${where}\n`);
+      // The title names the category; the details say which command, which
+      // status, which output. Without this a developer sees "Validation
+      // failed" and nothing that tells them what to go fix.
+      if (finding.details) {
+        stream.markdown(`  ${finding.details}\n`);
+      }
     }
     stream.markdown("\n");
   }
