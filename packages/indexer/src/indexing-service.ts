@@ -1437,7 +1437,15 @@ function extractSymbolsByPattern(filePath: string, text: string): CodeSymbol[] {
     }
   }
 
-  return dedupeSymbols(symbols).slice(0, 100);
+  // Bounded against a pathological file (a minified bundle, generated code)
+  // producing unbounded matches, not against a real one: a hand-written class
+  // with more than a couple hundred methods is unusual but not impossible,
+  // and a symbol dropped here is dropped from the index outright — invisible
+  // to `symbolNames()` no matter how "uncapped" that read is, since it only
+  // ever sees what got stored. The cap used to sit at 100, low enough that a
+  // genuinely large service class silently lost its later methods and
+  // grounding reported them as fabrications.
+  return dedupeSymbols(symbols).slice(0, 2000);
 }
 
 function extractImports(text: string): string[] {

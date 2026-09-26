@@ -241,6 +241,28 @@ describe("GroundingService", () => {
     expect(report.verified.map((r) => r.claim.text)).toContain("LastDeclared.run()");
   });
 
+  it("indexes a symbol declared past the old 100-symbol storage cap", async () => {
+    // Regression: extraction itself capped a file at 100 symbols before
+    // storage, so a real method declared past that point never made it into
+    // the index at all — "uncapped" reads like symbolNames() only see what
+    // got stored, and reported it as fabricated no matter how it was read.
+    const manyMethods = Array.from(
+      { length: 150 },
+      (_, i) => `  public void method${i}() {}`
+    ).join("\n");
+    const startPath = await createRepo({
+      "src/Big.java": `public class Big {\n${manyMethods}\n  public void lastMethod() {}\n}`
+    });
+
+    const report = await new GroundingService().verify(
+      "See `lastMethod()` in `src/Big.java`.",
+      { startPath }
+    );
+
+    expect(report.unverified).toEqual([]);
+    expect(report.verified.map((r) => r.claim.text)).toContain("lastMethod()");
+  });
+
   it("says nothing was verified rather than returning a clean report", async () => {
     // An empty report from a missing index would read as "all clear", which is
     // the same failure as an empty context reading as "the repo is empty".
