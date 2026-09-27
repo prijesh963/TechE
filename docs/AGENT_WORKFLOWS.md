@@ -350,14 +350,16 @@ claim does not say which.
 ## Using this without the extension
 
 Where policy forbids installing extensions, the MCP server exposes the same
-repo intelligence as 30 tools to plain Copilot agent mode, Codex, Claude Code
-or any other MCP client — including the session model itself:
+repo intelligence — plus one plan-gated write tool — as 31 tools to plain
+Copilot agent mode, Codex, Claude Code or any other MCP client — including
+the session model itself:
 
-| Tool                         | What it gives a client that is not the extension                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- |
-| `get_session`                | The feature, phase, confirmed decisions and plan versions. Reads without parking the session.     |
-| `get_approved_plan_contract` | The approved plan: files, reasons, each file's content at plan time, and the decisions behind it. |
-| `verify_claims`              | Checks an answer's paths, citations and symbols against the index.                                |
+| Tool                         | What it gives a client that is not the extension                                                                                                                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_session`                | The feature, phase, confirmed decisions and plan versions. Reads without parking the session.                                                                                                                                                           |
+| `get_approved_plan_contract` | The approved plan: files, reasons, each file's content at plan time, and the decisions behind it.                                                                                                                                                       |
+| `verify_claims`              | Checks an answer's paths, citations and symbols against the index.                                                                                                                                                                                      |
+| `apply_plan_edit`            | Writes to disk: search/replace edits to a file the approved plan lists as an `update`, refusing anything unauthorized, drifted, or not matching its search text exactly once. The only write tool; the MCP client's own tool-call approval is the gate. |
 
 ```bash
 npm run cli -- mcp config --path /path/to/repo   # writes .vscode/mcp.json

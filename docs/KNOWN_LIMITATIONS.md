@@ -775,6 +775,34 @@ needs it too.
 
 ---
 
+### 4.19 `apply_plan_edit`'s v1 scope: update-only, one file per call
+
+The MCP server's write tool (`packages/mcp-server/src/tools.ts`) mirrors
+`/implement`'s search/replace discipline, but narrower on purpose for a
+first cut:
+
+- **Only `update`-kind changes.** A plan's `add`/`delete` changes are
+  refused outright. Applying an `add`'s outline, or performing a `delete`,
+  needs different handling — an `add` has no `search` text to match against
+  — and neither existed yet when this shipped.
+- **Freshness is checked against the whole plan, not just the file being
+  edited** (same as `/implement`), so a drift in an unrelated file blocks
+  editing this one too. Simpler and consistent with the existing behavior,
+  but stricter than it has to be for a caller only touching one file.
+- **One file per call.** A feature touching several files needs one
+  `apply_plan_edit` call per file; there is no batch form. Since each call
+  is independently gated by the IDE's own tool-call approval, this mirrors
+  `/implement`'s own per-file application inside a single approved run
+  rather than being a real limitation — but it does mean a plan with many
+  files means many approval prompts, one per file, in one Copilot Chat turn.
+
+**Cost:** low for `add`/`delete` — those are rarer than `update` in practice,
+and refusing beats guessing. The freshness scope is worth revisiting only if
+a real workflow hits it; nothing here blocks the read side of the four
+phases.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

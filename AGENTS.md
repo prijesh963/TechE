@@ -116,7 +116,7 @@ copilot-architect/
 │   ├── reviewer/        review report generation
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 30 tools
+│   ├── mcp-server/      MCP server and 31 tools
 │   ├── cli/             CLI entry point and command routing
 │   ├── vscode-extension the @architect chat participant and dashboard
 │   └── web/             optional local web UI shell (thin)
@@ -156,8 +156,14 @@ the other. If a shell needs repo intelligence, it imports the service.
 ## Implemented
 
 1. TypeScript CLI with 24 commands including `demo`.
-2. Local MCP server with 30 tools, including the session, plan contract and
-   grounding — so a policy-blocked developer gets the same product.
+2. Local MCP server with 31 tools, including the session, plan contract and
+   grounding — so a policy-blocked developer gets the same product. One tool,
+   `apply_plan_edit`, writes to disk: it applies search/replace edits to a
+   file the approved plan lists as an `update`, refusing anything the plan
+   didn't authorize, anything drifted since the plan was read, and any edit
+   that doesn't match its search text exactly once — the same discipline
+   `/implement` already enforces in the VS Code extension, gated by the
+   MCP client's own tool-call approval instead of a chat button.
 3. VS Code extension with the `@architect` chat participant and four phases.
 4. Repo analysis and discovery; language/framework/package-manager detection.
 5. Adapter architecture with registry, confidence scoring, generic fallback.
@@ -454,7 +460,8 @@ Cover:
   contains "test")
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
-- MCP tools (all 30 tools)
+- MCP tools (all 31 tools, including apply_plan_edit's plan-authorization,
+  freshness, and unique-match refusals)
 - role prompt rendering
 - instructions generation and validation
 - handoff generation (approval gating, git checkpoint)

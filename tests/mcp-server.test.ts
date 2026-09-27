@@ -6,6 +6,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SessionService } from "../packages/session/src/index.js";
+import {
+  createPlanContract,
+  writeApprovedPlan
+} from "../packages/planner/src/index.js";
 
 import {
   CopilotChatMcpConfigService,
@@ -509,6 +513,157 @@ describe("the session model over MCP", () => {
     expect(data.unverified.map((entry) => entry.claim.text)).toEqual(["src/Ghost.ts"]);
   });
 });
+
+describe("apply_plan_edit", () => {
+  it("refuses when no plan has been approved", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "apply_plan_edit", {
+      relativePath: "src/OrderService.ts",
+      edits: [{ search: "place() {}", replace: "place() { return true; }" }]
+    });
+    const data = result.data as { ok: boolean; reason: string };
+
+    expect(data.ok).toBe(false);
+    expect(data.reason).toContain("no plan has been approved");
+    expect(await readFile(path.join(repoRoot, "src/OrderService.ts"), "utf8")).toBe(
+      "export class OrderService { place() {} }"
+    );
+  });
+
+  it("refuses a path the approved plan never named", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    await approvePlan(repoRoot, [
+      { kind: "update", relativePath: "src/OrderService.ts", rationale: "test" }
+    ]);
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "apply_plan_edit", {
+      relativePath: "src/Unrelated.ts",
+      edits: [{ search: "x", replace: "y" }]
+    });
+    const data = result.data as { ok: boolean; reason: string };
+
+    expect(data.ok).toBe(false);
+    expect(data.reason).toContain("not part of the approved plan");
+  });
+
+  it("refuses a path the plan lists as add, not update", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    await approvePlan(repoRoot, [
+      { kind: "add", relativePath: "src/NewFile.ts", rationale: "test" }
+    ]);
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "apply_plan_edit", {
+      relativePath: "src/NewFile.ts",
+      edits: [{ search: "x", replace: "y" }]
+    });
+    const data = result.data as { ok: boolean; reason: string };
+
+    expect(data.ok).toBe(false);
+    expect(data.reason).toContain('planned as "add"');
+  });
+
+  it("refuses rather than writes when the search text is ambiguous", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts":
+        "export class OrderService {\n  place() {}\n  place() {}\n}"
+    });
+    await approvePlan(repoRoot, [
+      { kind: "update", relativePath: "src/OrderService.ts", rationale: "test" }
+    ]);
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "apply_plan_edit", {
+      relativePath: "src/OrderService.ts",
+      edits: [{ search: "  place() {}", replace: "  place() { return true; }" }]
+    });
+    const data = result.data as { ok: boolean; reason: string };
+
+    expect(data.ok).toBe(false);
+    expect(data.reason).toContain("ambiguous");
+    expect(
+      await readFile(path.join(repoRoot, "src/OrderService.ts"), "utf8")
+    ).toContain("place() {}\n  place() {}");
+  });
+
+  it("refuses when the file drifted since the plan was approved", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    await approvePlan(repoRoot, [
+      {
+        kind: "update",
+        relativePath: "src/OrderService.ts",
+        rationale: "test",
+        beforeHash: "not-the-real-hash"
+      }
+    ]);
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "apply_plan_edit", {
+      relativePath: "src/OrderService.ts",
+      edits: [{ search: "place() {}", replace: "place() { return true; }" }]
+    });
+    const data = result.data as { ok: boolean; reason: string; drifted: string[] };
+
+    expect(data.ok).toBe(false);
+    expect(data.reason).toContain("moved since this plan was written");
+    expect(data.drifted).toContain("src/OrderService.ts");
+    expect(await readFile(path.join(repoRoot, "src/OrderService.ts"), "utf8")).toBe(
+      "export class OrderService { place() {} }"
+    );
+  });
+
+  it("applies a clean edit to a file the approved plan authorizes", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService {\n  place() {}\n}"
+    });
+    await approvePlan(repoRoot, [
+      { kind: "update", relativePath: "src/OrderService.ts", rationale: "test" }
+    ]);
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "apply_plan_edit", {
+      relativePath: "src/OrderService.ts",
+      edits: [{ search: "  place() {}", replace: "  place() { return true; }" }]
+    });
+    const data = result.data as { ok: boolean; written: string; editsApplied: number };
+
+    expect(data.ok).toBe(true);
+    expect(data.written).toBe("src/OrderService.ts");
+    expect(data.editsApplied).toBe(1);
+    expect(await readFile(path.join(repoRoot, "src/OrderService.ts"), "utf8")).toBe(
+      "export class OrderService {\n  place() { return true; }\n}"
+    );
+  });
+});
+
+async function approvePlan(
+  workspaceRoot: string,
+  changes: Array<{
+    kind: "add" | "update" | "delete";
+    relativePath: string;
+    rationale: string;
+    beforeHash?: string;
+  }>
+): Promise<void> {
+  const plan = createPlanContract({
+    request: "test request",
+    version: 1,
+    decisions: [],
+    changes
+  });
+  await writeApprovedPlan(workspaceRoot, plan);
+}
 
 async function createConnectedServer(repoRoot: string) {
   const server = createCopilotArchitectMcpServer({ startPath: repoRoot });

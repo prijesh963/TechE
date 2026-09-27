@@ -71,6 +71,15 @@ All tools return structured JSON. Missing artifacts return a structured `{ ok: f
 | ----------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `generate_feature_plan` | `featureRequest`, `startPath?`, **`approved: true`** | Write plan artifacts (`latest-plan.json`, `latest-plan.md`) — requires `approved=true`; missing this argument returns an error |
 
+### Write Tools
+
+The only tool that writes to a developer's own source files, rather than to
+`.copilot-architect/`'s internal artifacts.
+
+| Tool              | Arguments                             | Description                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apply_plan_edit` | `relativePath`, `edits`, `startPath?` | Applies search/replace edits to a file the _approved_ plan lists as an `update`. Refuses (writes nothing) if: no plan is approved, the path isn't in it, the plan lists it as `add`/`delete`, the file drifted since the plan was read, or any edit's `search` text doesn't match exactly once. The MCP client's own tool-call approval is the human gate — there is no separate `approved` flag. |
+
 ---
 
 ## Design Rules
@@ -80,7 +89,7 @@ All tools return structured JSON. Missing artifacts return a structured `{ ok: f
 3. All tool responses are structured JSON.
 4. Secrets are never returned in tool responses.
 5. Missing artifacts return a graceful structured response, not a thrown error.
-6. The `generate_feature_plan` tool is the only tool that writes artifacts, and it is gated behind an explicit `approved` flag.
+6. The `generate_feature_plan` tool is the only tool that writes internal plan artifacts, gated behind an explicit `approved` flag. `apply_plan_edit` is the only tool that writes to a developer's own source files, gated by plan authorization, plan freshness, and unique-match verification instead — see Write Tools above.
 7. Multi-repo workspace tools are aware of `.copilot-architect/workspace.json` and operate across all configured repos.
 
 ---

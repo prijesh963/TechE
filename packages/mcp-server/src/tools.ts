@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core";
@@ -12,7 +13,12 @@ import { ContextMeasurementService } from "@copilot-architect/measurement";
 import {
   FeaturePlanningService,
   WorkspacePlanningService,
-  readApprovedPlan
+  readApprovedPlan,
+  applyFileEdits,
+  applyPlanChanges,
+  describeRefusals,
+  verifyPlanFreshness,
+  type FileEdit
 } from "@copilot-architect/planner";
 import { GroundingService } from "@copilot-architect/grounding";
 import { ReviewService } from "@copilot-architect/reviewer";
@@ -476,6 +482,23 @@ export function createCopilotArchitectTools(
       }
     ),
     tool(
+      "apply_plan_edit",
+      "Edit one file from the approved plan by quoting what to replace, the " +
+        "same discipline /implement uses in the VS Code extension: each edit's " +
+        "`search` text must appear exactly once in the file, copied character " +
+        "for character, or the whole file is left untouched and the reason is " +
+        "returned. `relativePath` must name a file the approved plan lists as " +
+        "an `update` — this tool refuses anything not authorized by an " +
+        "approved plan, and refuses if the file drifted since the plan was " +
+        "read. One block per change; leave the replace side empty to delete " +
+        "the searched text. This is the one tool in this server that writes " +
+        "to disk — the IDE's own tool-call approval is the human gate before " +
+        "anything lands.",
+      applyPlanEditSchema,
+      false,
+      async (args) => applyPlanEdit(resolveStartPath(args, options), args)
+    ),
+    tool(
       "verify_claims",
       "Check an answer's claims about this repository against the index. Backticked paths, file:line citations and qualified symbols are verified; prose is not, and the report says so.",
       { ...commonSchema, text: z.string() },
@@ -705,6 +728,109 @@ function stringArrayArg(
   return strings.length > 0 ? strings : undefined;
 }
 
+function editsArg(args: Record<string, unknown>, key: string): FileEdit[] {
+  const value = args[key];
+
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${key} must be a non-empty array of { search, replace }`);
+  }
+
+  return value.map((entry, index) => {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      typeof (entry as Record<string, unknown>).search !== "string"
+    ) {
+      throw new Error(`${key}[${index}] must have a string "search" field`);
+    }
+
+    const replace = (entry as Record<string, unknown>).replace;
+    return {
+      search: (entry as Record<string, unknown>).search as string,
+      replace: typeof replace === "string" ? replace : ""
+    };
+  });
+}
+
+/**
+ * Applies one file's worth of search/replace edits from an approved plan.
+ *
+ * The only write path in this server, so every guard `/implement` already
+ * enforces in the VS Code extension applies here too: the target must be a
+ * file the approved plan actually lists as an `update` (a plan authorizes
+ * specific files, not "any file this workspace has"), the plan must not have
+ * drifted since it was read (an edit built against stale line numbers can
+ * corrupt a file that moved underneath it), and every edit must match its
+ * search text exactly once or nothing is written at all.
+ */
+async function applyPlanEdit(
+  workspaceRoot: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const relativePath = stringArg(args, "relativePath");
+  const edits = editsArg(args, "edits");
+
+  const plan = await readApprovedPlan(workspaceRoot);
+  if (!plan) {
+    return {
+      ok: false,
+      // Same wording as get_approved_plan_contract's empty case: a draft is
+      // not authorization to write code.
+      reason: "no plan has been approved in this workspace"
+    };
+  }
+
+  const change = plan.changes.find((entry) => entry.relativePath === relativePath);
+  if (!change) {
+    return {
+      ok: false,
+      reason: `${relativePath} is not part of the approved plan — apply_plan_edit refuses to write outside what was authorized`
+    };
+  }
+
+  if (change.kind !== "update") {
+    return {
+      ok: false,
+      reason: `${relativePath} is planned as "${change.kind}" in the approved plan; apply_plan_edit only edits an existing file (kind "update")`
+    };
+  }
+
+  const freshness = await verifyPlanFreshness(plan, workspaceRoot);
+  if (!freshness.ok) {
+    return {
+      ok: false,
+      reason:
+        "the code moved since this plan was written — patching against a stale snapshot would corrupt it; re-plan before editing",
+      drifted: freshness.drifted,
+      missing: freshness.missing
+    };
+  }
+
+  let original: string;
+  try {
+    original = await readFile(path.join(workspaceRoot, relativePath), "utf8");
+  } catch {
+    return { ok: false, reason: "the file could not be read" };
+  }
+
+  const result = applyFileEdits(original, edits);
+  const refusal = describeRefusals(result.refused);
+  if (refusal) {
+    return { ok: false, reason: refusal, refused: result.refused };
+  }
+
+  const applied = await applyPlanChanges({
+    workspaceRoot,
+    changes: [{ relativePath, kind: "update", afterText: result.text }]
+  });
+
+  if (applied.refused.length > 0) {
+    return { ok: false, reason: applied.refused[0].reason };
+  }
+
+  return { ok: true, written: relativePath, editsApplied: result.applied };
+}
+
 async function readOptionalArtifact(
   startPath: string,
   relativeArtifactPath: string
@@ -830,6 +956,17 @@ const requestSchema = {
   ...commonSchema,
   request: z.string(),
   limit: z.number().positive().optional()
+};
+
+const applyPlanEditSchema = {
+  ...commonSchema,
+  relativePath: z.string(),
+  edits: z.array(
+    z.object({
+      search: z.string(),
+      replace: z.string()
+    })
+  )
 };
 
 const approvedRequestSchema = {
