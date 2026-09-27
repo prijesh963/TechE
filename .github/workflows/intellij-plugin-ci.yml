@@ -1,4 +1,11 @@
-name: IntelliJ Plugin CI
+name: IntelliJ MCP Plugin CI
+
+# Named and artifact-tagged distinctly from the other, separate IntelliJ
+# effort on intellij-main (.github/workflows/intellij-ci.yml, artifact
+# copilot-architect-intellij-plugin) — a different architecture (a
+# dashboard/action UI there vs. an MCP-config writer here), not a
+# replacement for it, so the two must never be confused for the same
+# build.
 
 on:
   pull_request:
@@ -70,5 +77,5 @@ jobs:
       - name: Upload built plugin
         uses: actions/upload-artifact@v4
         with:
-          name: copilot-architect-intellij-plugin
+          name: copilot-architect-intellij-mcp-plugin
           path: intellij-plugin/plugin/build/distributions/*.zip

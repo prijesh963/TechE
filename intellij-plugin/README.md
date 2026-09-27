@@ -8,6 +8,15 @@ repository), so `/mcp.copilot-architect.analyze`, `create-plan`,
 extension — same repo intelligence, same plan-authorization discipline,
 same write guardrails.
 
+A separate, independent IntelliJ effort exists on the `intellij-main`
+branch (`packages/intellij-plugin/`, artifact
+`copilot-architect-intellij-plugin`) — a dashboard/action UI with native
+plan-approve dialogs and a clipboard fallback for MCP-blocked orgs, a
+different architecture entirely. This one is the chosen direction: pure
+MCP, no UI of its own, relying on GitHub Copilot Chat's own panel for
+everything. Named and artifact-tagged distinctly (`copilot-architect-intellij-mcp-plugin`)
+so the two are never confused for the same build.
+
 ## Two modules, on purpose
 
 - **`:core`** — Node discovery, the global `mcp.json` merge, CLI resource
