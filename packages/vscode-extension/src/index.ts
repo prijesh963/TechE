@@ -9,7 +9,7 @@ import { renderRolePrompt } from "@copilot-architect/agents";
 import { collectSessionChangeStats } from "@copilot-architect/core";
 import { GroundingService, summarizeGrounding } from "@copilot-architect/grounding";
 import { ReviewService } from "@copilot-architect/reviewer";
-import { looksLikeRepo } from "@copilot-architect/shared";
+import { looksLikeRepo, resolveRegisteredRepos } from "@copilot-architect/shared";
 import { ValidationService } from "@copilot-architect/validator";
 import {
   IndexingService,
@@ -2716,7 +2716,12 @@ async function runPlanPhase(
   const response = await indexing
     .search({ startPath: workspaceRoot, query: prompt, limit: PLAN_CANDIDATE_LIMIT })
     .catch(() => undefined);
-  const results = response?.results ?? [];
+  const results = await scopeResultsToRepo(
+    workspaceRoot,
+    prompt,
+    session,
+    response?.results ?? []
+  );
 
   if (results.length === 0) {
     stream.markdown(
@@ -2951,6 +2956,70 @@ async function runPlanPhase(
     title: `Approve plan v${version}`,
     arguments: [version]
   });
+}
+
+/** A path's leading folder, regardless of which separator built it. */
+function firstPathSegment(relativePath: string): string {
+  return relativePath.split(/[\\/]/)[0];
+}
+
+/**
+ * Narrows workspace-wide search candidates to the repo(s) this plan is
+ * actually about, in a multi-repo workspace.
+ *
+ * `IndexingService.search` has no repo filter — it always fans out across
+ * every registered repo. A full, descriptively-worded first request usually
+ * has enough repo-specific vocabulary that relevance clusters on the right
+ * repo by accident; a short follow-up ("also add that file") does not, and
+ * candidates from every other repo crowd out the one actually being
+ * iterated on. Naming the repo in the follow-up's own text does not fix this
+ * either — that is just more keyword text competing with the noise, not a
+ * structural filter, which is why a plan can keep drifting workspace-wide
+ * even after the developer says exactly which repo they mean.
+ *
+ * Scope, in priority order: a registered repo named in this round's prompt
+ * (a deliberate switch), else the repo(s) the session's most recent draft
+ * actually touched (so a short follow-up inherits where the conversation
+ * already is). Falls back to the unfiltered results if either guess would
+ * leave nothing — a wrong guess must never be worse than no scoping at all.
+ */
+export async function scopeResultsToRepo(
+  workspaceRoot: string,
+  prompt: string,
+  session: Session,
+  results: SearchResult[]
+): Promise<SearchResult[]> {
+  const registered = await resolveRegisteredRepos(workspaceRoot).catch(() => []);
+  if (registered.length === 0) {
+    return results;
+  }
+
+  const lowerPrompt = prompt.toLowerCase();
+  const named = new Set(
+    registered
+      .filter((repo) => lowerPrompt.includes(repo.name.toLowerCase()))
+      .map((repo) => repo.name)
+  );
+
+  const previousPlan = session.plans.at(-1)?.content as unknown as
+    PlanContract | undefined;
+  const previousRepos = new Set(
+    (previousPlan?.changes ?? [])
+      .map((change) => firstPathSegment(change.relativePath))
+      .filter((segment) => registered.some((repo) => repo.name === segment))
+  );
+
+  const scope = named.size > 0 ? named : previousRepos;
+  if (scope.size === 0) {
+    return results;
+  }
+
+  const scoped = results.filter((result) =>
+    scope.has(firstPathSegment(path.relative(workspaceRoot, result.filePath)))
+  );
+
+  // A wrong or stale guess must not make the plan worse than not scoping.
+  return scoped.length > 0 ? scoped : results;
 }
 
 /**

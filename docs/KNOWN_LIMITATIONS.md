@@ -745,6 +745,36 @@ nothing" and "cannot tell why" for whatever still doesn't match.
 
 ---
 
+### 4.18 `/create-plan`'s search had no concept of "which repo"
+
+`IndexingService.search` fans out across every registered repo in a
+multi-repo workspace — it has no per-repo filter at all, in the API or the
+caller. A full, descriptively-worded first request usually has enough
+domain vocabulary that keyword relevance happened to cluster on the right
+repo anyway; a short follow-up ("also add that file I missed") does not, and
+candidates from every other repo crowded into the model's candidate list.
+Naming the repo explicitly in the follow-up's own text did not fix this
+either — that is just more keyword text competing with the noise, not a
+structural filter, so a plan kept drifting workspace-wide even after the
+developer said exactly which repo they meant.
+
+`runPlanPhase` now scopes search results (`scopeResultsToRepo` in
+`packages/vscode-extension/src/index.ts`) before they ever reach the model:
+to a registered repo named in the current prompt if one is, else to the
+repo(s) the session's most recent draft actually touched, so a short
+follow-up inherits where the conversation already is rather than starting
+workspace-wide again. Either guess falls back to the unfiltered results if
+it would leave nothing, so a wrong guess is never worse than no scoping.
+
+**Cost:** low — the fix is a post-hoc filter over already-fetched
+candidates, not a real per-repo search API; a redraft could still miss a
+better-scored candidate that fell outside `PLAN_CANDIDATE_LIMIT` before
+filtering. `IndexingService.search` gaining an actual repo-scoped mode is
+the more thorough fix, left for when a caller other than this heuristic
+needs it too.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

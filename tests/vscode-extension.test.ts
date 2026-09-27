@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { SessionService } from "../packages/session/src/index.js";
+import type { SearchResult } from "../packages/indexer/src/index.js";
 import { renderRolePrompt } from "../packages/agents/src/index.js";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,6 +34,7 @@ import {
   shouldBuildWorkspaceGraph,
   formatAgentInsights,
   loadDashboardArtifacts,
+  scopeResultsToRepo,
   type CliRunRequest,
   type CliRunResult,
   type DisposableLike,
@@ -1334,6 +1336,143 @@ describe("what the plan says it will do", () => {
         intent: []
       })
     ).toEqual([]);
+  });
+});
+
+describe("scoping plan search to one repo", () => {
+  function fakeResult(filePath: string): SearchResult {
+    return {
+      filePath,
+      relativePath: filePath,
+      score: 1,
+      languageGuess: "typescript",
+      textPreview: "",
+      matchedFields: [],
+      symbols: [],
+      imports: [],
+      isTestFile: false,
+      isConfigFile: false,
+      isDocFile: false,
+      signals: ["lexical"]
+    };
+  }
+
+  async function multiRepoWorkspace(): Promise<string> {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "copilot-plan-scope-"));
+    await mkdir(path.join(workspaceRoot, ".copilot-architect"), { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, ".copilot-architect", "workspace.json"),
+      JSON.stringify({
+        repos: [
+          { name: "orders-service", path: "orders-service" },
+          { name: "billing-service", path: "billing-service" }
+        ]
+      }),
+      "utf8"
+    );
+    return workspaceRoot;
+  }
+
+  it("passes results through unchanged in a single-repo workspace", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(tmpdir(), "copilot-plan-scope-single-")
+    );
+    const sessions = new SessionService();
+    const session = await sessions.open({
+      workspaceRoot,
+      title: "Add invoice approval"
+    });
+    const results = [fakeResult(path.join(workspaceRoot, "src/OrderService.ts"))];
+
+    const scoped = await scopeResultsToRepo(
+      workspaceRoot,
+      "add a file",
+      session,
+      results
+    );
+
+    expect(scoped).toEqual(results);
+  });
+
+  it("inherits the repo the session's last draft touched", async () => {
+    // The reported bug: a short follow-up like "also add that file" carries
+    // no repo-specific vocabulary of its own, so an unscoped search returns
+    // noise from every registered repo. The previous draft already commits
+    // to one, and a short follow-up should stay there rather than drift.
+    const workspaceRoot = await multiRepoWorkspace();
+    const sessions = new SessionService();
+    let session = await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+    session = await sessions.addPlanVersion({ workspaceRoot }, {
+      id: "p1",
+      request: "Add invoice approval to orders-service",
+      changes: [{ kind: "update", relativePath: "orders-service/src/OrderService.ts" }]
+    } as never);
+
+    const results = [
+      fakeResult(path.join(workspaceRoot, "orders-service/src/OrderService.ts")),
+      fakeResult(path.join(workspaceRoot, "billing-service/src/InvoiceService.ts"))
+    ];
+
+    const scoped = await scopeResultsToRepo(
+      workspaceRoot,
+      "also add the missing file",
+      session,
+      results
+    );
+
+    expect(scoped.map((result) => result.filePath)).toEqual([results[0].filePath]);
+  });
+
+  it("switches repo when the new prompt names a different one", async () => {
+    const workspaceRoot = await multiRepoWorkspace();
+    const sessions = new SessionService();
+    let session = await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+    session = await sessions.addPlanVersion({ workspaceRoot }, {
+      id: "p1",
+      request: "Add invoice approval to orders-service",
+      changes: [{ kind: "update", relativePath: "orders-service/src/OrderService.ts" }]
+    } as never);
+
+    const results = [
+      fakeResult(path.join(workspaceRoot, "orders-service/src/OrderService.ts")),
+      fakeResult(path.join(workspaceRoot, "billing-service/src/InvoiceService.ts"))
+    ];
+
+    const scoped = await scopeResultsToRepo(
+      workspaceRoot,
+      "in billing-service, add the missing file",
+      session,
+      results
+    );
+
+    expect(scoped.map((result) => result.filePath)).toEqual([results[1].filePath]);
+  });
+
+  it("falls back to unfiltered results rather than finding nothing", async () => {
+    // A wrong or stale guess must never leave the developer worse off than
+    // no scoping at all.
+    const workspaceRoot = await multiRepoWorkspace();
+    const sessions = new SessionService();
+    let session = await sessions.open({ workspaceRoot, title: "Add invoice approval" });
+    session = await sessions.addPlanVersion({ workspaceRoot }, {
+      id: "p1",
+      request: "Add invoice approval to orders-service",
+      changes: [{ kind: "update", relativePath: "orders-service/src/OrderService.ts" }]
+    } as never);
+
+    // Nothing in this result set is actually under orders-service.
+    const results = [
+      fakeResult(path.join(workspaceRoot, "billing-service/src/InvoiceService.ts"))
+    ];
+
+    const scoped = await scopeResultsToRepo(
+      workspaceRoot,
+      "also add that file",
+      session,
+      results
+    );
+
+    expect(scoped).toEqual(results);
   });
 });
 
