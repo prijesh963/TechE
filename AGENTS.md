@@ -273,10 +273,14 @@ the other. If a shell needs repo intelligence, it imports the service.
     that has no repo-analysis logic of its own: it locates Node.js, extracts
     the bundled CLI, and points GitHub Copilot Chat's global MCP config at
     it, so the same `analyze`/`create-plan`/`implement`/`review` MCP prompts
-    work there too. Split into `:core` (plain Kotlin/JVM, fully built and
-    tested — 19 tests, all against this machine's real Node and a real
-    extraction/config round trip) and `:plugin` (the IntelliJ Platform shell
-    calling into `:core`, unverifiable in a sandboxed environment with
+    work there too. Also registers a multi-repo workspace directly — no MCP
+    tool can do that (`workspace_map` only reads one already registered),
+    so this shells out to the same CLI `workspace add` subcommand the VS
+    Code extension's own multi-repo setup uses. Split into `:core` (plain
+    Kotlin/JVM, fully built and tested — 23 tests, all against this
+    machine's real Node, including real spawned-process registration calls
+    with their exact argv verified) and `:plugin` (the IntelliJ Platform
+    shell calling into `:core`, unverifiable in a sandboxed environment with
     restricted egress the same way `credit-optimizer-plugin`'s own `:plugin`
     module is — see `intellij-plugin/README.md` and
     `docs/KNOWN_LIMITATIONS.md` 4.22-4.23).

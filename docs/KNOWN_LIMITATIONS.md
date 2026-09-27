@@ -923,22 +923,31 @@ cannot run here at all.
 
 What **is** verified, directly, in this sandbox: every real decision the
 plugin makes lives in `:core` (Node discovery, the global `mcp.json`
-merge, CLI resource extraction, and `McpSetupService`'s orchestration of
-all three), which has no such dependency. 19 tests pass, including a
-genuine end-to-end run against this machine's real Node binary, a real
-extraction of fixture resources to a real temp directory, and a real
-config file written and read back — not mocked, not skipped.
+merge, CLI resource extraction, `McpSetupService`'s orchestration of all
+three, and — since RegisterReposAction was added —
+`RepoRegistrationService`'s own CLI invocations), which has no such
+dependency. 23 tests pass, including a genuine end-to-end run against this
+machine's real Node binary, a real extraction of fixture resources to a
+real temp directory, a real config file written and read back, and real
+spawned `node <cli> workspace add ...` processes whose exact argv per repo
+is asserted against — not mocked, not skipped. The fixture CLI those tests
+spawn simulates a per-repo failure (a name prefixed `FAIL_`) to verify one
+repo failing does not abort the others, but it never actually writes a
+`workspace.json` — the real CLI's own `workspace add` behavior is verified
+separately, in the main TypeScript test suite, not here.
 
 What is **not** verified: `SetupOnStartup`'s notification (does it fire
 correctly on project open, does "Don't ask again" persist across restarts,
 does the `PropertiesComponent` key survive an IDE update), `SetUpMcpAction`
-registering correctly in the Tools menu, and `PathManager.getSystemPath()`
+and `RegisterReposAction` registering correctly in the Tools menu,
+`RegisterReposAction`'s folder chooser and background task actually
+running against a real IntelliJ UI thread, and `PathManager.getSystemPath()`
 resolving to a sane, writable directory on every supported platform. All
 of it is thin, direct calls into already-tested `:core` methods — the
 design deliberately kept as little logic as possible on the unverifiable
 side — but "thin" is not the same as "verified." `.github/workflows/intellij-plugin-ci.yml`
 builds and plugin-verifies `:plugin` on a real runner; it does not launch a
-real IDE and click the notification.
+real IDE, click the notification, or drive the repo-registration dialog.
 
 **Cost:** low if the platform glue is as thin as it looks; unknown until
 either CI's `verifyPlugin` step or a real IntelliJ session surfaces

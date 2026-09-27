@@ -58,6 +58,23 @@ Offered once per developer via a startup notification ("Set Up" /
 "Don't ask again"), and always available afterward from
 **Tools → Set Up Copilot Architect MCP Server**.
 
+### Registering a multi-repo workspace
+
+**Tools → Register Repos with Copilot Architect...** picks a parent
+folder and registers every immediate sub-directory as a repository in this
+project's `.copilot-architect/workspace.json`, rooted at the currently open
+project.
+
+No MCP tool can do this on its own — `workspace_map` only reads an
+already-registered set — and `workspace.json` is otherwise only ever
+written by the CLI's own `workspace add <name> <path> --path <root>`
+subcommand, the same one the VS Code extension's "Setup Repo" →
+"Multiple repos" flow calls. Without this action, a developer working only
+from IntelliJ had no way to create a multi-repo workspace at all. A plain
+single-repo project needs none of this: every search/plan/index tool
+already falls back to single-repo behavior when no `workspace.json`
+exists.
+
 ### Why a notification, not a silent write
 
 That config file is **global** — shared across every IntelliJ project a

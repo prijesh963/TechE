@@ -30,5 +30,11 @@
                 description="Point GitHub Copilot Chat's MCP connection at this machine's Copilot Architect server">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
+        <action id="CopilotArchitect.RegisterRepos"
+                class="com.copilotarchitect.plugin.RegisterReposAction"
+                text="Register Repos with Copilot Architect..."
+                description="Register a folder's sub-directories as a multi-repo Copilot Architect workspace rooted at this project">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>
