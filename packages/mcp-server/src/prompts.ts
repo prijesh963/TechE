@@ -16,6 +16,25 @@ import { z } from "zod";
  * — the exact contract those tools expect. The message is text a model
  * reads and acts on in its own next turn; nothing here calls a tool itself.
  */
+/**
+ * Every tool takes an optional `path`, and defaults to wherever the server
+ * process itself happened to start — which is not safe to rely on here.
+ * Unlike VS Code's per-project `.vscode/mcp.json`, JetBrains Copilot Chat
+ * reads one global `mcp.json` (`~/.config/github-copilot/intellij/mcp.json`
+ * on Linux/macOS) shared across every project a developer ever opens, with
+ * no per-project variable confirmed to exist. Baking a fixed path into that
+ * file would work only until a second project is opened in another window,
+ * at which point both would silently answer about whichever repo was
+ * configured last. Passing `path` explicitly on every call sidesteps that
+ * entirely — it costs nothing where cwd is already correct (plain stdio in
+ * VS Code, the CLI), and is the only thing that works everywhere else.
+ */
+const PATH_ARGUMENT_INSTRUCTION =
+  "This server was not started against a fixed project — pass `path` set " +
+  "to this project's absolute root directory on every tool call below. " +
+  "Determine it from your own context (the workspace or project you are " +
+  "actually working in); do not omit it and do not guess a different one.";
+
 export function registerCopilotArchitectPrompts(server: McpServer): void {
   server.registerPrompt(
     "analyze",
@@ -33,6 +52,8 @@ export function registerCopilotArchitectPrompts(server: McpServer): void {
             type: "text",
             text: [
               renderRolePrompt("analyze"),
+              "",
+              PATH_ARGUMENT_INSTRUCTION,
               "",
               `Question: ${question}`,
               "",
@@ -67,6 +88,8 @@ export function registerCopilotArchitectPrompts(server: McpServer): void {
             type: "text",
             text: [
               renderRolePrompt("plan"),
+              "",
+              PATH_ARGUMENT_INSTRUCTION,
               "",
               `Request: ${request}`,
               "",
@@ -116,6 +139,8 @@ export function registerCopilotArchitectPrompts(server: McpServer): void {
             text: [
               renderRolePrompt("implement"),
               "",
+              PATH_ARGUMENT_INSTRUCTION,
+              "",
               "This phase edits by quoting what to replace, not by returning " +
                 "whole files: apply_plan_edit takes { search, replace } pairs, " +
                 "and every `search` must match the file's current text " +
@@ -163,6 +188,8 @@ export function registerCopilotArchitectPrompts(server: McpServer): void {
             type: "text",
             text: [
               renderRolePrompt("review"),
+              "",
+              PATH_ARGUMENT_INSTRUCTION,
               "",
               "Call generate_review, then read its findings, changedFiles, " +
                 "expectedFiles/unexpectedFiles, and validation status from the " +

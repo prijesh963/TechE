@@ -677,6 +677,33 @@ describe("MCP prompts", () => {
     );
   });
 
+  it("tells every prompt to pass an explicit path on every tool call", async () => {
+    // JetBrains Copilot Chat reads one global mcp.json shared across every
+    // project a developer opens, unlike VS Code's per-project config — so
+    // the server cannot rely on its own cwd being the right repo, and every
+    // prompt has to say so explicitly rather than let a stale default answer
+    // silently for the wrong project.
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const analyze = firstMessageText(
+      await client.getPrompt({ name: "analyze", arguments: { question: "x" } })
+    );
+    const createPlan = firstMessageText(
+      await client.getPrompt({ name: "create-plan", arguments: { request: "x" } })
+    );
+    const implement = firstMessageText(
+      await client.getPrompt({ name: "implement", arguments: {} })
+    );
+    const review = firstMessageText(
+      await client.getPrompt({ name: "review", arguments: {} })
+    );
+
+    for (const text of [analyze, createPlan, implement, review]) {
+      expect(text).toContain("pass `path`");
+    }
+  });
+
   it("interpolates the question into the analyze prompt", async () => {
     const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
     const { client } = await createConnectedServer(repoRoot);

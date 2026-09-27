@@ -872,6 +872,45 @@ resolving in favor of the newer text.
 
 ---
 
+### 4.22 Every prompt now demands an explicit `path`, unverified against a real JetBrains client
+
+Unlike VS Code's per-project `.vscode/mcp.json`, JetBrains Copilot Chat
+reads one global `mcp.json`
+(`~/.config/github-copilot/intellij/mcp.json` on Linux/macOS,
+`%APPDATA%/github-copilot/intellij/mcp.json` on Windows) shared across every
+project a developer ever opens — confirmed via a still-open JetBrains
+feature request (microsoft/copilot-intellij-feedback#701) asking for
+exactly the per-project override VS Code already has. No variable
+equivalent to `${workspaceFolder}` was found in the config format, and a
+fixed path baked into that file would silently answer for the wrong repo
+the moment a second IntelliJ project is opened in another window.
+
+Every prompt now tells the model to pass `path` set to the current
+project's directory on every tool call, sidestepping a stdio server's own
+`cwd`/`--path` entirely — each tool already accepted this argument, so the
+fix is instructional, not structural, and costs nothing where a call's own
+`cwd` was already correct (plain stdio in VS Code, the CLI).
+
+**Not yet verified against a real client.** This whole finding rests on
+web research done from a network-restricted sandbox that could not reach
+most JetBrains/GitHub documentation domains directly, and on one still-open
+GitHub issue as primary evidence; no live IntelliJ + Copilot Chat session
+has confirmed that the model actually supplies a correct, working-directory
+path from its own context when asked to. If it does not — if Copilot Chat
+in JetBrains has no reliable notion of "the current project's absolute
+path" to draw on — this fix does not help, and the underlying problem (one
+global config, no per-project isolation) is still unresolved. Worth an
+explicit test in a real IntelliJ session before relying on this.
+
+**Cost:** unknown until verified. If the instruction works as intended,
+low. If it does not, the fallback is the one described when this was first
+raised: rewrite the global config's path on project open/focus via a
+JetBrains `ProjectActivity` hook, which degrades to "the most recently
+focused project wins" under multiple simultaneous windows rather than
+failing silently for an unrelated one.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

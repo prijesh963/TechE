@@ -127,6 +127,13 @@ contract those tools expect.
 | `implement`   | none       | Call `get_approved_plan_contract`, then `apply_plan_edit` per `update`-kind file; `add`/`delete` have no write tool yet, so it says to tell the developer instead. |
 | `review`      | none       | Call `generate_review`, present findings with file/severity/remediation, and offer `resolve_review_finding` for any the developer wants to accept or decline.      |
 
+Every prompt also tells the model to pass `path`, set to the current
+project's directory, on every tool call it makes. This matters most for a
+client like JetBrains Copilot Chat, which reads one global `mcp.json`
+shared across every project rather than a per-project config — see
+`docs/KNOWN_LIMITATIONS.md` 4.22 for what this fixes and what is still
+unverified about it.
+
 ---
 
 ## Design Rules
