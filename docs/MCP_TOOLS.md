@@ -71,6 +71,23 @@ All tools return structured JSON. Missing artifacts return a structured `{ ok: f
 | ----------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `generate_feature_plan` | `featureRequest`, `startPath?`, **`approved: true`** | Write plan artifacts (`latest-plan.json`, `latest-plan.md`) — requires `approved=true`; missing this argument returns an error |
 
+### Plan Contract Tools
+
+A separate plan pipeline from `generate_feature_plan`/`revise_feature_plan`/
+`approve_plan` above, and the only one `apply_plan_edit` reads. Where those
+three build a `FeaturePlanArtifact` from search-relevance heuristics
+(`likelyFilesToModify`, `likelyNewFiles`), these build a real `PlanContract`
+— the same one `/create-plan` builds in the VS Code extension — from a file
+selection the client has already made itself, by calling `search_repo` /
+`get_symbol_graph` and deciding which files actually need to change. The two
+pipelines do not interoperate: approving through `approve_plan` does **not**
+authorize `apply_plan_edit`, only `approve_plan_contract` does.
+
+| Tool                    | Arguments                                     | Description                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `draft_plan_contract`   | `request`, `files`, `approach?`, `startPath?` | Records a `PlanContract` draft into the session from `files: {path, kind, reason, symbol?, steps?}[]`. An `update`/`delete` naming a path outside the index is dropped and reported in `dropped`, not silently lost; a cited `symbol` that does not check out is flagged in `evidence`, never dropped. Writes only to session state, not source files. |
+| `approve_plan_contract` | `version`, `startPath?`                       | Approves a version drafted above, freezing it to `plans/approved/latest.json` — what `apply_plan_edit` will authorize writes against. Per-revision, like `approve_plan`, but a different artifact.                                                                                                                                                     |
+
 ### Write Tools
 
 The only tool that writes to a developer's own source files, rather than to

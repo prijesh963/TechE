@@ -514,6 +514,156 @@ describe("the session model over MCP", () => {
   });
 });
 
+describe("draft_plan_contract and approve_plan_contract", () => {
+  it("drafts a plan into a new session, verifying cited symbols", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+    await callJsonTool(client, "list_repo_files", {});
+
+    const result = await callJsonTool(client, "draft_plan_contract", {
+      request: "Add invoice approval",
+      files: [
+        {
+          path: "src/OrderService.ts",
+          kind: "update",
+          reason: "this is where an order is placed",
+          symbol: "OrderService",
+          steps: ["add an approve() method"]
+        }
+      ]
+    });
+    const data = result.data as {
+      ok: boolean;
+      version: number;
+      evidence: Array<{ path: string; evidence: string }>;
+      plan: { changes: Array<{ relativePath: string; intent?: string[] }> };
+    };
+
+    expect(data.ok).toBe(true);
+    expect(data.version).toBe(1);
+    expect(data.evidence).toEqual([
+      { path: "src/OrderService.ts", evidence: "verified" }
+    ]);
+    expect(data.plan.changes[0].intent).toEqual(["add an approve() method"]);
+  });
+
+  it("drops a path outside the index rather than planning against nothing", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+    await callJsonTool(client, "list_repo_files", {});
+
+    const result = await callJsonTool(client, "draft_plan_contract", {
+      request: "Add invoice approval",
+      files: [
+        { path: "src/OrderService.ts", kind: "update", reason: "real file" },
+        { path: "src/Ghost.ts", kind: "update", reason: "does not exist" }
+      ]
+    });
+    const data = result.data as {
+      ok: boolean;
+      plan: { changes: Array<{ relativePath: string }> };
+      dropped: Array<{ path: string; reason: string }>;
+    };
+
+    expect(data.ok).toBe(true);
+    expect(data.plan.changes.map((change) => change.relativePath)).toEqual([
+      "src/OrderService.ts"
+    ]);
+    expect(data.dropped).toEqual([
+      { path: "src/Ghost.ts", reason: expect.stringContaining("not in the index") }
+    ]);
+  });
+
+  it("flags an unverified symbol rather than dropping the file", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+    await callJsonTool(client, "list_repo_files", {});
+
+    const result = await callJsonTool(client, "draft_plan_contract", {
+      request: "Add invoice approval",
+      files: [
+        {
+          path: "src/OrderService.ts",
+          kind: "update",
+          reason: "wrong symbol on purpose",
+          symbol: "InvoiceApprover"
+        }
+      ]
+    });
+    const data = result.data as {
+      ok: boolean;
+      plan: { changes: Array<{ relativePath: string }> };
+      evidence: Array<{ path: string; evidence: string; reason?: string }>;
+    };
+
+    expect(data.ok).toBe(true);
+    // Not dropped: the file may still be right even though the reason is not.
+    expect(data.plan.changes.map((change) => change.relativePath)).toEqual([
+      "src/OrderService.ts"
+    ]);
+    expect(data.evidence[0].evidence).toBe("unverified");
+    expect(data.evidence[0].reason).toContain("InvoiceApprover");
+  });
+
+  it("refuses to approve a version that was never drafted", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "approve_plan_contract", {
+      version: 1
+    });
+    const data = result.data as { ok: boolean; reason: string };
+
+    expect(data.ok).toBe(false);
+    expect(data.reason).toContain("no active session");
+  });
+
+  it("drafts, approves, and applies an edit end to end over MCP", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService {\n  place() {}\n}"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+    await callJsonTool(client, "list_repo_files", {});
+
+    const drafted = await callJsonTool(client, "draft_plan_contract", {
+      request: "Add invoice approval",
+      files: [
+        {
+          path: "src/OrderService.ts",
+          kind: "update",
+          reason: "this is where an order is placed",
+          symbol: "OrderService"
+        }
+      ]
+    });
+    const draftData = drafted.data as { ok: boolean; version: number };
+    expect(draftData.ok).toBe(true);
+
+    const approved = await callJsonTool(client, "approve_plan_contract", {
+      version: draftData.version
+    });
+    expect((approved.data as { ok: boolean }).ok).toBe(true);
+
+    const applied = await callJsonTool(client, "apply_plan_edit", {
+      relativePath: "src/OrderService.ts",
+      edits: [{ search: "  place() {}", replace: "  place() { return true; }" }]
+    });
+    const appliedData = applied.data as { ok: boolean; written: string };
+
+    expect(appliedData.ok).toBe(true);
+    expect(appliedData.written).toBe("src/OrderService.ts");
+    expect(await readFile(path.join(repoRoot, "src/OrderService.ts"), "utf8")).toBe(
+      "export class OrderService {\n  place() { return true; }\n}"
+    );
+  });
+});
+
 describe("apply_plan_edit", () => {
   it("refuses when no plan has been approved", async () => {
     const repoRoot = await createRepo({

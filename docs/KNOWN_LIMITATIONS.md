@@ -803,6 +803,43 @@ phases.
 
 ---
 
+### 4.20 `draft_plan_contract` is a second planning tool, not a fix to the first
+
+`generate_feature_plan`/`revise_feature_plan`/`approve_plan` already existed
+as an MCP-native planning pipeline, writing a `FeaturePlanArtifact` to
+`plans/latest-plan.json`. It was never wired to the `PlanContract` schema
+`apply_plan_edit` reads (`plans/approved/latest.json`), and its file lists
+(`likelyFilesToModify`/`likelyNewFiles`) are search-relevance heuristics, not
+a reasoned per-file decision with a citation checked against the index —
+using them to authorize a write would have been a real drop from what
+`/create-plan` already guarantees in the VS Code extension.
+
+`draft_plan_contract`/`approve_plan_contract` were added alongside it rather
+than replacing it, so `generate_feature_plan`'s richer analysis (impact
+scoring, test strategy, readiness diagnostics) is not lost — a caller can
+still use it for that — but it does mean three planning code paths now
+exist in this codebase for conceptually similar work: `runPlanPhase` in the
+VS Code extension, `FeaturePlanningService`, and this. Each is independently
+correct; nothing routes between them, and a developer reading the codebase
+cold has no signal that `approve_plan` and `approve_plan_contract` approve
+two different things with the same-sounding name.
+
+Also out of scope for this cut: `draft_plan_contract` does not accept or
+record decisions (the VS Code flow's proposed-decision confirmation has no
+MCP equivalent yet), and takes no `anchorLine` per file, so a file's
+`before` excerpt always starts at line 1 rather than centered on the symbol
+the citation names.
+
+**Cost:** medium for the naming collision — `approve_plan` vs.
+`approve_plan_contract` inviting the exact mix-up this entry exists to head
+off; low for the missing decisions/anchor support, since both are additive
+and neither blocks a plan from being drafted, approved, or implemented.
+Reconciling the two planning pipelines into one, or renaming one pair of
+tools to stop them reading as variants of each other, is the more thorough
+fix, left for when a caller actually needs both in the same session.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

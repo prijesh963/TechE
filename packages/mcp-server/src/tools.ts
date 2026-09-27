@@ -14,11 +14,18 @@ import {
   FeaturePlanningService,
   WorkspacePlanningService,
   readApprovedPlan,
+  writeApprovedPlan,
   applyFileEdits,
   applyPlanChanges,
   describeRefusals,
   verifyPlanFreshness,
-  type FileEdit
+  createPlanContract,
+  buildPlannedChange,
+  verifySelectedChanges,
+  type FileEdit,
+  type SelectedChange,
+  type PlannedChange,
+  type PlanContract
 } from "@copilot-architect/planner";
 import { GroundingService } from "@copilot-architect/grounding";
 import { ReviewService } from "@copilot-architect/reviewer";
@@ -482,6 +489,36 @@ export function createCopilotArchitectTools(
       }
     ),
     tool(
+      "draft_plan_contract",
+      "Draft a plan contract into the session from a file selection you have " +
+        "already made — call search_repo and get_symbol_graph first to decide " +
+        "which files actually need to change, the same way the VS Code " +
+        "extension's /create-plan does; do not pass every related file, only " +
+        "ones that actually change. `files` is `{path, kind, reason, symbol?, " +
+        "steps?}[]`: `kind` is add/update/delete, `reason` is why this file " +
+        "changes, `symbol` is one symbol in that file your reason rests on " +
+        "(checked against the index — cite one or the reason cannot be " +
+        "verified), `steps` is what actually happens to the file. An " +
+        "`update`/`delete` naming a path outside the index is dropped and " +
+        "reported back; nothing else is. This only drafts — nothing is " +
+        "authorized to write until approve_plan_contract is called on this " +
+        "exact version.",
+      draftPlanContractSchema,
+      false,
+      async (args) => draftPlanContract(resolveStartPath(args, options), args)
+    ),
+    tool(
+      "approve_plan_contract",
+      "Approve a plan version drafted by draft_plan_contract, freezing it as " +
+        "the plan apply_plan_edit will authorize writes against. `version` is " +
+        "required — approval is always per-revision, never 'whatever is " +
+        "newest'. The IDE's own tool-call approval on THIS call is the human " +
+        "sign-off; nothing else in this server treats a draft as approved.",
+      approvePlanContractSchema,
+      false,
+      async (args) => approvePlanContract(resolveStartPath(args, options), args)
+    ),
+    tool(
       "apply_plan_edit",
       "Edit one file from the approved plan by quoting what to replace, the " +
         "same discipline /implement uses in the VS Code extension: each edit's " +
@@ -752,6 +789,200 @@ function editsArg(args: Record<string, unknown>, key: string): FileEdit[] {
   });
 }
 
+interface PlanFileArg {
+  path: string;
+  kind: "add" | "update" | "delete";
+  reason: string;
+  symbol?: string;
+  steps?: string[];
+}
+
+function filesArg(args: Record<string, unknown>, key: string): PlanFileArg[] {
+  const value = args[key];
+
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${key} must be a non-empty array of { path, kind, reason }`);
+  }
+
+  return value.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      throw new Error(`${key}[${index}] must be an object`);
+    }
+
+    const record = entry as Record<string, unknown>;
+    if (typeof record.path !== "string" || record.path.trim().length === 0) {
+      throw new Error(`${key}[${index}] must have a non-empty "path"`);
+    }
+    if (record.kind !== "add" && record.kind !== "update" && record.kind !== "delete") {
+      throw new Error(`${key}[${index}].kind must be "add", "update", or "delete"`);
+    }
+    if (typeof record.reason !== "string" || record.reason.trim().length === 0) {
+      throw new Error(`${key}[${index}] must have a non-empty "reason"`);
+    }
+
+    return {
+      path: record.path,
+      kind: record.kind,
+      reason: record.reason,
+      symbol: typeof record.symbol === "string" ? record.symbol : undefined,
+      steps: stringArrayArg(record, "steps")
+    };
+  });
+}
+
+/**
+ * Drafts a plan contract into the session from a file selection Copilot
+ * already made — the same contract `/create-plan` builds in the VS Code
+ * extension, so `apply_plan_edit` can authorize against it once approved.
+ *
+ * The selection itself is not this tool's job: Copilot is expected to have
+ * called search_repo / get_symbol_graph and decided which files actually
+ * need to change, the same division of labor selectPlanChanges enforces in
+ * the extension. This tool only validates and records that decision — an
+ * `update`/`delete` naming a path outside the index is dropped rather than
+ * quoting a snapshot of a file that is not there, and a cited symbol that
+ * does not check out is flagged, never silently dropped, since the file may
+ * still be the right one even when the stated reason is not.
+ */
+async function draftPlanContract(
+  workspaceRoot: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const request = stringArg(args, "request");
+  const approach = stringArrayArg(args, "approach");
+  const files = filesArg(args, "files");
+
+  const indexing = new IndexingService();
+  const inventory = await indexing
+    .listFiles({ startPath: workspaceRoot, limit: Number.MAX_SAFE_INTEGER })
+    .catch(() => undefined);
+  const indexedPaths = new Set(
+    (inventory?.files ?? []).map((file) =>
+      file.repoName ? `${file.repoName}/${file.relativePath}` : file.relativePath
+    )
+  );
+
+  const selection: SelectedChange[] = [];
+  const stepsByPath = new Map<string, string[]>();
+  const dropped: Array<{ path: string; reason: string }> = [];
+
+  for (const file of files) {
+    if (file.kind !== "add" && !indexedPaths.has(file.path)) {
+      dropped.push({
+        path: file.path,
+        reason: `not in the index — a plan cannot quote a snapshot of a file that is not there`
+      });
+      continue;
+    }
+
+    if (file.steps && file.steps.length > 0) {
+      stepsByPath.set(file.path, file.steps);
+    }
+
+    selection.push({
+      kind: file.kind,
+      relativePath: file.path,
+      rationale: file.reason,
+      ...(file.symbol ? { evidenceSymbol: file.symbol } : {})
+    });
+  }
+
+  if (selection.length === 0) {
+    return {
+      ok: false,
+      reason: "no valid files to plan — every file named was dropped",
+      dropped
+    };
+  }
+
+  const symbolsByFile = await indexing
+    .symbolsByFile({ startPath: workspaceRoot })
+    .catch(() => new Map<string, Set<string>>());
+  const verified = verifySelectedChanges(selection, symbolsByFile);
+
+  const changes: PlannedChange[] = [];
+  for (const change of verified) {
+    changes.push(
+      await buildPlannedChange({
+        repoRoot: workspaceRoot,
+        relativePath: change.relativePath,
+        kind: change.kind,
+        rationale: change.rationale,
+        ...(stepsByPath.has(change.relativePath)
+          ? { intent: stepsByPath.get(change.relativePath) }
+          : {})
+      })
+    );
+  }
+
+  const sessions = new SessionService();
+  const current = await sessions.current({ workspaceRoot });
+  const session = current
+    ? current.phase === "plan"
+      ? current
+      : await sessions.setPhase({ workspaceRoot }, "plan")
+    : await sessions.open({ workspaceRoot, title: request, phase: "plan" });
+
+  const version = session.plans.length + 1;
+  const plan = createPlanContract({
+    request,
+    version,
+    decisions: [],
+    changes,
+    ...(approach && approach.length > 0 ? { approach } : {})
+  });
+  await sessions.addPlanVersion({ workspaceRoot }, { ...plan });
+
+  return {
+    ok: true,
+    version,
+    plan,
+    evidence: verified.map((change) => ({
+      path: change.relativePath,
+      evidence: change.evidence,
+      ...(change.evidenceReason ? { reason: change.evidenceReason } : {})
+    })),
+    dropped
+  };
+}
+
+/**
+ * Approves a drafted plan version, freezing it into the same
+ * `plans/approved/latest.json` the VS Code extension's Approve button
+ * writes — the only thing `apply_plan_edit` will authorize a write against.
+ */
+async function approvePlanContract(
+  workspaceRoot: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const version = requiredNumberArg(args, "version");
+
+  const sessions = new SessionService();
+  const session = await sessions.current({ workspaceRoot });
+  if (!session) {
+    return { ok: false, reason: "no active session in this workspace" };
+  }
+
+  const target = session.plans.find((entry) => entry.version === version);
+  if (!target) {
+    return {
+      ok: false,
+      reason: `no plan version ${version} in this session — draft one with draft_plan_contract first`
+    };
+  }
+
+  const approved = await sessions.approvePlan({ workspaceRoot }, version);
+  const latest = sessions.latestApprovedPlan(approved);
+
+  if (!latest || latest.version !== version) {
+    return { ok: false, reason: "approval did not take effect" };
+  }
+
+  await writeApprovedPlan(workspaceRoot, latest.content as unknown as PlanContract);
+
+  return { ok: true, version };
+}
+
 /**
  * Applies one file's worth of search/replace edits from an approved plan.
  *
@@ -967,6 +1198,28 @@ const applyPlanEditSchema = {
       replace: z.string()
     })
   )
+};
+
+const draftPlanContractSchema = {
+  ...commonSchema,
+  request: z.string(),
+  approach: z.array(z.string()).optional(),
+  files: z.array(
+    z.object({
+      path: z.string(),
+      kind: z.enum(["add", "update", "delete"]),
+      reason: z.string(),
+      // A symbol the reason rests on, checked against the index. Optional,
+      // but leaving it out means the reason cannot be checked at all.
+      symbol: z.string().optional(),
+      steps: z.array(z.string()).optional()
+    })
+  )
+};
+
+const approvePlanContractSchema = {
+  ...commonSchema,
+  version: z.number().positive()
 };
 
 const approvedRequestSchema = {

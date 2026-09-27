@@ -116,7 +116,7 @@ copilot-architect/
 │   ├── reviewer/        review report generation
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 31 tools
+│   ├── mcp-server/      MCP server and 33 tools
 │   ├── cli/             CLI entry point and command routing
 │   ├── vscode-extension the @architect chat participant and dashboard
 │   └── web/             optional local web UI shell (thin)
@@ -156,8 +156,13 @@ the other. If a shell needs repo intelligence, it imports the service.
 ## Implemented
 
 1. TypeScript CLI with 24 commands including `demo`.
-2. Local MCP server with 31 tools, including the session, plan contract and
-   grounding — so a policy-blocked developer gets the same product. One tool,
+2. Local MCP server with 33 tools, including the session, plan contract and
+   grounding — so a policy-blocked developer gets the same product.
+   `draft_plan_contract`/`approve_plan_contract` build and approve a real
+   `PlanContract` from a file selection the client already made (the same
+   contract `/create-plan` builds in the VS Code extension), separate from
+   the older, heuristic `generate_feature_plan`/`approve_plan` pair, which
+   authorizes nothing for `apply_plan_edit` to read. One tool,
    `apply_plan_edit`, writes to disk: it applies search/replace edits to a
    file the approved plan lists as an `update`, refusing anything the plan
    didn't authorize, anything drifted since the plan was read, and any edit
@@ -460,7 +465,7 @@ Cover:
   contains "test")
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
-- MCP tools (all 31 tools, including apply_plan_edit's plan-authorization,
+- MCP tools (all 33 tools, including apply_plan_edit's plan-authorization,
   freshness, and unique-match refusals)
 - role prompt rendering
 - instructions generation and validation
