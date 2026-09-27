@@ -71,6 +71,15 @@ All tools return structured JSON. Missing artifacts return a structured `{ ok: f
 | ----------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `generate_feature_plan` | `featureRequest`, `startPath?`, **`approved: true`** | Write plan artifacts (`latest-plan.json`, `latest-plan.md`) — requires `approved=true`; missing this argument returns an error |
 
+### Report-Generating Tools
+
+Writes an internal report artifact, never a source file — distinct from
+both the read-only tools above and the Write Tools below.
+
+| Tool              | Arguments    | Description                                                                                                                                                                                                                             |
+| ----------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generate_review` | `startPath?` | Runs a review — git diff against the approved plan contract's expected files (if any), missing-test detection, risk flags, validation evidence — and writes `reviews/latest-review.json`, the same file `get_latest_review` reads back. |
+
 ### Plan Contract Tools
 
 A separate plan pipeline from `generate_feature_plan`/`revise_feature_plan`/
@@ -99,6 +108,27 @@ The only tool that writes to a developer's own source files, rather than to
 
 ---
 
+## Prompt Reference
+
+Tools are called only when a client's own reasoning decides one is
+relevant. A prompt is what makes invoking a phase deterministic, the way
+`/create-plan` is a real command in the VS Code extension rather than
+something Copilot might get around to. Each of the four registers as
+`/mcp.copilot-architect.<name>` in a client that supports MCP prompts, and
+resolves to one user-role message: the same role guidance
+(`renderRolePrompt` from `@copilot-architect/agents`) the extension's own
+model calls use, plus which tools to call, in what order, and the exact
+contract those tools expect.
+
+| Prompt        | Arguments  | What its message tells the model to do                                                                                                                             |
+| ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `analyze`     | `question` | Call `list_repo_files`/`search_repo`/`get_symbol_graph`, cite `file:line`, then call `verify_claims` on its own answer before presenting it.                       |
+| `create-plan` | `request`  | Call `search_repo` to select files, then `draft_plan_contract`; show the draft and stop — do not call `approve_plan_contract` until the developer clearly says to. |
+| `implement`   | none       | Call `get_approved_plan_contract`, then `apply_plan_edit` per `update`-kind file; `add`/`delete` have no write tool yet, so it says to tell the developer instead. |
+| `review`      | none       | Call `generate_review`, present findings with file/severity/remediation, and offer `resolve_review_finding` for any the developer wants to accept or decline.      |
+
+---
+
 ## Design Rules
 
 1. MCP tools call existing `packages/` service APIs — no separate business logic in `packages/mcp-server`.
@@ -106,8 +136,9 @@ The only tool that writes to a developer's own source files, rather than to
 3. All tool responses are structured JSON.
 4. Secrets are never returned in tool responses.
 5. Missing artifacts return a graceful structured response, not a thrown error.
-6. The `generate_feature_plan` tool is the only tool that writes internal plan artifacts, gated behind an explicit `approved` flag. `apply_plan_edit` is the only tool that writes to a developer's own source files, gated by plan authorization, plan freshness, and unique-match verification instead — see Write Tools above.
+6. `generate_feature_plan` and `generate_review` are the tools that write internal artifacts (plan/review reports); `generate_feature_plan` is gated behind an explicit `approved` flag, `generate_review` is not since it writes only a report, never a decision. `apply_plan_edit` is the only tool that writes to a developer's own source files, gated by plan authorization, plan freshness, and unique-match verification instead — see Write Tools above.
 7. Multi-repo workspace tools are aware of `.copilot-architect/workspace.json` and operate across all configured repos.
+8. A prompt never calls a tool itself — it only returns text a model reads and acts on in its own next turn. Any tool-calling instruction inside a prompt's message is a request to the model, not a guarantee.
 
 ---
 
@@ -153,4 +184,15 @@ Then use generate_plan_context to build a detailed plan.
 
 ```text
 Use get_latest_plan and get_latest_validation to review the implementation.
+```
+
+With a client that supports MCP prompts (JetBrains' GitHub Copilot Chat, for
+one), the four phases above are real slash commands instead — no need to
+spell out which tools to call:
+
+```text
+/mcp.copilot-architect.analyze What does OrderService do?
+/mcp.copilot-architect.create-plan Add invoice approval workflow
+/mcp.copilot-architect.implement
+/mcp.copilot-architect.review
 ```

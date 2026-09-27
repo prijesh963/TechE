@@ -116,7 +116,7 @@ copilot-architect/
 │   ├── reviewer/        review report generation
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 33 tools
+│   ├── mcp-server/      MCP server and 34 tools
 │   ├── cli/             CLI entry point and command routing
 │   ├── vscode-extension the @architect chat participant and dashboard
 │   └── web/             optional local web UI shell (thin)
@@ -156,7 +156,7 @@ the other. If a shell needs repo intelligence, it imports the service.
 ## Implemented
 
 1. TypeScript CLI with 24 commands including `demo`.
-2. Local MCP server with 33 tools, including the session, plan contract and
+2. Local MCP server with 34 tools, including the session, plan contract and
    grounding — so a policy-blocked developer gets the same product.
    `draft_plan_contract`/`approve_plan_contract` build and approve a real
    `PlanContract` from a file selection the client already made (the same
@@ -169,6 +169,15 @@ the other. If a shell needs repo intelligence, it imports the service.
    that doesn't match its search text exactly once — the same discipline
    `/implement` already enforces in the VS Code extension, gated by the
    MCP client's own tool-call approval instead of a chat button.
+   `generate_review` runs a review against the approved plan contract's
+   expected files, writing `reviews/latest-review.json` — the only other
+   tool that writes anything, and only that internal report, never a
+   source file. Four MCP prompts (`analyze`, `create-plan`, `implement`,
+   `review`) turn the phases into real slash commands
+   (`/mcp.copilot-architect.<name>`) instead of relying on the client's own
+   reasoning to decide a tool in this server is relevant; each inserts the
+   same role guidance the VS Code extension's own model calls use, plus
+   which tools to call, in what order, and the exact contract they expect.
 3. VS Code extension with the `@architect` chat participant and four phases.
 4. Repo analysis and discovery; language/framework/package-manager detection.
 5. Adapter architecture with registry, confidence scoring, generic fallback.
@@ -465,7 +474,7 @@ Cover:
   contains "test")
 - custom command config (parse, validate, merge)
 - validation safety (blocked commands, safe execution)
-- MCP tools (all 33 tools, including apply_plan_edit's plan-authorization,
+- MCP tools (all 34 tools, including apply_plan_edit's plan-authorization,
   freshness, and unique-match refusals)
 - role prompt rendering
 - instructions generation and validation

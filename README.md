@@ -11,7 +11,7 @@ Nothing leaves your machine except what Copilot itself sends.
 Two surfaces, for different situations: the **`@architect` VS Code extension**,
 which walks one feature from analysis to review in a single session, and a
 **local MCP server** exposing the same intelligence — plus one plan-gated
-write tool — as 33 tools to any MCP client.
+write tool — as 34 tools to any MCP client.
 
 ---
 
@@ -245,7 +245,7 @@ can skip it. The four phases are code, and code cannot skip its steps.
 
 ### MCP: everything outside the extension
 
-The MCP server exposes the same repo intelligence as 33 tools, for plain
+The MCP server exposes the same repo intelligence as 34 tools, for plain
 Copilot agent mode, Codex, Claude Code, or any other MCP client. This is the
 interoperability surface, and the path that still works where policy forbids
 installing extensions. One tool, `apply_plan_edit`, writes to disk — the same
@@ -481,7 +481,7 @@ copilot-architect/
 │   ├── grounding/        verifies the model's claims against the index
 │   ├── agents/          the four phase role prompts
 │   ├── instructions/    Copilot instructions and skill generation
-│   ├── mcp-server/      MCP server and 33 tools
+│   ├── mcp-server/      MCP server and 34 tools
 │   ├── cli/             CLI entry point
 │   ├── vscode-extension VS Code extension: the @architect chat participant
 │   └── web/             optional local web UI shell

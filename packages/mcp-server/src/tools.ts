@@ -22,6 +22,7 @@ import {
   createPlanContract,
   buildPlannedChange,
   verifySelectedChanges,
+  plannedPaths,
   type FileEdit,
   type SelectedChange,
   type PlannedChange,
@@ -569,6 +570,19 @@ export function createCopilotArchitectTools(
         )
     ),
     tool(
+      "generate_review",
+      "Generate a fresh review report: git diff against expectations from " +
+        "the approved plan contract (if any), missing-test detection, " +
+        "config/dependency/security/breaking-change risk flags, and " +
+        "validation evidence if get_latest_validation has results. Writes " +
+        "reviews/latest-review.json — the same artifact get_latest_review " +
+        "reads, so a client can call this and then read it back the same " +
+        "way. Writes only an internal report, never a source file.",
+      commonSchema,
+      false,
+      async (args) => generateReview(resolveStartPath(args, options))
+    ),
+    tool(
       "resolve_review_finding",
       "Record a durable accept/decline decision on one review finding by its " +
         "stable id. A declined finding never reappears on the next review; an " +
@@ -981,6 +995,24 @@ async function approvePlanContract(
   await writeApprovedPlan(workspaceRoot, latest.content as unknown as PlanContract);
 
   return { ok: true, version };
+}
+
+/**
+ * Runs a review against the approved plan contract, the same expectations
+ * `/review` compares against in the VS Code extension.
+ *
+ * `ReviewService.review()` writes its own artifact
+ * (`reviews/latest-review.json`) — this is a write tool by that measure, but
+ * never to a source file, only to that internal report.
+ */
+async function generateReview(workspaceRoot: string): Promise<unknown> {
+  const plan = await readApprovedPlan(workspaceRoot);
+  const result = await new ReviewService().review({
+    startPath: workspaceRoot,
+    ...(plan ? { expectedFiles: plannedPaths(plan) } : {})
+  });
+
+  return result.report;
 }
 
 /**

@@ -664,6 +664,118 @@ describe("draft_plan_contract and approve_plan_contract", () => {
   });
 });
 
+describe("MCP prompts", () => {
+  it("lists all four phase prompts", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const prompts = await client.listPrompts();
+    const names = prompts.prompts.map((prompt) => prompt.name);
+
+    expect(names).toEqual(
+      expect.arrayContaining(["analyze", "create-plan", "implement", "review"])
+    );
+  });
+
+  it("interpolates the question into the analyze prompt", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await client.getPrompt({
+      name: "analyze",
+      arguments: { question: "What does OrderService do?" }
+    });
+    const text = firstMessageText(result);
+
+    expect(text).toContain("What does OrderService do?");
+    expect(text).toContain("search_repo");
+    expect(text).toContain("verify_claims");
+  });
+
+  it("tells create-plan not to approve in the same turn", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await client.getPrompt({
+      name: "create-plan",
+      arguments: { request: "Add invoice approval" }
+    });
+    const text = firstMessageText(result);
+
+    expect(text).toContain("Add invoice approval");
+    expect(text).toContain("draft_plan_contract");
+    expect(text).toContain("Do not call approve_plan_contract in this turn");
+  });
+
+  it("tells implement to use search/replace, not whole files", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await client.getPrompt({ name: "implement", arguments: {} });
+    const text = firstMessageText(result);
+
+    expect(text).toContain("get_approved_plan_contract");
+    expect(text).toContain("apply_plan_edit");
+    expect(text).toContain("not by returning whole files");
+  });
+
+  it("points review at generate_review and resolve_review_finding", async () => {
+    const repoRoot = await createRepo({ "src/a.ts": "export const a = 1;" });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await client.getPrompt({ name: "review", arguments: {} });
+    const text = firstMessageText(result);
+
+    expect(text).toContain("generate_review");
+    expect(text).toContain("resolve_review_finding");
+  });
+});
+
+describe("generate_review", () => {
+  it("writes and returns a report even with no approved plan", async () => {
+    const repoRoot = await createRepo({
+      "src/a.ts": "export const a = 1;"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+
+    const result = await callJsonTool(client, "generate_review", {});
+    const report = result.data as { schemaVersion: string; expectedFiles: string[] };
+
+    expect(report.schemaVersion).toBeDefined();
+    expect(report.expectedFiles).toEqual([]);
+
+    const readBack = await callJsonTool(client, "get_latest_review", {});
+    expect(readBack.data).toEqual(result.data);
+  });
+
+  it("compares against the approved plan contract's expected files", async () => {
+    const repoRoot = await createRepo({
+      "src/OrderService.ts": "export class OrderService { place() {} }"
+    });
+    const { client } = await createConnectedServer(repoRoot);
+    await callJsonTool(client, "list_repo_files", {});
+
+    const drafted = await callJsonTool(client, "draft_plan_contract", {
+      request: "Add invoice approval",
+      files: [
+        {
+          path: "src/OrderService.ts",
+          kind: "update",
+          reason: "this is where an order is placed",
+          symbol: "OrderService"
+        }
+      ]
+    });
+    const draftData = drafted.data as { version: number };
+    await callJsonTool(client, "approve_plan_contract", { version: draftData.version });
+
+    const result = await callJsonTool(client, "generate_review", {});
+    const report = result.data as { expectedFiles: string[] };
+
+    expect(report.expectedFiles).toEqual(["src/OrderService.ts"]);
+  });
+});
+
 describe("apply_plan_edit", () => {
   it("refuses when no plan has been approved", async () => {
     const repoRoot = await createRepo({
@@ -844,6 +956,16 @@ async function callJsonTool(
   }
 
   return JSON.parse(first.text);
+}
+
+function firstMessageText(result: { messages: Array<{ content: unknown }> }): string {
+  const content = result.messages[0]?.content as { type: string; text?: string };
+
+  if (!content || content.type !== "text" || typeof content.text !== "string") {
+    throw new Error("Prompt did not return a text message");
+  }
+
+  return content.text;
 }
 
 async function createRepo(files: Record<string, string>): Promise<string> {

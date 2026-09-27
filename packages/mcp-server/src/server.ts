@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
+import { registerCopilotArchitectPrompts } from "./prompts.js";
 import { registerCopilotArchitectTools } from "./tools.js";
 
 export interface CopilotArchitectMcpServerOptions {
@@ -16,6 +17,7 @@ export function createCopilotArchitectMcpServer(
   });
 
   registerCopilotArchitectTools(server, options);
+  registerCopilotArchitectPrompts(server);
 
   return server;
 }

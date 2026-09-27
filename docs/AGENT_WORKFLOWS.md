@@ -350,7 +350,7 @@ claim does not say which.
 ## Using this without the extension
 
 Where policy forbids installing extensions, the MCP server exposes the same
-repo intelligence — plus one plan-gated write tool — as 33 tools to plain
+repo intelligence — plus one plan-gated write tool — as 34 tools to plain
 Copilot agent mode, Codex, Claude Code or any other MCP client — including
 the session model itself:
 

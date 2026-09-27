@@ -840,6 +840,38 @@ fix, left for when a caller actually needs both in the same session.
 
 ---
 
+### 4.21 MCP prompts instruct; they cannot enforce
+
+The four prompts (`packages/mcp-server/src/prompts.ts`) turn the phases into
+real slash commands, but a prompt is only ever a text message inserted into
+the conversation — nothing in the MCP protocol lets a prompt call a tool
+itself, verify that the model actually followed its steps, or stop it from
+skipping straight to `apply_plan_edit` without ever calling
+`get_approved_plan_contract` first. The VS Code extension's phases are code
+that cannot skip its own steps; these prompts are instructions a model can
+still choose not to follow, same as any other message in the conversation.
+What actually enforces the safety properties is unchanged and unaffected by
+this: `apply_plan_edit` still refuses anything not authorized by an approved
+plan regardless of what the model was told or ignored on the way there.
+
+The `implement` prompt also inherits a real inconsistency already in
+`renderRolePrompt("implement")`: that role's own guidance says "Return
+complete file contents," written for the VS Code extension's `add`-kind
+path, which still generates whole files. The prompt's own instructions
+immediately override this for `update`-kind changes ("edits by quoting what
+to replace, not by returning whole files"), and in practice a model follows
+the more specific, more recent instruction — but the contradiction sits in
+the shared role text either way, for whichever surface reads it next.
+
+**Cost:** low. Enforcement lives in the tools, which do not trust the
+model's own account of what it did — a prompt skipped or misfollowed
+produces a confused conversation, not an unauthorized write. The role-text
+contradiction is pre-existing and each surface's own specific instructions
+already override it; worth a proper fix only if it starts costing more than
+resolving in favor of the newer text.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
