@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>com.copilotarchitect.intellij</id>
+    <name>Copilot Architect</name>
+    <vendor>Internal</vendor>
+    <description><![CDATA[
+        Configures GitHub Copilot Chat's Model Context Protocol connection
+        to the local Copilot Architect server, so /mcp.copilot-architect.*
+        commands (analyze, create-plan, implement, review) ground Copilot
+        in this repository's real structure — the same repo intelligence
+        the VS Code extension's @architect chat participant uses.
+        <br/><br/>
+        Requires Node.js 20.11 or later on this machine. This plugin has no
+        repo-analysis logic of its own: it locates Node, extracts the
+        bundled CLI, and points Copilot Chat's MCP configuration at it.
+        Everything else — indexing, planning, grounding, applying an
+        approved edit — happens in that already-built, already-tested CLI.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="com.copilotarchitect.plugin.SetupOnStartup"/>
+        <notificationGroup id="Copilot Architect" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <action id="CopilotArchitect.SetUpMcp"
+                class="com.copilotarchitect.plugin.SetUpMcpAction"
+                text="Set Up Copilot Architect MCP Server"
+                description="Point GitHub Copilot Chat's MCP connection at this machine's Copilot Architect server">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

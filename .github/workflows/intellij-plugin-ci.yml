@@ -1,0 +1,74 @@
+name: IntelliJ Plugin CI
+
+on:
+  pull_request:
+    paths:
+      - "intellij-plugin/**"
+      - "packages/**"
+      - "scripts/bundle-cli.mjs"
+      - ".github/workflows/intellij-plugin-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "intellij-plugin/**"
+      - "packages/**"
+      - "scripts/bundle-cli.mjs"
+      - ".github/workflows/intellij-plugin-ci.yml"
+  workflow_dispatch: {}
+
+jobs:
+  core:
+    # :core has no IntelliJ Platform dependency — runs anywhere, including
+    # the sandbox this was developed in. This job is the real, verified
+    # signal on every push; every other test in this module already passed
+    # here directly, against this machine's real Node, before this workflow
+    # existed at all.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: intellij-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Test :core
+        run: ./gradlew :core:test --console=plain
+
+  plugin:
+    # :plugin resolves the IntelliJ Platform distribution from JetBrains'
+    # own hosts, which this repo's development sandbox cannot reach — a
+    # real, confirmed 403 from cache-redirector.jetbrains.com and
+    # download.jetbrains.com, not assumed. This job is that build's only
+    # real verification, the same "written here, proven in CI" pattern
+    # credit-optimizer-plugin's own :plugin module uses.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: npm install
+        run: npm install
+      - name: Build the TypeScript workspace
+        run: npm run build
+      - name: Bundle the CLI for the plugin to package
+        run: npm run bundle:cli
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Build
+        working-directory: intellij-plugin
+        run: ./gradlew :plugin:buildPlugin --console=plain
+      - name: Verify plugin
+        working-directory: intellij-plugin
+        run: ./gradlew :plugin:verifyPlugin --console=plain
+      - name: Upload built plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-architect-intellij-plugin
+          path: intellij-plugin/plugin/build/distributions/*.zip

@@ -4,6 +4,7 @@ dist/
 packages/*/dist/
 packages/vscode-extension/bundle/
 dist-vsix/
+dist-cli/
 .copilot-architect/
 **/.copilot-architect/
 **/.pytest_cache/

@@ -8,4 +8,7 @@ packages/*/dist/
 **/.copilot-architect/
 **/.pytest_cache/
 dist-vsix/
+dist-cli/
 packages/vscode-extension/bundle/
+intellij-plugin/**/build/
+intellij-plugin/.gradle/

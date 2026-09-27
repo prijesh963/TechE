@@ -911,6 +911,43 @@ failing silently for an unrelated one.
 
 ---
 
+### 4.23 `intellij-plugin/:plugin` is unverified; `:core` is fully tested
+
+Same split, same reason, as `credit-optimizer-plugin`'s own `:core`/
+`:plugin` division: `:plugin` imports `com.intellij.*` APIs, which pulls in
+the IntelliJ Platform distribution that `intellij-plugin/plugin/build.gradle.kts`
+resolves from JetBrains' own hosts — confirmed unreachable from this
+sandbox with a direct 403 from both `download.jetbrains.com` and
+`cache-redirector.jetbrains.com`, not assumed. `:plugin:compileKotlin`
+cannot run here at all.
+
+What **is** verified, directly, in this sandbox: every real decision the
+plugin makes lives in `:core` (Node discovery, the global `mcp.json`
+merge, CLI resource extraction, and `McpSetupService`'s orchestration of
+all three), which has no such dependency. 19 tests pass, including a
+genuine end-to-end run against this machine's real Node binary, a real
+extraction of fixture resources to a real temp directory, and a real
+config file written and read back — not mocked, not skipped.
+
+What is **not** verified: `SetupOnStartup`'s notification (does it fire
+correctly on project open, does "Don't ask again" persist across restarts,
+does the `PropertiesComponent` key survive an IDE update), `SetUpMcpAction`
+registering correctly in the Tools menu, and `PathManager.getSystemPath()`
+resolving to a sane, writable directory on every supported platform. All
+of it is thin, direct calls into already-tested `:core` methods — the
+design deliberately kept as little logic as possible on the unverifiable
+side — but "thin" is not the same as "verified." `.github/workflows/intellij-plugin-ci.yml`
+builds and plugin-verifies `:plugin` on a real runner; it does not launch a
+real IDE and click the notification.
+
+**Cost:** low if the platform glue is as thin as it looks; unknown until
+either CI's `verifyPlugin` step or a real IntelliJ session surfaces
+something it doesn't. The right next step, before relying on this day to
+day, is exactly that — install the built plugin in a real IntelliJ and
+walk through the startup notification once.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
