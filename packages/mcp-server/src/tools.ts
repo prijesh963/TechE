@@ -5,6 +5,7 @@ import { RepoDiscoveryService, WorkspaceService } from "@copilot-architect/core"
 import { SymbolGraphService } from "@copilot-architect/graph";
 import {
   IndexingService,
+  resetIndexFreshnessCache,
   shapeInventoryForModel,
   shapeSearchForModel
 } from "@copilot-architect/indexer";
@@ -1090,6 +1091,13 @@ async function applyPlanEdit(
   if (applied.refused.length > 0) {
     return { ok: false, reason: applied.refused[0].reason };
   }
+
+  // applyPlanChanges writes straight to disk, bypassing IndexingService
+  // entirely. Without this, an index read soon enough after this write —
+  // well within the 5-second in-memory freshness cache — reuses a verdict
+  // formed before it and reports the file unchanged. See
+  // docs/KNOWN_LIMITATIONS.md 4.24.
+  resetIndexFreshnessCache();
 
   return { ok: true, written: relativePath, editsApplied: result.applied };
 }

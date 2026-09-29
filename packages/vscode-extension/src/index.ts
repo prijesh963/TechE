@@ -14,6 +14,7 @@ import { ValidationService } from "@copilot-architect/validator";
 import {
   IndexingService,
   readSearchActivitySince,
+  resetIndexFreshnessCache,
   tokenize,
   type SearchResult
 } from "@copilot-architect/indexer";
@@ -3313,6 +3314,16 @@ async function applyStagedWrites(
   const applied = await applyPlanChanges({ workspaceRoot, changes });
 
   if (applied.written.length > 0 || applied.deleted.length > 0) {
+    // applyPlanChanges writes straight to disk, bypassing IndexingService
+    // entirely. The staleness check that guards every index read is
+    // otherwise a 5-second in-memory cache (STALENESS_CACHE_MS): a /review
+    // run soon enough after this Apply — well within a developer's own
+    // click-to-type time — would reuse the verdict formed moments ago,
+    // before this write, and report the diff as empty even though the file
+    // just changed on disk. Clearing it here forces the next index read to
+    // actually rescan rather than trust a verdict this write has already
+    // invalidated.
+    resetIndexFreshnessCache();
     await sessions.markImplemented({ workspaceRoot }, version);
 
     // The file index refreshes itself on read; the call graph cannot, and a
