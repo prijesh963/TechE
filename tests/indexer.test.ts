@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -523,6 +523,44 @@ describe("IndexingService", () => {
     await service.search({ startPath: repoRoot, query: "next" });
 
     expect((await service.status(repoRoot)).lastIndexedAt).toBe(rebuiltAt);
+  });
+
+  it("without a reset, a write that lands within the cache window is served stale", async () => {
+    // The bug this guards: applyPlanChanges (the planner's own direct
+    // fs.writeFile, used by /implement's Apply) writes straight to disk,
+    // bypassing IndexingService entirely. Read this the way it demonstrates
+    // the vulnerability the extension's post-apply resetIndexFreshnessCache()
+    // call actually closes — not the fix, the gap that made it necessary: a
+    // /review run soon enough after Apply, well within a developer's own
+    // click-to-type time, reused the freshness verdict formed moments before
+    // the write and reported the diff as empty even though the file had
+    // just changed on disk.
+    const repoRoot = await createRepo({ "src/app.ts": "export const value = 1;" });
+    const service = new IndexingService();
+
+    const before = await service.index({ startPath: repoRoot });
+    const originalHash = before.index.documents.find(
+      (document) => document.relativePath === "src/app.ts"
+    )?.contentHash;
+
+    await writeFile(
+      path.join(repoRoot, "src/app.ts"),
+      "export const value = 2;",
+      "utf8"
+    );
+
+    // No resetIndexFreshnessCache() — this is the same in-memory window the
+    // cache normally uses to avoid repeating a stat walk within one agent
+    // turn, left untouched on purpose to reproduce what happens without it.
+    const stale = await service.fileHashes({ startPath: repoRoot });
+    const onDisk = await readFile(path.join(repoRoot, "src/app.ts"), "utf8");
+    expect(onDisk).toBe("export const value = 2;"); // the write really happened
+    expect(stale["src/app.ts"]).toBe(originalHash); // yet this still reports the old content
+
+    resetIndexFreshnessCache();
+    const fresh = await service.fileHashes({ startPath: repoRoot });
+
+    expect(fresh["src/app.ts"]).not.toBe(originalHash);
   });
 
   it("surfaces a shared library the query never mentions", async () => {

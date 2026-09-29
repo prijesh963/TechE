@@ -775,6 +775,55 @@ needs it too.
 
 ---
 
+### 4.19 `/review` right after `/implement`'s Apply could report "nothing changed"
+
+`applyPlanChanges` (`packages/planner/src/plan-execution.ts`) writes a
+change's `afterText` straight to disk with `fs.writeFile` — it has no
+reason to go through `IndexingService`, and never did. Every read of the
+index, though, is guarded by an in-memory freshness cache
+(`STALENESS_CACHE_MS`, 5 seconds in `indexing-service.ts`) that exists so
+one agent turn's several tool calls do not each repeat a stat walk to reach
+the same verdict. That cache has no way to know a write just happened
+outside it.
+
+The session's pre-write checkpoint (captured via `fileHashes()` at the
+start of `/implement`, before any edit is generated) warms that same cache
+entry as "fresh, not stale." If `/review` ran within five seconds of that
+— a developer clicking Apply and then typing `/review` is well inside that
+window — `readOrCreateIndex` reused the cached verdict instead of
+rescanning, served the pre-write index, and `diffCheckpoint` compared the
+checkpoint's hashes against themselves: `compareAgainstPlan` reported every
+list empty ("Nothing has changed since the checkpoint"), and the model,
+asked to assess that against the files the approved plan named, narrated
+the two as a contradiction — a write that had, in fact, genuinely landed
+on disk.
+
+This is a regression of a limitation the "Closed by a later phase" table
+above already lists once, incompletely: `resetIndexFreshnessCache`
+(exported, previously unwired) was closed by adding a `.git/HEAD` check
+ahead of the cache — which catches a branch switch, not an uncommitted
+write to a file already on the current branch. `applyPlanChanges`'s direct
+write predates that fix and was never routed through it.
+
+**Fixed**: `applyStagedWrites` (`packages/vscode-extension/src/index.ts`,
+the `/implement` → Apply path) now calls `resetIndexFreshnessCache()`
+immediately after `applyPlanChanges` writes or deletes anything, forcing
+the next index read — `/review`'s included — to actually rescan rather
+than trust a verdict the write has already invalidated. Regression test:
+`tests/indexer.test.ts` — "without a reset, a write that lands within the
+cache window is served stale" reproduces the stale read directly against
+`IndexingService`, then shows the reset closing it, the same mechanism
+`applyStagedWrites` now relies on.
+
+**Cost:** low going forward — the fix is a single call at the one place
+`packages/planner` writes outside `IndexingService` on this branch. The
+residual risk is the same shape recurring at a future write path added
+without this call; worth a grep for `applyPlanChanges(` (or a raw
+`fs.writeFile` outside `packages/indexer`) before trusting a new write
+path's readers by default.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
@@ -907,7 +956,7 @@ Kept so the record shows what was traded and when.
 
 | Limitation                                                                                                                                                                                                                       | Raised    | Closed                                                                                                                                                              |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resetIndexFreshnessCache` exported but unwired                                                                                                                                                                                  | pre-phase | Phase 0 — `.git/HEAD` checked before the cache                                                                                                                      |
+| `resetIndexFreshnessCache` exported but unwired                                                                                                                                                                                  | pre-phase | Phase 0 — `.git/HEAD` checked before the cache; wiring the export itself into the write path that needed it took until 4.19                                        |
 | Plan body opaque in the session                                                                                                                                                                                                  | Phase 1   | Phase 2 — `PlanContract`                                                                                                                                            |
 | Nothing builds a plan contract end to end                                                                                                                                                                                        | Phase 2   | Phase 4a                                                                                                                                                            |
 | `checkConstraints` never called against `plannedPaths`                                                                                                                                                                           | Phase 2   | Phase 4b                                                                                                                                                            |
