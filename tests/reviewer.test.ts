@@ -145,7 +145,48 @@ describe("ReviewService", () => {
     });
     await initializeGitRepo(repoRoot);
     await writeApprovedPlan(repoRoot, ["src/expected.ts"]);
+    // The edit first, then validation against it — the order a real check
+    // actually happens in, and what makes this report genuinely cover the
+    // diff rather than merely predate it.
+    await writeFile(
+      path.join(repoRoot, "src/expected.ts"),
+      "export const expected = true;\n",
+      "utf8"
+    );
     await writeValidationReport(repoRoot, "failed");
+
+    const result = await new ReviewService().review({
+      startPath: repoRoot,
+      plan: "latest",
+      validation: "latest"
+    });
+
+    expect(result.report.validationStatus).toBe("failed");
+    expect(result.report.validationStale).toBe(false);
+    expect(result.report.validationResults).toHaveLength(1);
+    expect(result.report.findings.map((finding) => finding.title)).toEqual(
+      expect.arrayContaining(["Validation failed", "Validation command did not pass"])
+    );
+    expect(result.report.reviewerPrompt).toContain("Validation: failed");
+  });
+
+  it("flags a validation report that predates this diff as stale, not failed", async () => {
+    // The reported bug: a developer who never ran checks for this plan saw
+    // /review present a leftover validation report — from an earlier,
+    // unrelated session — as if its failure belonged to the current diff.
+    // The failing test in that report was in a file this diff never touched.
+    if (!(await gitAvailable())) {
+      return;
+    }
+
+    const repoRoot = await createRepo({
+      "package.json": JSON.stringify({ name: "review-stale-validation" }),
+      "src/expected.ts": "export const expected = false;\n"
+    });
+    await initializeGitRepo(repoRoot);
+    await writeApprovedPlan(repoRoot, ["src/expected.ts"]);
+    // An old validation run, well before this diff's own edit below.
+    await writeValidationReport(repoRoot, "failed", "2020-01-01T00:00:00.000Z");
     await writeFile(
       path.join(repoRoot, "src/expected.ts"),
       "export const expected = true;\n",
@@ -158,12 +199,23 @@ describe("ReviewService", () => {
       validation: "latest"
     });
 
-    expect(result.report.validationStatus).toBe("failed");
-    expect(result.report.validationResults).toHaveLength(1);
-    expect(result.report.findings.map((finding) => finding.title)).toEqual(
-      expect.arrayContaining(["Validation failed", "Validation command did not pass"])
+    expect(result.report.validationStale).toBe(true);
+    const titles = result.report.findings.map((finding) => finding.title);
+    expect(titles).toContain("Validation results are stale");
+    expect(titles).not.toContain("Validation failed");
+    expect(titles).not.toContain("Validation command did not pass");
+    const staleFinding = result.report.findings.find(
+      (finding) => finding.title === "Validation results are stale"
     );
-    expect(result.report.reviewerPrompt).toContain("Validation: failed");
+    expect(staleFinding?.severity).toBe("warning");
+    expect(result.report.risks.map((risk) => risk.title)).toContain(
+      "Validation results are stale"
+    );
+    expect(result.report.risks.map((risk) => risk.title)).not.toContain(
+      "Validation did not pass"
+    );
+    expect(result.report.reviewerPrompt).toContain("STALE");
+    expect(result.report.reviewerPrompt).not.toContain("Validation: failed");
   });
 
   it("detects config, dependency, security, and breaking-change review risks", async () => {
@@ -595,7 +647,8 @@ async function writeApprovedPlan(
 
 async function writeValidationReport(
   repoRoot: string,
-  status: "failed" | "passed"
+  status: "failed" | "passed",
+  generatedAt: string = new Date().toISOString()
 ): Promise<void> {
   const runsRoot = getArtifactDirectoryPath(repoRoot, "runs");
   const resultStatus = status === "passed" ? "passed" : "failed";
@@ -606,7 +659,7 @@ async function writeValidationReport(
     JSON.stringify(
       {
         schemaVersion: CURRENT_SCHEMA_VERSION,
-        generatedAt: new Date().toISOString(),
+        generatedAt,
         id: "validation-review-1",
         repoRoot,
         status,

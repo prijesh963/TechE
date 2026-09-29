@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -81,6 +81,10 @@ export interface ReviewReportArtifact extends ReviewReport {
   securityRiskFiles: string[];
   breakingChangeFiles: string[];
   validationStatus?: string;
+  /** True when the loaded validation report ran before at least one file in
+   * this diff was last modified — it cannot have exercised the current code,
+   * so any pass/fail in it is not evidence about this diff either way. */
+  validationStale?: boolean;
   planPath?: string;
   validationPath?: string;
 }
@@ -96,6 +100,9 @@ interface ValidationReportLike {
   summary?: string;
   results?: ValidationResult[];
   failureSummary?: string[];
+  /** When the run finished. Used to tell a report from before this diff
+   * existed apart from one that actually covers it. */
+  generatedAt?: string;
 }
 
 interface LoadedValidation {
@@ -125,6 +132,11 @@ export class ReviewService {
     const validationFailures = validationResults.filter(
       (result) => result.status !== "passed" && result.status !== "skipped"
     );
+    const validationStale = await isValidationStale(
+      repoRoot,
+      changedFiles,
+      loadedValidation.report?.generatedAt
+    );
     const rawFindings = buildFindings({
       unexpectedFiles,
       missingTests,
@@ -135,7 +147,8 @@ export class ReviewService {
       breakingChangeFiles,
       breakingDiffRisk,
       validationFailures,
-      validationReport: loadedValidation.report
+      validationReport: loadedValidation.report,
+      validationStale
     });
     const dispositions = await loadDispositions(repoRoot);
     const findings = applyDispositions(rawFindings, dispositions);
@@ -150,7 +163,8 @@ export class ReviewService {
       breakingChangeFiles,
       breakingDiffRisk,
       validationFailures,
-      validationReport: loadedValidation.report
+      validationReport: loadedValidation.report,
+      validationStale
     });
     const report: ReviewReportArtifact = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -162,7 +176,8 @@ export class ReviewService {
         changedFiles,
         unexpectedFiles,
         missingTests,
-        loadedValidation.report
+        loadedValidation.report,
+        validationStale
       ),
       diffSummary,
       findings,
@@ -174,6 +189,7 @@ export class ReviewService {
         planPath: loadedPlan.path,
         validationReport: loadedValidation.report,
         validationPath: loadedValidation.path,
+        validationStale,
         changedFiles,
         expectedFiles,
         unexpectedFiles,
@@ -188,6 +204,7 @@ export class ReviewService {
       securityRiskFiles,
       breakingChangeFiles,
       validationStatus: loadedValidation.report?.status,
+      validationStale,
       planPath: loadedPlan.plan ? loadedPlan.path : undefined,
       validationPath: loadedValidation.report ? loadedValidation.path : undefined
     };
@@ -429,6 +446,49 @@ async function tryReadValidation(
   }
 }
 
+/**
+ * Whether the loaded validation report predates this diff.
+ *
+ * `latest-validation.json` is only ever written by an explicit validation
+ * run — nothing rebuilds it the way the index or plan freshness checks do —
+ * so a review run without ever triggering "Checks" for this plan reads
+ * whatever the last run happened to leave behind, from any earlier plan or
+ * session. A validation that finished before a file in the current diff was
+ * even last modified cannot have exercised that file's current content, so
+ * any pass or fail in it says nothing about this diff either way.
+ *
+ * Compared against `changedFiles`' own mtimes rather than git history: this
+ * has to work for unstaged and untracked changes alike, the same paths
+ * `getChangedFiles` already resolves, with no separate git call.
+ */
+async function isValidationStale(
+  repoRoot: string,
+  changedFiles: string[],
+  validationGeneratedAt: string | undefined
+): Promise<boolean> {
+  if (!validationGeneratedAt) {
+    return false;
+  }
+
+  const validationTimeMs = Date.parse(validationGeneratedAt);
+  if (Number.isNaN(validationTimeMs)) {
+    return false;
+  }
+
+  for (const relativePath of changedFiles) {
+    const stats = await stat(path.resolve(repoRoot, relativePath)).catch(
+      () => undefined
+    );
+    // A deleted file has nothing to compare a timestamp against — it cannot
+    // be the reason a validation run is stale, only the reason it is gone.
+    if (stats && stats.mtimeMs > validationTimeMs) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function inferMissingTests(changedFiles: string[]): string[] {
   const testFiles = changedFiles.filter(isTestFile);
 
@@ -448,6 +508,7 @@ function inferRisks(context: {
   breakingDiffRisk: boolean;
   validationFailures: ValidationResult[];
   validationReport?: ValidationReportLike;
+  validationStale: boolean;
 }): RiskItem[] {
   const risks: RiskItem[] = [];
 
@@ -471,6 +532,19 @@ function inferRisks(context: {
   }
 
   if (
+    context.validationStale &&
+    (context.validationReport || context.validationFailures.length > 0)
+  ) {
+    risks.push({
+      severity: "medium",
+      title: "Validation results are stale",
+      details:
+        "The loaded validation report finished before this diff's files were last modified, " +
+        "so its pass/fail is not evidence about this diff.",
+      mitigation:
+        "Run checks against this diff before approval, not against an earlier one."
+    });
+  } else if (
     context.validationFailures.length > 0 ||
     isFailedValidation(context.validationReport)
   ) {
@@ -529,6 +603,7 @@ function buildReviewerPrompt(context: {
   planPath: string;
   validationReport: ValidationReportLike | undefined;
   validationPath: string;
+  validationStale: boolean;
   changedFiles: string[];
   expectedFiles: string[];
   unexpectedFiles: string[];
@@ -542,9 +617,11 @@ function buildReviewerPrompt(context: {
     context.plan
       ? `Approved plan: ${context.plan.title} (${context.plan.id})`
       : `Approved plan: not available at ${context.planPath}`,
-    context.validationReport
-      ? `Validation: ${context.validationReport.status ?? "unknown"} (${context.validationReport.id ?? context.validationPath})`
-      : `Validation: not available at ${context.validationPath}`,
+    !context.validationReport
+      ? `Validation: not available at ${context.validationPath}`
+      : context.validationStale
+        ? `Validation: STALE — a report exists (status ${context.validationReport.status ?? "unknown"}) but it finished before this diff's files were last modified. It did not run against the current code; do not cite its pass/fail as evidence for or against this diff. Say so plainly and recommend re-running checks instead.`
+        : `Validation: ${context.validationReport.status ?? "unknown"} (${context.validationReport.id ?? context.validationPath})`,
     `Changed files: ${context.changedFiles.length}`,
     `Expected files: ${context.expectedFiles.length}`,
     `Unexpected files: ${context.unexpectedFiles.length}`,
@@ -586,7 +663,7 @@ function renderReviewMarkdown(report: ReviewReportArtifact): string {
     "",
     "## Validation Evidence",
     "",
-    `Validation status: ${report.validationStatus ?? "not available"}`,
+    `Validation status: ${report.validationStatus ?? "not available"}${report.validationStale ? " (stale — predates this diff)" : ""}`,
     `Validation path: ${report.validationPath ?? "not loaded"}`,
     "",
     report.validationResults
@@ -629,15 +706,18 @@ function buildSummary(
   changedFiles: string[],
   unexpectedFiles: string[],
   missingTests: string[],
-  validationReport?: ValidationReportLike
+  validationReport?: ValidationReportLike,
+  validationStale?: boolean
 ): string {
   const base =
     changedFiles.length > 0
       ? `Review prepared for ${changedFiles.length} changed file(s).`
       : "Review prepared with no git diff changes detected.";
-  const validationSummary = validationReport
-    ? ` Validation status: ${validationReport.status ?? "unknown"}.`
-    : " No validation report was loaded.";
+  const validationSummary = !validationReport
+    ? " No validation report was loaded."
+    : validationStale
+      ? " Validation status: stale (report predates this diff, not evidence about it)."
+      : ` Validation status: ${validationReport.status ?? "unknown"}.`;
 
   return `${base} Unexpected files: ${unexpectedFiles.length}. Missing tests: ${missingTests.length}.${validationSummary}`;
 }
@@ -655,6 +735,7 @@ function buildFindings(context: {
   breakingDiffRisk: boolean;
   validationFailures: ValidationResult[];
   validationReport?: ValidationReportLike;
+  validationStale: boolean;
 }): ReviewFinding[] {
   const findings: RawFinding[] = [];
 
@@ -736,24 +817,43 @@ function buildFindings(context: {
     });
   }
 
-  if (isFailedValidation(context.validationReport)) {
+  // A stale report ran before at least one file in this diff was last
+  // modified — it cannot have exercised the current code, so its pass/fail
+  // is not evidence about this diff. Reporting it as "Validation failed"
+  // would blame this diff for a result it never produced; reporting nothing
+  // would hide that no real check has run yet. This says which is true.
+  if (
+    context.validationStale &&
+    (context.validationReport || context.validationFailures.length > 0)
+  ) {
     findings.push({
-      severity: "error",
-      title: "Validation failed",
-      details: [
-        `Validation status is ${context.validationReport?.status ?? "unknown"}.`,
-        ...(context.validationReport?.failureSummary ?? [])
-      ].join(" ")
+      severity: "warning",
+      title: "Validation results are stale",
+      details:
+        "The loaded validation report finished before this diff's files were last modified, " +
+        "so it did not run against the current code. Any pass or fail in it is not evidence " +
+        "about this diff — re-run checks before treating validation as covering it."
     });
-  }
+  } else {
+    if (isFailedValidation(context.validationReport)) {
+      findings.push({
+        severity: "error",
+        title: "Validation failed",
+        details: [
+          `Validation status is ${context.validationReport?.status ?? "unknown"}.`,
+          ...(context.validationReport?.failureSummary ?? [])
+        ].join(" ")
+      });
+    }
 
-  findings.push(
-    ...context.validationFailures.map((result) => ({
-      severity: "error" as const,
-      title: "Validation command did not pass",
-      details: `${result.command.name} finished with status ${result.status}${result.failureClassification ? ` (${result.failureClassification})` : ""}. ${result.outputSummary}`
-    }))
-  );
+    findings.push(
+      ...context.validationFailures.map((result) => ({
+        severity: "error" as const,
+        title: "Validation command did not pass",
+        details: `${result.command.name} finished with status ${result.status}${result.failureClassification ? ` (${result.failureClassification})` : ""}. ${result.outputSummary}`
+      }))
+    );
+  }
 
   return findings.map((finding) => ({
     ...finding,

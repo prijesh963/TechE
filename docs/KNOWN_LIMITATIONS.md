@@ -1040,6 +1040,57 @@ routing it through this suppression too.
 
 ---
 
+### 4.26 `/review` had no way to tell a stale validation report from a current one
+
+`ReviewService.review()` reads `.copilot-architect/runs/latest-validation.json`
+unconditionally — the same file, regardless of which plan or session last
+wrote it. Nothing runs validation as part of `/review` itself, and nothing
+checked whether the report it read actually covered the diff being
+reviewed. A developer who ran `/implement` and `/review` back to back
+without ever explicitly running checks for that plan got whatever
+`latest-validation.json` happened to hold from an earlier, unrelated
+session — reported as `"Validation failed"`, a plain `error`-severity
+finding, indistinguishable from a real failure caused by the current diff.
+The model, given that finding next to a diff that never touched the
+failing test's file, had no way to tell the two apart and produced a long,
+hedging paragraph trying to reconcile them — asking for "the diff" and the
+failure to be "fixed or confirmed as a pre-existing/unrelated baseline"
+before it could say anything more definite, rather than stating plainly
+that the report didn't apply.
+
+**Fixed**: `isValidationStale` (`packages/reviewer/src/index.ts`) compares
+the validation report's own `generatedAt` timestamp against the mtime of
+every file in the current diff (`getChangedFiles`, the same list `/review`
+already computes). If any changed file was modified after the report
+finished, the report predates at least part of this diff and cannot have
+exercised it. When stale:
+
+- `buildFindings` emits one `"Validation results are stale"` finding
+  (`warning`, not `error`) instead of `"Validation failed"`/`"Validation
+command did not pass"` — the two findings that read as "this diff's own
+  checks failed."
+- `inferRisks` does the same for the `"Validation did not pass"` risk item.
+- `buildReviewerPrompt` tells the model directly — `Validation: STALE — …
+do not cite its pass/fail as evidence for or against this diff` — so the
+  model states the situation instead of hedging around it.
+- `buildSummary` and the written Markdown report's "Validation Evidence"
+  section both say so too, for whoever reads the artifact rather than the
+  chat reply.
+
+A genuinely current validation report — one that finished after every
+changed file's last edit — is completely unaffected; `"Validation
+failed"` still fires exactly as before.
+
+**Cost:** low — one `stat` per changed file, already-computed inputs on
+both sides of the comparison. The residual gap is the same shape this
+entry closes for `resetIndexFreshnessCache` (4.19) but the other
+direction: nothing automatically runs validation for a plan the way the
+index rebuilds itself on read, so a developer who never runs checks at
+all gets an honest "stale" or "not available" rather than a false pass —
+correct, but still not the same as validation having actually run.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate
