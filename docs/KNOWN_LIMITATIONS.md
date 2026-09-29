@@ -1008,6 +1008,38 @@ path's readers by default.
 
 ---
 
+### 4.25 `/implement`'s preview flagged a refused edit as a truncated one
+
+`previewWrites` (`packages/planner/src/plan-execution.ts`) has no notion of
+a refusal: a change `editExistingFile` refused carries no `afterText`, so
+it counts as zero lines the same way a genuinely truncated model answer
+would, and `suspectTruncation` reads that zero as "the answer may have
+stopped early" whenever the file being replaced was 25+ lines. The preview
+loop in `runImplementPhase` then printed that warning right next to the
+real, more specific reason underneath it — `no usable edits were produced
+— Copilot replied: "…"` — two contradictory explanations for the same
+file, and the trailing "⚠️ … Open that diff before applying" summary line
+pointing at a diff that a refused file was never given a button for in the
+first place. A developer testing `/implement` saw both messages together
+and had no way to tell from them alone that the file was refused, not
+truncated.
+
+**Fixed**: `suppressTruncationForRefusals` (`packages/vscode-extension/src/index.ts`,
+exported for testing the same way `scopeResultsToRepo` is) clears
+`suspectTruncation` on any preview whose path is in `editRefusals` before
+`runImplementPhase` renders it, so a refused file shows only its actual
+refusal reason. `previewWrites` itself is untouched — the truncation
+heuristic is still exactly as useful as before for a file that genuinely
+was truncated, not refused.
+
+**Cost:** low — a small, pure post-processing step over already-computed
+previews, applied only where the extension already knows a refusal
+happened. The same shape of bug could recur if a future caller of
+`previewWrites` invents its own reason a file has zero lines without
+routing it through this suppression too.
+
+---
+
 ## 5. Scale and housekeeping
 
 ### 5.1 Parked sessions accumulate

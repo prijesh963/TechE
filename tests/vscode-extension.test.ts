@@ -35,6 +35,7 @@ import {
   formatAgentInsights,
   loadDashboardArtifacts,
   scopeResultsToRepo,
+  suppressTruncationForRefusals,
   type CliRunRequest,
   type CliRunResult,
   type DisposableLike,
@@ -1473,6 +1474,59 @@ describe("scoping plan search to one repo", () => {
     );
 
     expect(scoped).toEqual(results);
+  });
+});
+
+describe("suppressing the truncation warning on a refused edit", () => {
+  // The bug: a refused change carries no afterText, so previewWrites counts
+  // it as zero lines — the same signal a genuinely truncated answer gives —
+  // and flags it as "the answer may have stopped early." Shown next to the
+  // real, more specific refusal reason, a developer reads two contradictory
+  // explanations for the one file that was, in fact, simply never edited.
+  const preview = (relativePath: string, suspectTruncation?: string) => ({
+    relativePath,
+    kind: "update" as const,
+    afterLines: 0,
+    beforeLines: 200,
+    ...(suspectTruncation ? { suspectTruncation } : {})
+  });
+
+  it("clears the flag on a file that was refused, not truncated", () => {
+    const previews = [preview("src/a.ts", "0 lines replacing 200 — …")];
+    const refused = new Map([["src/a.ts", "no usable edits were produced"]]);
+
+    const result = suppressTruncationForRefusals(previews, refused);
+
+    expect(result[0].suspectTruncation).toBeUndefined();
+  });
+
+  it("leaves a genuinely short replacement's flag alone", () => {
+    const previews = [preview("src/a.ts", "0 lines replacing 200 — …")];
+
+    const result = suppressTruncationForRefusals(previews, new Map());
+
+    expect(result[0].suspectTruncation).toBe("0 lines replacing 200 — …");
+  });
+
+  it("only touches the refused file among several previews", () => {
+    const previews = [
+      preview("src/a.ts", "0 lines replacing 200 — …"),
+      preview("src/b.ts")
+    ];
+    const refused = new Map([["src/a.ts", "no usable edits were produced"]]);
+
+    const result = suppressTruncationForRefusals(previews, refused);
+
+    expect(result[0].suspectTruncation).toBeUndefined();
+    expect(result[1].suspectTruncation).toBeUndefined();
+  });
+
+  it("accepts a plain set of refused paths, not only a Map", () => {
+    const previews = [preview("src/a.ts", "0 lines replacing 200 — …")];
+
+    const result = suppressTruncationForRefusals(previews, new Set(["src/a.ts"]));
+
+    expect(result[0].suspectTruncation).toBeUndefined();
   });
 });
 

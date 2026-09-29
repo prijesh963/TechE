@@ -46,7 +46,8 @@ import {
   type ParsedApproach,
   type PlannedOutline,
   type PlannedChange,
-  type VerifiedChange
+  type VerifiedChange,
+  type WritePreview
 } from "@copilot-architect/planner";
 import {
   SessionService,
@@ -3209,7 +3210,10 @@ async function runImplementPhase(
     unenforceable: constraints.unenforceable
   });
 
-  const previews = previewWrites(plan, changes);
+  const previews = suppressTruncationForRefusals(
+    previewWrites(plan, changes),
+    editRefusals
+  );
   stream.markdown(`## Plan v${approved.version} — ready to write\n\n`);
 
   // One line and one button per file rather than a summary then a wall of
@@ -4337,6 +4341,34 @@ async function selectPlanChanges(
     selection: verifySelectedChanges(selection, symbolsByFile),
     selectedByModel: true
   };
+}
+
+/**
+ * Clears the truncation warning on a change that was refused rather than
+ * truncated.
+ *
+ * `previewWrites` has no notion of a refusal: a refused `update` carries no
+ * `afterText`, so it counts as zero lines the same way a genuinely
+ * truncated answer would, and `suspectTruncation` reads that zero as "the
+ * answer may have stopped early." Left alone, a refused file's preview line
+ * says exactly that right next to the real, more specific reason
+ * ("no usable edits were produced — Copilot replied: …") — two contradictory
+ * explanations for one file, and the trailing "Open that diff before
+ * applying" line pointing at a diff that, for a refused file, was never
+ * offered a button for in the first place.
+ */
+export function suppressTruncationForRefusals(
+  previews: WritePreview[],
+  refusedPaths: ReadonlyMap<string, string> | ReadonlySet<string>
+): WritePreview[] {
+  const refused =
+    refusedPaths instanceof Map ? new Set(refusedPaths.keys()) : refusedPaths;
+
+  return previews.map((preview) =>
+    refused.has(preview.relativePath)
+      ? { ...preview, suspectTruncation: undefined }
+      : preview
+  );
 }
 
 /**
